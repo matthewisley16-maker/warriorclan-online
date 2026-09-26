@@ -354,6 +354,7 @@ export class GameCanvas {
   private camX = 0;
   private camY = 0;
   private scale = 1.15;
+  private userScale = 1;
 
   private keys = new Set<string>();
   private paused = false;
@@ -421,6 +422,12 @@ export class GameCanvas {
   setPaused(p: boolean) {
     this.paused = p;
     if (p) this.keys.clear();
+  }
+
+  /** Camera zoom, exposed so Settings can change view distance. */
+  setCameraScale(s: number) {
+    this.userScale = Math.min(1.6, Math.max(0.7, s));
+    this.resize();
   }
 
   teleport(x: number, y: number) {
@@ -509,7 +516,7 @@ export class GameCanvas {
     const rect = this.canvas.getBoundingClientRect();
     this.canvas.width = Math.max(1, Math.floor(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.floor(rect.height * this.dpr));
-    this.scale = rect.width < 700 ? 0.85 : rect.width < 1100 ? 1.0 : 1.2;
+    this.scale = this.userScale * (rect.width < 700 ? 0.85 : rect.width < 1100 ? 1.0 : 1.2);
   };
 
   private canMoveTo(x: number, y: number): boolean {

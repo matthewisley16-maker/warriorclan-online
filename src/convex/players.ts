@@ -67,6 +67,41 @@ export const ensurePlayer = mutation({
   },
 });
 
+/**
+ * Update the ONE persistent cat (rename / re-skin / change Clan without
+ * creating a new character). Only fields actually provided are changed.
+ */
+export const updateCat = mutation({
+  args: {
+    catName: v.optional(v.string()),
+    appearance: v.optional(appearance),
+    clan: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if (args.catName !== undefined) patch.catName = args.catName;
+    if (args.appearance !== undefined) patch.appearance = args.appearance;
+    if (args.clan !== undefined) {
+      patch.clan = args.clan;
+      // Moving Clans relocates the cat to the new camp.
+      const spawn = CLAN_SPAWNS[args.clan];
+      if (spawn) {
+        patch.x = spawn.x;
+        patch.y = spawn.y;
+      }
+    }
+    await ctx.db.patch(p._id, patch);
+    return true;
+  },
+});
+
 export const savePosition = mutation({
   args: {
     x: v.number(),

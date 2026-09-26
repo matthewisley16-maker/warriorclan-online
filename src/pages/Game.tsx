@@ -29,9 +29,55 @@ import { interiors } from "@/game/engine";
 import { areas, lore, npcs, areaAt } from "@/game/world";
 import { storySteps } from "@/game/story";
 import { quests } from "@/game/quests";
-import type { CatAppearanceForm } from "./CatCreator";
-import { CLANS } from "./CatCreator";
-import ModeSelect, { type CreatedCat, type GameMode } from "./ModeSelect";
+import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } from "./MainMenu";
+import type { CatSkin } from "@/game/draw";
+
+/** Fill any missing appearance fields with defaults (matches the save validator). */
+function fullSkin(s: { fur: string; furDark?: string; eye: string } & Partial<Omit<CatSkin, "fur" | "furDark" | "eye">>) {
+  return {
+    fur: s.fur,
+    furDark: s.furDark || "#5a3a20",
+    eye: s.eye,
+    chest: s.chest,
+    pattern: s.pattern ?? ("solid" as const),
+    furLength: s.furLength ?? 1,
+    tail: s.tail ?? ("normal" as const),
+    ears: s.ears ?? ("normal" as const),
+    size: s.size ?? 1,
+    scar: s.scar ?? false,
+  };
+}
+
+const CLANS = [
+  {
+    id: "thunderclan",
+    name: "ThunderClan",
+    desc: "Brave and loyal. Warriors of the deep forest.",
+    territory: "Oak and beech forest, Tallrock camp, Sandy Hollow",
+    color: "#4a8a4c",
+  },
+  {
+    id: "riverclan",
+    name: "RiverClan",
+    desc: "Sleek and strong swimmers. Fishers of the river.",
+    territory: "Riverbanks, reed beds, gravel camp",
+    color: "#3d6f9e",
+  },
+  {
+    id: "windclan",
+    name: "WindClan",
+    desc: "Swift runners of the open moor.",
+    territory: "Open moorland, gorse camp, rabbit warrens",
+    color: "#88b15c",
+  },
+  {
+    id: "shadowclan",
+    name: "ShadowClan",
+    desc: "Proud night hunters. The pines are theirs.",
+    territory: "Cold pine forest and marshes",
+    color: "#356840",
+  },
+];
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -293,8 +339,11 @@ function formatHour(h: number): string {
 
 export default function Game() {
   // --- routing-level state: which step of entry are we on? ---
-  const [phase, setPhase] = useState<"mode" | "playing">("mode");
+  const [phase, setPhase] = useState<"menu" | "loading" | "playing">("menu");
   const [mode, setMode] = useState<GameMode>("open");
+  const [pendingMode, setPendingMode] = useState<GameMode | null>(null);
+  const [pauseOpen, setPauseOpen] = useState(false);
+  const [gameSettings, setGameSettings] = useState<Settings>(() => loadSettings());
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<GameCanvas | null>(null);
@@ -305,7 +354,7 @@ export default function Game() {
   const completeQuest = useMutation(api.players.completeQuest);
   const setStoryStep = useMutation(api.players.setStoryStep);
   const addXp = useMutation(api.players.addXp);
-  const joinClan = useMutation(api.players.joinClan);
+  const updateCat = useMutation(api.players.updateCat);
   const heartbeat = useMutation(api.presence.heartbeat);
   const leavePresence = useMutation(api.presence.leave);
   const sendChat = useMutation(api.chat.send);
@@ -326,7 +375,7 @@ export default function Game() {
   const [clock, setClock] = useState(8);
   const [weather, setWeather] = useState<WeatherKind>("clear");
   const [interior, setInterior] = useState<string | null>(null);
-  const [myCat, setMyCat] = useState<{ name: string; clan?: string; appearance: CatAppearanceForm } | null>(null);
+  const [myCat, setMyCat] = useState<{ name: string; clan?: string; appearance: CatSkin } | null>(null);
   const [storyStep, setStoryStepLocal] = useState(0);
   const [chatFeed, setChatFeed] = useState<{ id: string; fromName: string; text: string; mine?: boolean; channel: string; x?: number; y?: number }[]>([]);
 
@@ -348,39 +397,38 @@ export default function Game() {
     setMyCat({
       name: player.catName,
       clan: player.clan,
-      appearance: { ...(player.appearance as CatAppearanceForm), furDark: player.appearance.furDark },
+      appearance: fullSkin(player.appearance),
     });
     setQuestsDone(player.questsDone ?? []);
     setStoryStepLocal(player.storyStep ?? 0);
     if (player.discovered?.length) setDiscovered(player.discovered);
   }, [player]);
 
-  // --- start a chosen mode ---
-  const handleStart = useCallback(
-    async (m: GameMode, cat: CreatedCat) => {
-      setMode(m);
-      const saved = await ensurePlayer({
-        mode: m === "open" ? "open" : "story",
-        catName: cat.name,
-        appearance: { ...cat.appearance, furDark: cat.appearance.furDark || "#5a3a20" },
-      });
-      if (m === "open") {
-        await joinClan({ clan: "thunderclan" }); // updated by Clan select below if changed
-      }
-      setMyCat({ name: cat.name, clan: m === "open" ? "thunderclan" : undefined, appearance: { ...cat.appearance, furDark: cat.appearance.furDark || "#5a3a20" } });
-      if (saved) {
-        setPos({ x: saved.x, y: saved.y });
-        setDiscovered(saved.discovered ?? ["camp"]);
-      }
-      setPhase("playing");
-    },
-    [ensurePlayer, joinClan],
-  );
+  // --- enter a mode: the ONE persistent cat is used, never a new character ---
+  const startMode = useCallback((m: GameMode) => {
+    setPendingMode(m);
+    setPauseOpen(false);
+    setPhase("loading");
+  }, []);
+
+  // Finish the hand-off once the save is confirmed (creates it on first play).
+  useEffect(() => {
+    if (phase !== "loading" || !player) return;
+    const m = pendingMode ?? "open";
+    setMode(m);
+    ensurePlayer({
+      mode: m === "open" ? "open" : "story",
+      catName: player.catName,
+      appearance: fullSkin(player.appearance),
+    })
+      .then(() => setPhase("playing"))
+      .catch(() => setPhase("menu"));
+  }, [phase, player, pendingMode, ensurePlayer]);
 
   // Boot the engine.
   useEffect(() => {
-    if (phase !== "playing" || !canvasRef.current || gameRef.current) return;
-    const spawn = player ? { x: player.x, y: player.y } : pos;
+    if (phase !== "playing" || !player || !pendingMode || !canvasRef.current || gameRef.current) return;
+    const spawn = { x: player.x, y: player.y };
 
     const game = new GameCanvas(canvasRef.current, spawn, {
       onAreaChange: (name, id) => {
@@ -415,7 +463,7 @@ export default function Game() {
           catName: myCat.name,
           clan: myCat.clan,
           rank: "apprentice",
-          appearance: { ...myCat.appearance, furDark: myCat.appearance.furDark || "#5a3a20" },
+          appearance: fullSkin(myCat.appearance),
         }).catch(() => undefined);
       }, 5000);
     }
@@ -473,8 +521,26 @@ export default function Game() {
 
   // Pause while panels are open.
   useEffect(() => {
-    gameRef.current?.setPaused(dialogue !== null || codexOpen || mapOpen || chatOpen);
-  }, [dialogue, codexOpen, mapOpen, chatOpen]);
+    gameRef.current?.setPaused(dialogue !== null || codexOpen || mapOpen || chatOpen || pauseOpen);
+  }, [dialogue, codexOpen, mapOpen, chatOpen, pauseOpen]);
+
+  // Camera distance from Settings.
+  useEffect(() => {
+    gameRef.current?.setCameraScale(gameSettings.cameraDistance);
+  }, [gameSettings, phase]);
+
+  // Esc toggles the in-game pause menu (unless typing in chat).
+  useEffect(() => {
+    if (phase !== "playing") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      setPauseOpen((p) => !p);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [phase]);
 
   const posRef = useRef(pos);
   posRef.current = pos;
@@ -637,13 +703,36 @@ export default function Game() {
 
   const currentStep = storySteps[storyStep];
   const clanLabel = CLANS.find((c) => c.id === myCat?.clan)?.name;
+  const rankXp = player?.xp ?? 0;
+  const rankLabel = rankXp >= 300 ? "Warrior" : rankXp >= 100 ? "Apprentice" : (player?.rank ?? "apprentice") === "kittypet" ? "Kittypet" : "Kit";
 
-  if (phase === "mode") {
+  if (phase !== "playing") {
     return (
-      <ModeSelect
-        onStart={handleStart}
-        hasSave={!!player}
-      />
+      <div className="relative h-screen w-full overflow-hidden">
+        <MainMenu
+          player={
+            player
+              ? {
+                  name: player.catName,
+                  clan: player.clan,
+                  rank: player.rank ?? "kittypet",
+                  xp: player.xp ?? 0,
+                  skin: fullSkin(player.appearance),
+                  inventory: player.inventory ?? [],
+                  achievements: player.achievements ?? [],
+                  storyStep: player.storyStep ?? 0,
+                  skills: player.skills ?? { hunt: 1, fight: 1, herb: 0 },
+                }
+              : null
+          }
+          onPlay={startMode}
+          onSaveName={(name) => updateCat({ catName: name }).catch(() => undefined)}
+          onSaveSkin={(skin) => updateCat({ appearance: fullSkin(skin) }).catch(() => undefined)}
+          onSaveClan={(clan) => updateCat({ clan }).catch(() => undefined)}
+          onSaveSettings={(s) => setGameSettings(s)}
+        />
+        <AnimatePresence>{phase === "loading" && <LoadingScreen mode={pendingMode ?? "open"} />}</AnimatePresence>
+      </div>
     );
   }
 
@@ -657,7 +746,7 @@ export default function Game() {
           <div className="flex items-center gap-2 rounded-full border border-border/60 bg-card/90 py-1.5 pl-3 pr-4 shadow-lg backdrop-blur-sm">
             <PawPrint className="size-4 text-primary" />
             <span className="text-xs font-semibold tracking-tight">{myCat?.name ?? "Cat"}</span>
-            {clanLabel && <span className="text-[10px] text-muted-foreground">{clanLabel} · apprentice</span>}
+            {clanLabel && <span className="text-[10px] text-muted-foreground">{clanLabel} · {rankLabel}</span>}
           </div>
           <div className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/90 px-3 py-1.5 shadow-lg backdrop-blur-sm">
             <Clock className="size-3.5 text-primary" />
@@ -807,6 +896,52 @@ export default function Game() {
       <AnimatePresence>
         {mapOpen && (
           <WorldMap onClose={() => setMapOpen(false)} discovered={discovered} px={pos.x} py={pos.y} />
+        )}
+      </AnimatePresence>
+
+      {/* Pause menu (Esc) */}
+      <AnimatePresence>
+        {pauseOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.94, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.94, y: 10 }}
+              className="w-full max-w-xs rounded-2xl border border-border/60 bg-card/95 p-5 text-center shadow-2xl"
+            >
+              <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground">Paused</p>
+              <p className="mt-1 text-lg font-extrabold tracking-tight">{myCat?.name ?? "Cat"}</p>
+              {clanLabel && <p className="text-xs text-muted-foreground">{clanLabel} · {rankLabel}</p>}
+              <div className="mt-4 space-y-2">
+                <Button className="w-full rounded-xl" onClick={() => setPauseOpen(false)}>
+                  Resume
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full rounded-xl"
+                  onClick={() => setMapOpen(true)}
+                >
+                  Territory map
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full rounded-xl"
+                  onClick={() => {
+                    setPauseOpen(false);
+                    setPhase("menu");
+                  }}
+                >
+                  Main menu
+                </Button>
+              </div>
+              <p className="mt-3 text-[10px] text-muted-foreground">Progress saves automatically.</p>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </main>
