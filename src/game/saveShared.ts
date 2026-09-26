@@ -34,7 +34,14 @@ export const CLAN_SPAWNS: Record<string, { x: number; y: number }> = {
   windclan: { x: 20 * TILE_SHARED, y: 87 * TILE_SHARED },
   riverclan: { x: 170 * TILE_SHARED, y: 99 * TILE_SHARED },
   shadowclan: { x: 96 * TILE_SHARED, y: 23 * TILE_SHARED },
+  // The kittypet life: Rusty & Smudge's street in Twolegplace.
+  kittypet: { x: 78 * TILE_SHARED, y: 146 * TILE_SHARED },
 };
 
-/** Default (story mode) spawn: south of ThunderClan's gorse tunnel. */
-export const SPAWN = CLAN_SPAWNS.thunderclan;
+/**
+ * Default spawn: Rusty's garden in Twolegplace (Smudge's street).
+ * New cats — and respawns — start here as kittypets, then travel to
+ * whichever Clan camp they join.
+ */
+export const TWOLEG_SPAWN = { x: 78 * TILE_SHARED, y: 146 * TILE_SHARED };
+export const SPAWN = TWOLEG_SPAWN;

@@ -12,6 +12,7 @@ import {
   MessageCircle,
   Moon,
   PawPrint,
+  Snowflake,
   ScrollText,
   Send,
   Sun,
@@ -26,10 +27,11 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/convex/_generated/api";
 import { GameCanvas, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
 import { interiors } from "@/game/engine";
-import { areas, lore, npcs, areaAt } from "@/game/world";
+import { areas, lore, npcs, areaAt, CLAN_SPAWNS } from "@/game/world";
 import { storySteps } from "@/game/story";
 import { quests } from "@/game/quests";
 import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } from "./MainMenu";
+import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
 import type { CatSkin } from "@/game/draw";
 
 /** Fill any missing appearance fields with defaults (matches the save validator). */
@@ -350,6 +352,8 @@ function weatherIcon(w: WeatherKind) {
     case "storm": return <Zap className="size-3.5" />;
     case "fog": return <CloudSun className="size-3.5" />;
     case "wind": return <Wind className="size-3.5" />;
+    case "snow": return <Snowflake className="size-3.5" />;
+    default: return <Sun className="size-3.5" />;
   }
 }
 
@@ -367,7 +371,10 @@ export default function Game() {
   const [phase, setPhase] = useState<"menu" | "loading" | "playing">("menu");
   const [mode, setMode] = useState<GameMode>("open");
   const [pendingMode, setPendingMode] = useState<GameMode | null>(null);
+  /** explicit spawn when the session's Clan choice moves the cat to a camp */
+  const [pendingSpawn, setPendingSpawn] = useState<{ x: number; y: number } | null>(null);
   const [pauseOpen, setPauseOpen] = useState(false);
+  const [catClanOpen, setCatClanOpen] = useState(false);
   const [gameSettings, setGameSettings] = useState<Settings>(() => loadSettings());
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -429,12 +436,21 @@ export default function Game() {
     if (player.discovered?.length) setDiscovered(player.discovered);
   }, [player]);
 
-  // --- enter a mode: the ONE persistent cat is used, never a new character ---
-  const startMode = useCallback((m: GameMode) => {
+  // --- enter a mode: the ONE persistent cat is used, never a new character.
+  // Clan is confirmed every session (changeable, never locked). ---
+  const startMode = useCallback((m: GameMode, clanId: string) => {
     setPendingMode(m);
     setPauseOpen(false);
+    if (clanId) {
+      setPendingSpawn(CLAN_SPAWNS[clanId] ?? null);
+      if (player && clanId !== player.clan) {
+        updateCat({ clan: clanId }).catch(() => undefined);
+      }
+    } else {
+      setPendingSpawn(null);
+    }
     setPhase("loading");
-  }, []);
+  }, [player, updateCat]);
 
   // Finish the hand-off once the save is confirmed (creates it on first play).
   useEffect(() => {
@@ -453,7 +469,7 @@ export default function Game() {
   // Boot the engine.
   useEffect(() => {
     if (phase !== "playing" || !player || !pendingMode || !canvasRef.current || gameRef.current) return;
-    const spawn = { x: player.x, y: player.y };
+    const spawn = pendingSpawn ?? { x: player.x, y: player.y };
 
     const game = new GameCanvas(canvasRef.current, spawn, {
       onAreaChange: (name, id) => {
@@ -469,6 +485,10 @@ export default function Game() {
       onClock: (h) => setClock(h),
       onWeatherChange: (w) => setWeather(w),
       onInteriorChange: (id) => setInterior(id),
+      onNpcIdle: (name, line) => {
+        setDialogue({ name, text: line });
+        window.setTimeout(() => setDialogue((d) => (d && d.name === name && d.text === line ? null : d)), 6000);
+      },
     });
     gameRef.current = game;
     if (myCat?.appearance) game.mySkin = { ...myCat.appearance, furDark: myCat.appearance.furDark || "#5a3a20" };
@@ -529,7 +549,7 @@ export default function Game() {
       leavePresence().catch(() => undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [phase, pendingSpawn]);
 
   // Sync remotes into the engine.
   useEffect(() => {
@@ -546,8 +566,8 @@ export default function Game() {
 
   // Pause while panels are open.
   useEffect(() => {
-    gameRef.current?.setPaused(dialogue !== null || codexOpen || mapOpen || chatOpen || pauseOpen);
-  }, [dialogue, codexOpen, mapOpen, chatOpen, pauseOpen]);
+    gameRef.current?.setPaused(dialogue !== null || codexOpen || mapOpen || chatOpen || pauseOpen || catClanOpen);
+  }, [dialogue, codexOpen, mapOpen, chatOpen, pauseOpen, catClanOpen]);
 
   // Camera distance from Settings.
   useEffect(() => {
@@ -924,6 +944,42 @@ export default function Game() {
         )}
       </AnimatePresence>
 
+      {/* Cat & Clan settings */}
+      <AnimatePresence>
+        {catClanOpen && myCat && (
+          <CatClanMenu
+            open
+            player={{
+              name: myCat.name,
+              clan: myCat.clan,
+              rank: rankLabel.toLowerCase(),
+              xp: player?.xp ?? 0,
+              skin: myCat.appearance,
+            }}
+            onClose={() => setCatClanOpen(false)}
+            onSave={(v: CatClanSave) => {
+              if (v.name && v.name !== myCat.name) {
+                updateCat({ catName: v.name }).catch(() => undefined);
+              }
+              if (v.skin) {
+                updateCat({ appearance: fullSkin(v.skin) }).catch(() => undefined);
+              }
+              if (v.clan && v.clan !== myCat.clan) {
+                const newClan = v.clan;
+                updateCat({ clan: newClan })
+                  .then(() => {
+                    const g = gameRef.current;
+                    const spawn = CLAN_SPAWNS[newClan];
+                    if (g && spawn) g.teleport(spawn.x, spawn.y);
+                  })
+                  .catch(() => undefined);
+              }
+              setCatClanOpen(false);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Pause menu (Esc) */}
       <AnimatePresence>
         {pauseOpen && (
@@ -952,6 +1008,13 @@ export default function Game() {
                   onClick={() => setMapOpen(true)}
                 >
                   Territory map
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full rounded-xl"
+                  onClick={() => setCatClanOpen(true)}
+                >
+                  Cat & Clan
                 </Button>
                 <Button
                   variant="outline"

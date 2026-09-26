@@ -16,6 +16,17 @@ export interface CatSkin {
 
 export type CatPose = "walk" | "sit" | "sleep" | "crouch" | "groom" | "stretch";
 
+/** Dark outline derived from the pelt so sprites read crisply on any ground. */
+function outlineOf(skin: CatSkin): string {
+  const n = (skin.furDark || skin.fur).replace("#", "");
+  if (n.length !== 6) return "#241a10";
+  const f = 0.45;
+  const r = Math.round(parseInt(n.slice(0, 2), 16) * f);
+  const g = Math.round(parseInt(n.slice(2, 4), 16) * f);
+  const b = Math.round(parseInt(n.slice(4, 6), 16) * f);
+  return `#${[r, g, b].map((v) => Math.max(12, v).toString(16).padStart(2, "0")).join("")}`;
+}
+
 /**
  * Draw a cat. (x, y) is the ground point under the cat's center.
  * `facing` mirrors the sprite; `phase` desyncs walk cycles between cats.
@@ -71,6 +82,8 @@ export function drawCat(
 
   // body
   ctx.fillStyle = skin.fur;
+  ctx.strokeStyle = outlineOf(skin);
+  ctx.lineWidth = 1;
   ctx.beginPath();
   if (pose === "sit") {
     ctx.ellipse(0, -7, 9, 11, 0, 0, Math.PI * 2);
@@ -82,6 +95,7 @@ export function drawCat(
     ctx.ellipse(0, -7, 11.5, 7, 0, 0, Math.PI * 2);
   }
   ctx.fill();
+  ctx.stroke();
 
   // pattern: tabby stripes
   if (skin.pattern === "tabby") {
@@ -141,13 +155,18 @@ export function drawCat(
     ctx.fillRect(5, -4, 4, 7);
   }
 
-  // head
-  const headX = pose === "sit" ? 4 : 9;
-  const headY = pose === "sit" ? -16 : pose === "sleep" ? -8 : pose === "crouch" ? -8 : -11;
+  // head (groom pose dips toward the chest to lick it)
+  const groomDip = pose === "groom" ? Math.max(0, Math.sin(time * 5.5)) : 0;
+  const headX = (pose === "sit" || pose === "groom" ? 4 : 9) - groomDip * 1.5;
+  const headY =
+    (pose === "sit" ? -16 : pose === "sleep" ? -8 : pose === "crouch" ? -8 : -11) + groomDip * 5;
   ctx.fillStyle = skin.fur;
+  ctx.strokeStyle = outlineOf(skin);
+  ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.arc(headX, headY, 6.5, 0, Math.PI * 2);
   ctx.fill();
+  ctx.stroke();
 
   // ears
   const earH = skin.ears === "tall" ? 12 : skin.ears === "fold" ? 6 : 10;
@@ -157,12 +176,14 @@ export function drawCat(
   ctx.lineTo(headX - 0.5, headY - 4.5);
   ctx.closePath();
   ctx.fill();
+  ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(headX + 1, headY - 5);
   ctx.lineTo(headX + 3.5, headY - earH - 0.5);
   ctx.lineTo(headX + 6, headY - 3.5);
   ctx.closePath();
   ctx.fill();
+  ctx.stroke();
   ctx.fillStyle = "#c98a8a";
   ctx.beginPath();
   ctx.moveTo(headX + 2.2, headY - 5.6);
@@ -187,18 +208,29 @@ export function drawCat(
   ctx.ellipse(headX + 4, headY + 2.5, 3, 2.2, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // eye — closed while sleeping, blink otherwise
+  // eyes — closed while sleeping, blinking otherwise; both visible (3/4 view)
   const blink =
     pose === "sleep" ? 0.08 : Math.sin(time * 0.9 + phase * 3) > 0.985 ? 0.15 : 1;
   ctx.fillStyle = skin.eye;
-  ctx.beginPath();
-  ctx.ellipse(headX + 3.5, headY - 0.5, 1.7, 1.7 * blink, 0, 0, Math.PI * 2);
-  ctx.fill();
-  if (blink > 0.5) {
-    ctx.fillStyle = "#1a1a1a";
+  for (const ex of [headX + 3.5, headX + 0.6]) {
     ctx.beginPath();
-    ctx.ellipse(headX + 3.9, headY - 0.5, 0.8, 1.3 * blink, 0, 0, Math.PI * 2);
+    ctx.ellipse(ex, headY - 0.5, 1.6, 1.6 * blink, 0, 0, Math.PI * 2);
     ctx.fill();
+  }
+  if (blink > 0.5) {
+    ctx.fillStyle = "#141414";
+    for (const ex of [headX + 3.9, headX + 1]) {
+      ctx.beginPath();
+      ctx.ellipse(ex, headY - 0.5, 0.75, 1.25 * blink, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // catchlight
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    for (const ex of [headX + 4.2, headX + 1.3]) {
+      ctx.beginPath();
+      ctx.arc(ex, headY - 1.1, 0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // whiskers

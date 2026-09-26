@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ClanSelect } from "./ClanSelect";
 import { drawCat, type CatSkin } from "@/game/draw";
 import { MenuScene } from "@/game/menuScene";
 import { cn } from "@/lib/utils";
@@ -232,7 +233,7 @@ const MODES: { id: GameMode; title: string; tagline: string; desc: string; bulle
   },
 ];
 
-function ModeCard({ mode, index, onPlay }: { mode: (typeof MODES)[number]; index: number; onPlay: (m: GameMode) => void }) {
+function ModeCard({ mode, index, onPlay }: { mode: (typeof MODES)[number]; index: number; onPlay: (m: GameMode, clanId: string) => void }) {
   const Icon = mode.icon;
   return (
     <motion.div
@@ -241,7 +242,7 @@ function ModeCard({ mode, index, onPlay }: { mode: (typeof MODES)[number]; index
       transition={{ delay: 0.25 + index * 0.09 }}
     >
       <button
-        onClick={() => onPlay(mode.id)}
+        onClick={() => onPlay(mode.id, "")}
         className={cn(
           "group flex h-full w-full flex-col rounded-2xl border border-white/20 bg-black/45 p-4 text-left shadow-xl shadow-black/30 backdrop-blur-md",
           "transition-all hover:-translate-y-1 hover:bg-black/60 hover:shadow-2xl active:translate-y-0",
@@ -276,12 +277,12 @@ function ModeCard({ mode, index, onPlay }: { mode: (typeof MODES)[number]; index
 
 // --- character screen ---------------------------------------------------------
 
-const FUR_COLORS = [
+export const FUR_COLORS = [
   "#d96b2f", "#e8963f", "#c9c2b8", "#8f8f96", "#5c5c60", "#2c2c30",
   "#7a5b3a", "#a5622d", "#e3c088", "#c98d5a", "#9fb2c8", "#b8c4d6",
   "#6b4a2f", "#d9a441", "#e8e6e0", "#8a7a66",
 ];
-const EYE_COLORS = ["#4fae6e", "#5b8fd6", "#d9c04a", "#c98a1e", "#7fae4e", "#2c2c30", "#d9973a"];
+export const EYE_COLORS = ["#4fae6e", "#5b8fd6", "#d9c04a", "#c98a1e", "#7fae4e", "#2c2c30", "#d9973a"];
 const CLANS = [
   { id: "thunderclan", name: "ThunderClan", desc: "Brave and loyal. Warriors of the deep forest.", color: "#4a8a4c" },
   { id: "riverclan", name: "RiverClan", desc: "Sleek and strong swimmers. Fishers of the river.", color: "#3d6f9e" },
@@ -297,7 +298,7 @@ function darken(hex: string, f = 0.72): string {
   return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function Chip({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+export function Chip({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -311,7 +312,7 @@ function Chip({ active, label, onClick }: { active: boolean; label: string; onCl
   );
 }
 
-function Swatches({ colors, value, onChange }: { colors: string[]; value: string; onChange: (c: string) => void }) {
+export function Swatches({ colors, value, onChange }: { colors: string[]; value: string; onChange: (c: string) => void }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {colors.map((c) => (
@@ -719,7 +720,8 @@ export default function MainMenu({
   onSaveSettings,
 }: {
   player: MainMenuPlayer | null;
-  onPlay: (mode: GameMode) => void;
+  /** mode + chosen Clan — Clan is picked every session, never locked */
+  onPlay: (mode: GameMode, clanId: string) => void;
   onSaveName: (name: string) => void;
   onSaveSkin: (skin: CatSkin) => void;
   onSaveClan: (clan: string) => void;
@@ -728,6 +730,7 @@ export default function MainMenu({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<MenuScene | null>(null);
   const [screen, setScreen] = useState<"menu" | "character" | "settings">("menu");
+  const [clanFor, setClanFor] = useState<GameMode | null>(null);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
 
   const previewSkin: CatSkin = useMemo(
@@ -787,6 +790,18 @@ export default function MainMenu({
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/55" />
 
       <AnimatePresence mode="wait">
+        {clanFor && (
+          <ClanSelect
+            key="clan"
+            skin={previewSkin}
+            currentClan={player?.clan}
+            onCancel={() => setClanFor(null)}
+            onConfirm={(clanId) => {
+              setClanFor(null);
+              onPlay(clanFor, clanId);
+            }}
+          />
+        )}
         {screen === "character" && player && (
           <CharacterScreen
             key="character"
@@ -873,7 +888,7 @@ export default function MainMenu({
             <MenuButton
               icon={ArrowRight}
               label="Continue"
-              onClick={() => onPlay(player && (player.storyStep ?? 0) > 0 && (player.storyStep ?? 0) < 16 ? "story" : "open")}
+              onClick={() => onPlay(player && (player.storyStep ?? 0) > 0 && (player.storyStep ?? 0) < 16 ? "story" : "open", "")}
               disabled={!player}
             />
           </motion.div>

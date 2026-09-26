@@ -59,6 +59,7 @@ export interface NPCDef {
   eye: string;
   chest?: string;
   pattern?: "solid" | "tabby" | "tortie" | "bicolor";
+  tail?: "normal" | "short" | "fluffy" | "bob";
   wander: boolean;
   home: Vec2;
   schedule?: NPCScheduleSlot[];
@@ -94,14 +95,19 @@ function shiftRect(r: Rect): Rect {
 export const CAMP_CENTER: Vec2 = { x: t(41) + TC_OX, y: t(46) + TC_OY };
 export const CAMP_RADIUS = t(12.5);
 
-/** ThunderClan spawn — just south of the gorse tunnel. */
-export const SPAWN: Vec2 = { x: CAMP_CENTER.x, y: t(59.5) + TC_OY };
+/**
+ * Default spawn — Rusty's garden in Twolegplace, next to Smudge's home.
+ * Every new session (and every respawn) starts in the kittypet neighborhood.
+ */
+export const SPAWN: Vec2 = { x: t(78), y: t(146) };
 
 export const CLAN_SPAWNS: Record<string, Vec2> = {
-  thunderclan: SPAWN,
+  thunderclan: { x: CAMP_CENTER.x, y: t(59.5) + TC_OY },
   windclan: { x: t(20), y: t(84) + t(3) },
   riverclan: { x: t(170), y: t(96) + t(3) },
   shadowclan: { x: t(96), y: t(20) + t(3) },
+  // The kittypet life: Rusty's garden on Smudge's street.
+  kittypet: SPAWN,
 };
 
 export const clearZones: Rect[] = [
@@ -313,6 +319,13 @@ const tcCampObjects: WorldObject[] = [
     x: cc.x - t(0.5), y: cc.y + t(11.4), w: t(2.4), h: t(2),
     label: "Gorse tunnel", interact: "entrance", style: "bramble", scale: 1.2,
   },
+  // Lived-in details: resting stones, moss patches, fallen branches
+  { id: "tc-stone-1", x: cc.x - t(3), y: cc.y + t(1.6), w: t(1.4), h: t(1.1), label: "Sun-warmed stone", style: "stone" },
+  { id: "tc-stone-2", x: cc.x + t(2.2), y: cc.y - t(2.4), w: t(1.4), h: t(1.1), label: "Sun-warmed stone", style: "stone" },
+  { id: "tc-stone-3", x: cc.x + t(6.2), y: cc.y + t(0.4), w: t(1.4), h: t(1.1), label: "Sun-warmed stone", style: "stone" },
+  { id: "tc-moss-1", x: cc.x - t(5.6), y: cc.y - t(3.8), w: t(1.8), h: t(1.2), label: "Soft moss", style: "bush" },
+  { id: "tc-moss-2", x: cc.x + t(3.2), y: cc.y + t(2.2), w: t(1.8), h: t(1.2), label: "Soft moss", style: "bush" },
+  { id: "tc-branch", x: cc.x - t(2.2), y: cc.y + t(7.6), w: t(3.2), h: t(1), label: "Fallen branch", style: "log" },
 ];
 
 const tcLandmarks: WorldObject[] = [
@@ -366,7 +379,29 @@ const wc = { x: t(20), y: t(84) }; // WindClan camp
 const rc = { x: t(170), y: t(96) }; // RiverClan camp
 const sc = { x: t(96), y: t(20) }; // ShadowClan camp
 
+// Distinct environmental dressing per Clan camp (book-faithful):
 const otherClanObjects: WorldObject[] = [
+  // --- WindClan: wind-swept open camp — gorse shelter, heather, rocks ---
+  { id: "wc-gorse-shelter", x: wc.x - t(3), y: wc.y - t(3.4), w: t(3.2), h: t(2.4), label: "Gorse bush shelter", style: "bramble", solid: true },
+  { id: "wc-heather-1", x: wc.x + t(2.6), y: wc.y - t(3), w: t(1.6), h: t(1.2), label: "Heather patch", style: "flowerbed" },
+  { id: "wc-heather-2", x: wc.x - t(6), y: wc.y + t(1), w: t(1.6), h: t(1.2), label: "Heather patch", style: "flowerbed" },
+  { id: "wc-boulder-1", x: wc.x + t(3.4), y: wc.y + t(3.2), w: t(2.2), h: t(1.8), label: "Moork boulder", style: "rock", solid: true },
+  { id: "wc-boulder-2", x: wc.x - t(2.2), y: wc.y + t(3.8), w: t(1.8), h: t(1.5), label: "Moork boulder", style: "rock", solid: true },
+  { id: "wc-apprentices", x: wc.x + t(1.6), y: wc.y + t(1), w: t(2.6), h: t(2), label: "WindClan apprentices' den", interact: "apprentices-den", style: "bramble", solid: true },
+  // --- RiverClan: watery environment — streams, reeds, wet rocks ---
+  { id: "rc-stream", x: rc.x - t(1), y: rc.y + t(5.8), w: t(9), h: t(1.6), label: "Camp stream", style: "reeds" },
+  { id: "rc-reeds-2", x: rc.x + t(5.4), y: rc.y - t(1.6), w: t(1.8), h: t(2.4), label: "Reed bed", style: "reeds", solid: true },
+  { id: "rc-reeds-3", x: rc.x - t(3.4), y: rc.y - t(5), w: t(1.8), h: t(2), label: "Reed bed", style: "reeds" },
+  { id: "rc-wet-rock", x: rc.x + t(2.2), y: rc.y + t(3.4), w: t(2), h: t(1.6), label: "Wet boulder", style: "rock", solid: true },
+  { id: "rc-apprentices", x: rc.x - t(2.2), y: rc.y - t(2.2), w: t(2.6), h: t(2), label: "RiverClan apprentices' den", interact: "apprentices-den", style: "bush", solid: true },
+  { id: "rc-stones", x: rc.x + t(4.4), y: rc.y - t(3.4), w: t(1.6), h: t(1.2), label: "Smooth stones", style: "stone" },
+  // --- ShadowClan: dark pines — mud, boulders, brambles, marsh pool ---
+  { id: "sc-bramble-1", x: sc.x - t(3.4), y: sc.y - t(3), w: t(2.8), h: t(2.2), label: "Tangled bramble", style: "bramble", solid: true },
+  { id: "sc-bramble-2", x: sc.x + t(3), y: sc.y - t(2.6), w: t(2.4), h: t(2), label: "Tangled bramble", style: "bramble", solid: true },
+  { id: "sc-boulder", x: sc.x + t(1.6), y: sc.y + t(1.2), w: t(2.2), h: t(1.8), label: "Mossy boulder", style: "rock", solid: true },
+  { id: "sc-mud-pool", x: sc.x - t(1.4), y: sc.y + t(3.8), w: t(2.6), h: t(1.8), label: "Muddy pool", style: "reeds" },
+  { id: "sc-pine-stump", x: sc.x - t(5.6), y: sc.y + t(2.2), w: t(1.8), h: t(1.4), label: "Old pine stump", style: "stump" },
+  { id: "sc-apprentices", x: sc.x - t(1.2), y: sc.y - t(1.4), w: t(2.6), h: t(2), label: "ShadowClan apprentices' den", interact: "apprentices-den", style: "bramble", solid: true },
   // WindClan — a shallow scoop ringed by gorse
   { id: "wc-rock", x: wc.x, y: wc.y - t(5), w: t(4), h: t(3), label: "WindClan meeting rock", interact: "windclan-camp", style: "rock", solid: true, scale: 1.4 },
   { id: "wc-nursery", x: wc.x - t(5.4), y: wc.y + t(2.6), w: t(3.4), h: t(2.6), label: "WindClan nursery", interact: "nursery", style: "bramble", solid: true },
@@ -392,20 +427,67 @@ const otherClanObjects: WorldObject[] = [
     label: "Mothermouth — the Moonstone", interact: "moonstone", interior: "moonstone-cave",
     style: "cave", solid: true, scale: 1.4,
   },
-  // Twolegplace: Rusty's house + neighbors
+  // ------------------------------------------------------------------
+  // Twolegplace — a real residential neighborhood (Smudge's street).
+  // Grid: backyards north of the main street, houses south of it.
+  // ------------------------------------------------------------------
+
+  // Rusty/Smudge's street of Twoleg nests (north row of the main street)
   {
     id: "rusty-house", x: t(78), y: t(140), w: t(5), h: t(3.6),
     label: "Rusty's Twoleg nest", interact: "twolegplace", interior: "rusty-house",
     style: "house", solid: true, scale: 1.2,
   },
-  { id: "house-2", x: t(64), y: t(138), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true },
-  { id: "house-3", x: t(92), y: t(138), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true },
-  { id: "house-4", x: t(60), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true },
-  { id: "house-5", x: t(96), y: t(160), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true },
+  { id: "house-2", x: t(64), y: t(138), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1.1 },
+  { id: "house-3", x: t(92), y: t(138), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 0.95 },
+  { id: "house-4", x: t(70), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1 },
+  { id: "house-5", x: t(85), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1.05 },
+  // Southern street row (across the main street)
+  { id: "house-6", x: t(58), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1 },
+  { id: "house-7", x: t(70), y: t(160), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1.1 },
+  { id: "house-8", x: t(84), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 0.9 },
+  { id: "house-9", x: t(96), y: t(160), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1.05 },
+  // Porches — front doors of a few nests
+  { id: "porch-1", x: t(78), y: t(142.4), w: t(1.6), h: t(1), label: "Rusty's porch", style: "plank" as Style },
+  { id: "porch-2", x: t(92), y: t(140.2), w: t(1.6), h: t(1), label: "Nest porch", style: "plank" as Style },
+  { id: "porch-3", x: t(58), y: t(160.2), w: t(1.6), h: t(1), label: "Nest porch", style: "plank" as Style },
+  { id: "porch-4", x: t(84), y: t(160.2), w: t(1.6), h: t(1), label: "Nest porch", style: "plank" as Style },
+  // Yards: flowerbeds, gardens, hedges, trees
   { id: "garden-bed-1", x: t(70), y: t(144), w: t(2), h: t(1.6), label: "Flowerbed", style: "flowerbed" },
   { id: "garden-bed-2", x: t(88), y: t(144), w: t(2), h: t(1.6), label: "Flowerbed", style: "flowerbed" },
-  { id: "fence-1", x: t(72), y: t(136), w: t(12), h: t(0.8), label: "Garden fence", style: "fence" },
-  { id: "fence-2", x: t(84), y: t(160), w: t(12), h: t(0.8), label: "Garden fence", style: "fence" },
+  { id: "garden-bed-3", x: t(58), y: t(156), w: t(2), h: t(1.6), label: "Vegetable garden", style: "flowerbed" },
+  { id: "garden-bed-4", x: t(96), y: t(156), w: t(2), h: t(1.6), label: "Rose garden", style: "flowerbed" },
+  { id: "hedge-1", x: t(66), y: t(146), w: t(2.6), h: t(1.4), label: "Hedge", style: "bush", solid: true },
+  { id: "hedge-2", x: t(90), y: t(146), w: t(2.6), h: t(1.4), label: "Hedge", style: "bush", solid: true },
+  { id: "hedge-3", x: t(76), y: t(156), w: t(2.6), h: t(1.4), label: "Hedge", style: "bush", solid: true },
+  { id: "yard-tree-1", x: t(62), y: t(146), w: t(2.4), h: t(2), label: "Garden tree", style: "tree", solid: true },
+  { id: "yard-tree-2", x: t(93), y: t(146), w: t(2.4), h: t(2), label: "Garden tree", style: "tree", solid: true },
+  { id: "yard-tree-3", x: t(73), y: t(160), w: t(2.4), h: t(2), label: "Garden tree", style: "tree", solid: true },
+  { id: "yard-bush-1", x: t(80), y: t(146), w: t(2), h: t(1.6), label: "Garden bush", style: "bush", solid: true },
+  { id: "yard-bush-2", x: t(64), y: t(162), w: t(2), h: t(1.6), label: "Garden bush", style: "bush", solid: true },
+  { id: "yard-bush-3", x: t(92), y: t(162), w: t(2), h: t(1.6), label: "Garden bush", style: "bush", solid: true },
+  // Fences + gates: Rusty's yard (between his nest and the forest),
+  // neighbors' yards, and gaps as gates along the main street.
+  { id: "fence-rusty-n", x: t(75.4), y: t(136.4), w: t(6.2), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-rusty-w", x: t(75.2), y: t(136.4), w: t(0.8), h: t(7), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-rusty-e", x: t(81.4), y: t(136.4), w: t(0.8), h: t(7), label: "Garden fence", style: "fence", solid: true },
+  { id: "gate-rusty", x: t(78), y: t(143.2), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
+  { id: "fence-2-n", x: t(62), y: t(140), w: t(6), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-2-e", x: t(64), y: t(140), w: t(0.8), h: t(6), label: "Garden fence", style: "fence", solid: true },
+  { id: "gate-2", x: t(64), y: t(145.4), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
+  { id: "fence-3-n", x: t(90), y: t(140), w: t(6), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-3-w", x: t(90), y: t(140), w: t(0.8), h: t(6), label: "Garden fence", style: "fence", solid: true },
+  { id: "gate-3", x: t(92), y: t(145.4), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
+  { id: "fence-s-1", x: t(56), y: t(156), w: t(8), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-s-2", x: t(66), y: t(156), w: t(8), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-s-3", x: t(80), y: t(156), w: t(8), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-s-4", x: t(94), y: t(156), w: t(8), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "gate-s-1", x: t(70), y: t(155.2), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
+  { id: "gate-s-2", x: t(84), y: t(155.2), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
+  // Neighborhood extras: a shared water bowl and a sunning wall
+  { id: "water-bowl", x: t(79.6), y: t(144), w: t(1), h: t(0.8), label: "Water bowl", style: "stone" },
+  { id: "sunning-wall", x: t(74), y: t(151), w: t(6), h: t(0.9), label: "Low garden wall", style: "stone", solid: true },
+
   // Farm
   {
     id: "barn", x: t(124), y: t(156), w: t(6), h: t(4),
@@ -837,6 +919,102 @@ export const npcs: NPCDef[] = [
       "Rusty? Is that you? You look… wild. Henry says the forest cats eat bones and have fighting claws!",
       "Come back to Twolegplace before dark, Rusty. The forest isn't for house cats.",
       "I dreamed you were a fire blazing through the trees. Silly, right? …Right?",
+    ],
+  },
+  // --- Twolegplace kittypets — a living neighborhood ---
+  {
+    id: "henry", name: "Henry", role: "Kittypet", clan: "kittypet", wander: true,
+    fur: "#e3c088", furDark: "#c19c5f", eye: "#5b8fd6", pattern: "tabby",
+    home: { x: t(64), y: t(143) },
+    schedule: [
+      { h: 8, x: t(64), y: t(143) },
+      { h: 12, x: t(68), y: t(150), activity: "sunning on the garden wall" },
+      { h: 17, x: t(64), y: t(143) },
+    ],
+    lines: [
+      "Henry's the name. I once jumped the fence in ONE leap — ask anyone on this street.",
+      "Forest cats? Rubbish. The wildest thing out there is a fat pigeon.",
+      "Twolegs put pellets in my bowl at dawn and dinner at six. What more could a cat want?",
+    ],
+  },
+  {
+    id: "marmalade", name: "Marmalade", role: "Kittypet", clan: "kittypet", wander: true,
+    fur: "#d96b2f", furDark: "#b04f1d", eye: "#d9c04a", pattern: "tabby",
+    home: { x: t(92), y: t(143) },
+    schedule: [
+      { h: 7, x: t(92), y: t(143) },
+      { h: 11, x: t(88), y: t(150), activity: "patrolling the back fence" },
+      { h: 18, x: t(92), y: t(143) },
+    ],
+    lines: [
+      "I'm the top cat of this street. Every fence, every roof — mine.",
+      "I saw a fox once. Chased it clean off MY porch. Well… it was walking away already.",
+      "Smudge says you ran off to the forest. You've got bees in your brain, friend.",
+    ],
+  },
+  {
+    id: "princess", name: "Princess", role: "Kittypet", clan: "kittypet", wander: false,
+    fur: "#e8e6e0", furDark: "#c9c6bd", eye: "#4fae6e", chest: "#f4e9d8",
+    home: { x: t(70), y: t(152) },
+    lines: [
+      "Oh! You startled me. I was watching the birds on the fence.",
+      "My Twolegs brush me every day. I'm far too refined for forest adventures.",
+      "You know Smudge? Sweet tom. He's always talking about his friend who left.",
+    ],
+  },
+  {
+    id: "biscuit", name: "Biscuit", role: "Kittypet", clan: "kittypet", wander: true,
+    fur: "#c98d5a", furDark: "#a56a3d", eye: "#c98a1e", pattern: "bicolor", chest: "#f4e9d8",
+    home: { x: t(58), y: t(161) },
+    schedule: [
+      { h: 9, x: t(58), y: t(161) },
+      { h: 13, x: t(62), y: t(152), activity: "napping in the flowerbed" },
+      { h: 19, x: t(58), y: t(161) },
+    ],
+    lines: [
+      "Zzz… wha—? Oh. Hello. I was chasing a mouse in my dream.",
+      "The sunniest spot on this street is MY flowerbed. I share it. Sometimes.",
+      "Have you tried the crumbs Twolegs drop at their eating-place? A delicacy.",
+    ],
+  },
+  {
+    id: "ginger", name: "Ginger", role: "Kittypet", clan: "kittypet", wander: true,
+    fur: "#e8963f", furDark: "#c2752a", eye: "#7fae4e",
+    home: { x: t(84), y: t(161) },
+    schedule: [
+      { h: 8, x: t(84), y: t(161) },
+      { h: 12, x: t(78), y: t(150), activity: "walking the main street" },
+      { h: 20, x: t(84), y: t(161) },
+    ],
+    lines: [
+      "I walk the whole street twice a day. A cat needs her exercise.",
+      "Don't scratch the fences — the Twolegs paint them every greenleaf.",
+      "You smell like pine trees and… is that blood? You need a bath, dear.",
+    ],
+  },
+  {
+    id: "smokey", name: "Smokey", role: "Kittypet", clan: "kittypet", wander: true,
+    fur: "#5c5c60", furDark: "#43434a", eye: "#d9a83a",
+    home: { x: t(96), y: t(163) },
+    schedule: [
+      { h: 10, x: t(96), y: t(163) },
+      { h: 15, x: t(90), y: t(150), activity: "sitting on a car roof" },
+      { h: 21, x: t(96), y: t(163) },
+    ],
+    lines: [
+      "Name's Smokey. I don't run for any cat — I sit, and things come to me.",
+      "The rumbling nests sleep in their dens all day. Warmest spot in Twolegplace.",
+      "Forest? Dark and full of claws, they say. I'll take my cushion, thanks.",
+    ],
+  },
+  {
+    id: "fluffy", name: "Fluffy", role: "Kittypet", clan: "kittypet", wander: false,
+    fur: "#b8c4d6", furDark: "#93a3bb", eye: "#5b8fd6", tail: "fluffy",
+    home: { x: t(84), y: t(145) },
+    lines: [
+      "Do you like my tail? My Twolegs say it's the fluffiest on the street.",
+      "I'm not allowed past the gate. But I watch EVERYTHING from the window.",
+      "Rusty used to live here, you know. Then one day — poof — warrior.",
     ],
   },
   // --- ThunderClan extras for a living camp ---

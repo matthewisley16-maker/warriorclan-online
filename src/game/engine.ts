@@ -5,6 +5,7 @@
 import {
   allObjects,
   areaAt,
+  areas,
   campWall,
   CAMP_CENTER,
   CAMP_RADIUS,
@@ -80,13 +81,15 @@ export interface GameCallbacks {
   onClock: (hour: number) => void;
   onWeatherChange: (w: WeatherKind) => void;
   onInteriorChange: (id: string | null) => void;
+  /** Rare ambient NPC chatter when a cat is idling near the player. */
+  onNpcIdle?: (npcName: string, line: string) => void;
 }
 
 export type WeatherKind =
-  | "clear" | "cloudy" | "rain" | "heavy-rain" | "fog" | "storm" | "wind";
+  | "clear" | "cloudy" | "rain" | "heavy-rain" | "fog" | "storm" | "wind" | "snow";
 
-const WEATHERS: WeatherKind[] = ["clear", "cloudy", "rain", "heavy-rain", "fog", "storm", "wind"];
-const WEATHER_WEIGHTS: number[] = [30, 18, 14, 7, 8, 5, 18];
+const WEATHERS: WeatherKind[] = ["clear", "cloudy", "rain", "heavy-rain", "fog", "storm", "wind", "snow"];
+const WEATHER_WEIGHTS: number[] = [26, 16, 12, 6, 8, 4, 16, 3];
 
 // Ground palettes: [base, alt] per kind index, and night-dark multiplier.
 const GROUND_COLORS: Record<number, [string, string]> = {
@@ -107,6 +110,24 @@ function hash2(x: number, y: number): number {
   let h = (x * 374761393 + y * 668265263) | 0;
   h = (h ^ (h >> 13)) * 1274126177;
   return ((h ^ (h >> 16)) >>> 0) / 0xffffffff;
+}
+
+// Ground-kind indexes used for weather tinting (water & paved stay wet-looking).
+const GROUND_WATER = 2;
+const GROUND_PAVED = 4;
+
+/** Darken/shift a hex color by a factor, for wet-ground tints. */
+function tintHex(hex: string, f: number): string {
+  const n = hex.replace("#", "");
+  if (n.length !== 6) return hex;
+  const r = Math.round(parseInt(n.slice(0, 2), 16) * f);
+  const g = Math.round(parseInt(n.slice(2, 4), 16) * f);
+  const b = Math.round(parseInt(n.slice(4, 6), 16) * f);
+  return `#${[r, g, b].map((v) => Math.min(255, v).toString(16).padStart(2, "0")).join("")}`;
+}
+
+interface EnvParticle {
+  x: number; y: number; vx: number; vy: number; r: number; seed: number;
 }
 
 function pickWeather(): WeatherKind {
@@ -294,7 +315,8 @@ interface PreyState {
 
 const PREY_FLEE_DIST = 90;
 const PREY_CATCH_DIST = 16;
-const PREY_MAX = 140;
+// Fewer prey overall — and none spawn inside camps (see campPreyExclusion).
+const PREY_MAX = 38;
 
 // ---------------------------------------------------------------------------
 // NPC schedule resolution
@@ -372,8 +394,12 @@ export class GameCanvas {
   private lastHour = -1;
   private weather: WeatherKind = "clear";
   private weatherUntil = 60;
+  /** smoothed atmospheric mix, 0..1 per effect */
+  private env = { rain: 0, fog: 0, wind: 0, dark: 0 };
   private raindrops: { x: number; y: number; v: number }[] = [];
   private fogOffset = 0;
+  /** ambient dust/firefly particles */
+  private motes: EnvParticle[] = [];
 
   // multiplayer remotes (set by React)
   public remotes = new Map<string, RemotePlayer>();
@@ -538,6 +564,7 @@ export class GameCanvas {
       const x = zone.rect.x + Math.random() * zone.rect.w;
       const y = zone.rect.y + Math.random() * zone.rect.h;
       if (isSolidPoint(x, y)) continue;
+      if (this.inCampExclusion(x, y)) continue;
       this.prey.push({
         id: `prey-${created}-${Date.now()}`,
         kind: zone.kind,
@@ -559,8 +586,25 @@ export class GameCanvas {
   private respawnPreyTick() {
     const alive = this.prey.filter((p) => p.alive).length;
     if (alive < PREY_MAX * 0.6) {
-      this.spawnPrey(Math.floor(PREY_MAX * 0.3));
+      this.spawnPrey(Math.floor(PREY_MAX * 0.25));
     }
+  }
+
+  /** Camp rects — no prey spawns inside any Clan camp (camps are lived-in). */
+  private static campExclusion: { x: number; y: number; r: number }[] | null = null;
+  private inCampExclusion(x: number, y: number): boolean {
+    if (!GameCanvas.campExclusion) {
+      GameCanvas.campExclusion = areas
+        .filter((a) => a.id === "camp" || a.id.endsWith("-camp"))
+        .map((a) => ({
+          x: a.rect.x + a.rect.w / 2,
+          y: a.rect.y + a.rect.h / 2,
+          r: Math.max(a.rect.w, a.rect.h) * 0.75,
+        }));
+      // Twolegplace is a tidy neighborhood — keep wild prey out of it.
+      GameCanvas.campExclusion.push({ x: 75 * 32, y: 148 * 32, r: 30 * 32 });
+    }
+    return GameCanvas.campExclusion.some((c) => Math.hypot(x - c.x, y - c.y) < c.r);
   }
 
   // -------------------------------------------------------------------------
@@ -582,13 +626,41 @@ export class GameCanvas {
     return Math.floor((this.dayTime / GAME_DAY_SECONDS) * 24);
   }
 
+  /** Fractional hour for smooth sunrise/sunset gradients. */
+  private hourF(): number {
+    return (this.dayTime / GAME_DAY_SECONDS) * 24;
+  }
+
+  /**
+   * Smooth night darkness with real dawn/dusk ramps (dark 21→5, golden
+   * shoulders 19–21 and 5–7). Returns 0 (day) .. 1 (deep night).
+   */
   private nightAlpha(): number {
-    const h = (this.dayTime / GAME_DAY_SECONDS) * 24;
-    // dark between 20 and 5, soft transitions
-    if (h >= 21 || h < 4.5) return 0.55;
-    if (h >= 19) return ((h - 19) / 2) * 0.55;
-    if (h < 7) return ((7 - h) / 2.5) * 0.55;
+    const h = this.hourF();
+    if (h >= 21 || h < 5) return 1;
+    if (h >= 19) return (h - 19) / 2; // sunset ramp
+    if (h < 7) return (7 - h) / 2; // sunrise ramp
     return 0;
+  }
+
+  /** Warm sunrise/sunset glow strength, 0..1. */
+  private goldenHour(): number {
+    const h = this.hourF();
+    if (h >= 18.5 && h < 20) return 1 - Math.abs(h - 19.25) / 0.75;
+    if (h >= 6 && h < 7.5) return 1 - Math.abs(h - 6.75) / 0.75;
+    return 0;
+  }
+
+  /** Deterministic moon brightness for the current night (0.3..1). */
+  private moonPhase(): number {
+    const day = Math.floor(this.dayTime / GAME_DAY_SECONDS);
+    return 0.3 + ((day * 37) % 70) / 100;
+  }
+
+  /** Gust factor for wind-blown vegetation (0..1). */
+  private windGust(): number {
+    const g = Math.sin(this.time * 0.9) * Math.sin(this.time * 0.23 + 2);
+    return Math.max(0, 0.55 + 0.45 * g);
   }
 
   private update(dt: number) {
@@ -603,6 +675,29 @@ export class GameCanvas {
       this.weatherUntil = this.time + 50 + Math.random() * 70;
       this.cb.onWeatherChange(this.weather);
     }
+
+    // --- atmosphere: smoothly approach the targets of the current weather ---
+    const envTarget =
+      this.weather === "rain"
+        ? { rain: 0.55, fog: 0.25, wind: 0.45, dark: 0.22 }
+        : this.weather === "heavy-rain"
+          ? { rain: 0.85, fog: 0.4, wind: 0.6, dark: 0.32 }
+          : this.weather === "storm"
+            ? { rain: 1, fog: 0.35, wind: 1, dark: 0.45 }
+            : this.weather === "fog"
+              ? { rain: 0, fog: 1, wind: 0.15, dark: 0.12 }
+              : this.weather === "wind"
+                ? { rain: 0, fog: 0.05, wind: 1, dark: 0.05 }
+                : this.weather === "cloudy"
+                  ? { rain: 0, fog: 0.12, wind: 0.3, dark: 0.14 }
+                  : this.weather === "snow"
+                    ? { rain: 0, fog: 0.3, wind: 0.35, dark: 0.16 }
+                    : { rain: 0, fog: 0, wind: 0.12, dark: 0 };
+    const ease = Math.min(1, dt * 0.5); // ~2s transition on weather changes
+    this.env.rain += (envTarget.rain - this.env.rain) * ease;
+    this.env.fog += (envTarget.fog - this.env.fog) * ease;
+    this.env.wind += (envTarget.wind - this.env.wind) * ease;
+    this.env.dark += (envTarget.dark - this.env.dark) * ease;
 
     // --- player movement ---
     let dx = 0;
@@ -690,6 +785,16 @@ export class GameCanvas {
           n.ty = ny;
           n.pose = "walk";
         }
+      }
+      // ambient chatter: an idling cat nearby occasionally speaks
+      if (
+        this.cb.onNpcIdle &&
+        n.pose !== "walk" &&
+        !this.paused &&
+        Math.random() < 0.0012 &&
+        Math.hypot(n.x - this.px, n.y - this.py) < 200
+      ) {
+        this.cb.onNpcIdle(n.def.name, n.def.lines[Math.floor(Math.random() * n.def.lines.length)]);
       }
     }
 
@@ -853,15 +958,53 @@ export class GameCanvas {
       this.renderWorld(cw, ch);
     }
 
-    // weather overlays
-    this.renderWeather(cw, ch);
-
-    // night
+    // --- cinematic lighting stack ---
     const na = this.nightAlpha();
-    if (na > 0) {
-      ctx.fillStyle = `rgba(10, 14, 34, ${na})`;
+    const gold = this.goldenHour();
+    const dark = this.env.dark;
+    // wet/rain darkening
+    if (dark > 0.01) {
+      ctx.fillStyle = `rgba(28, 36, 54, ${dark})`;
       ctx.fillRect(0, 0, cw, ch);
     }
+    // golden hour wash (sunrise 5–7, sunset 18.5–20)
+    if (gold > 0.02 && na < 0.5) {
+      ctx.fillStyle = `rgba(255, 166, 66, ${0.16 * gold * (1 - na)})`;
+      ctx.fillRect(0, 0, cw, ch);
+    }
+    // night: moonlight blue (never a flat black screen)
+    if (na > 0) {
+      const moon = this.moonPhase();
+      ctx.fillStyle = `rgba(16, 22, 48, ${0.52 * na})`;
+      ctx.fillRect(0, 0, cw, ch);
+      if (moon > 0.55) {
+        // bright moon: soft blue highlights + faint moon in the corner sky
+        ctx.fillStyle = `rgba(150, 175, 235, ${0.1 * moon * na})`;
+        ctx.fillRect(0, 0, cw, ch);
+        const mg = ctx.createRadialGradient(cw * 0.85, ch * 0.12, 2, cw * 0.85, ch * 0.12, 46);
+        mg.addColorStop(0, `rgba(235,240,255,${0.8 * na})`);
+        mg.addColorStop(1, "rgba(235,240,255,0)");
+        ctx.fillStyle = mg;
+        ctx.beginPath();
+        ctx.arc(cw * 0.85, ch * 0.12, 46, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // stars
+      if (na > 0.5) {
+        ctx.fillStyle = "rgba(255,255,255,0.8)";
+        for (let i = 0; i < 46; i++) {
+          const hx = hash2(i, 7);
+          const hy = hash2(i, 13);
+          const tw = 0.4 + 0.6 * Math.abs(Math.sin(this.time * (0.5 + hx) + i));
+          ctx.globalAlpha = (na - 0.5) * 2 * tw * 0.8;
+          ctx.fillRect(hx * cw, hy * ch * 0.55, 1.6, 1.6);
+        }
+        ctx.globalAlpha = 1;
+      }
+    }
+    // weather overlays (rain, fog, cloud cover) + ambient particles
+    this.renderWeather(cw, ch);
+    this.drawMotes(cw, ch);
 
     // vignette
     const grad = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.42, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
@@ -1030,6 +1173,7 @@ export class GameCanvas {
 
     this.drawGround(viewL, viewT, viewR, viewB);
     this.drawFlora(viewL, viewT, viewR, viewB);
+    this.drawCloudShadows();
 
     type Entity = { y: number; draw: () => void };
     const ents: Entity[] = [];
@@ -1148,14 +1292,20 @@ export class GameCanvas {
           );
           ctx.font = "600 11px system-ui, sans-serif";
           ctx.textAlign = "center";
-          ctx.fillStyle = "rgba(30,60,110,0.55)";
-          const label = `${r.catName}`;
-          const tw = ctx.measureText(label).width;
+          const label = r.catName;
+          const sub = [r.clan, r.rank].filter(Boolean).map((s) => s!.charAt(0).toUpperCase() + s!.slice(1)).join(" · ");
+          const tw = Math.max(ctx.measureText(label).width, sub ? ctx.measureText(sub).width * 1 : 0);
+          ctx.fillStyle = "rgba(24,34,52,0.62)";
           ctx.beginPath();
-          ctx.roundRect(r.x - tw / 2 - 6, r.y - 40, tw + 12, 17, 8);
+          ctx.roundRect(r.x - tw / 2 - 7, r.y - 47, tw + 14, sub ? 29 : 17, 8);
           ctx.fill();
           ctx.fillStyle = "#dbe8ff";
-          ctx.fillText(label, r.x, r.y - 28);
+          ctx.fillText(label, r.x, r.y - 35);
+          if (sub) {
+            ctx.font = "500 9px system-ui, sans-serif";
+            ctx.fillStyle = "rgba(186, 208, 240, 0.95)";
+            ctx.fillText(sub, r.x, r.y - 24);
+          }
         },
       });
     }
@@ -1233,13 +1383,101 @@ export class GameCanvas {
     ctx.beginPath();
     ctx.arc(CAMP_CENTER.x, CAMP_CENTER.y, CAMP_RADIUS - 6, 0, Math.PI * 2);
     ctx.stroke();
+
+    // --- wet ground after/during rain: darker tint + puddles on flat kinds ---
+    if (this.env.rain > 0.05 || this.env.fog > 0.6) {
+      const wet = Math.min(1, this.env.rain * 1.3);
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) {
+          const kind = groundMap[r * GROUND_COLS + c];
+          if (kind === GROUND_WATER) continue;
+          const h = hash2(c * 3, r * 5);
+          const px = c * GROUND_CELL;
+          const py = r * GROUND_CELL;
+          if (h < 0.14 * wet && (kind === GROUND_PAVED || h < 0.09 * wet)) {
+            // puddle
+            ctx.fillStyle = `rgba(120, 150, 185, ${0.28 * wet})`;
+            ctx.beginPath();
+            ctx.ellipse(px + 4 + h * 6, py + 4 + h * 8, 3.5 + h * 5, 2 + h * 3, h * 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+      // overall damp sheen
+      ctx.fillStyle = `rgba(40, 60, 90, ${0.12 * wet})`;
+      ctx.fillRect(Math.max(0, viewL), Math.max(0, viewT), viewR - Math.max(0, viewL), viewB - Math.max(0, viewT));
+    }
+  }
+
+  /** Soft cloud shadows drifting across the world (world-space). */
+  private drawCloudShadows() {
+    if (this.env.dark < 0.06) return;
+    const ctx = this.ctx;
+    const t = this.time;
+    for (let i = 0; i < 4; i++) {
+      const cx = this.camX + ((i * 917 + t * 12 * (1 + i * 0.3)) % 1600) - 800;
+      const cy = this.camY + ((i * 611 + Math.sin(t * 0.1 + i) * 300) % 900) - 450;
+      const grad = ctx.createRadialGradient(cx, cy, 40, cx, cy, 420);
+      grad.addColorStop(0, `rgba(10, 20, 12, ${0.1 * this.env.dark})`);
+      grad.addColorStop(1, "rgba(10, 20, 12, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 420, 240, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  /** Ambient particles: pollen by day, fireflies at night, snowfall. */
+  private drawMotes(cw: number, ch: number) {
+    const ctx = this.ctx;
+    const na = this.nightAlpha();
+    if (this.motes.length === 0) {
+      for (let i = 0; i < 40; i++) {
+        this.motes.push({
+          x: Math.random() * cw,
+          y: Math.random() * ch,
+          vx: (Math.random() - 0.5) * 10,
+          vy: -3 - Math.random() * 6,
+          r: 1 + Math.random() * 1.6,
+          seed: Math.random() * 100,
+        });
+      }
+    }
+    const isSnow = this.weather === "snow";
+    const firefly = na > 0.55;
+    for (const m of this.motes) {
+      if (isSnow) {
+        // snow drifts down in screen space
+        m.y += (24 + m.seed % 20) * 0.016;
+        m.x += Math.sin(this.time * 1.4 + m.seed) * 0.6 + this.env.wind * 1.2;
+        if (m.y > ch) { m.y = -4; m.x = Math.random() * cw; }
+        if (m.x > cw) m.x = 0;
+        if (m.x < 0) m.x = cw;
+        ctx.fillStyle = "rgba(240, 246, 255, 0.85)";
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        m.x += (m.vx + this.env.wind * 14) * 0.016;
+        m.y += m.vy * 0.016;
+        if (m.y < -6) { m.y = ch + 6; m.x = Math.random() * cw; }
+        if (m.x < -6) m.x = cw + 6;
+        if (m.x > cw + 6) m.x = -6;
+        const a = firefly ? 0.5 + 0.5 * Math.sin(this.time * 2.2 + m.seed) : 0.16;
+        ctx.fillStyle = firefly ? `rgba(220, 255, 140, ${0.55 * a})` : `rgba(255, 244, 200, ${a})`;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   private drawFlora(viewL: number, viewT: number, viewR: number, viewB: number) {
     const { ctx } = this;
+    const gust = 0.5 + this.env.wind * this.windGust();
     for (const f of flora) {
       if (f.x < viewL || f.x > viewR || f.y < viewT || f.y > viewB) continue;
-      const sway = Math.sin(this.time * 1.8 + f.x * 0.05) * 1.2;
+      const sway = Math.sin(this.time * 1.8 + f.x * 0.05) * 1.2 * gust;
       if (f.kind === "tuft") {
         ctx.strokeStyle = f.tint > 0.5 ? "#57964f" : "#4c8a47";
         ctx.lineWidth = 1.4;
@@ -1320,43 +1558,100 @@ export class GameCanvas {
 
   private renderWeather(cw: number, ch: number) {
     const { ctx } = this;
-    if (this.weather === "rain" || this.weather === "heavy-rain" || this.weather === "storm") {
-      const heavy = this.weather !== "rain";
-      const target = heavy ? 160 : 80;
+    const t = this.time;
+
+    // ---- rain / storm / heavy-rain (proportional to env.rain) ----
+    if (this.env.rain > 0.02) {
+      const target = Math.round(this.env.rain * (this.env.rain > 0.7 ? 170 : 90));
       while (this.raindrops.length < target) {
-        this.raindrops.push({ x: Math.random() * cw, y: Math.random() * ch, v: 500 + Math.random() * 300 });
+        this.raindrops.push({ x: Math.random() * cw, y: Math.random() * ch, v: 480 + Math.random() * 320 });
       }
-      ctx.strokeStyle = heavy ? "rgba(180, 200, 230, 0.55)" : "rgba(180, 200, 230, 0.35)";
+      if (this.raindrops.length > target) this.raindrops.length = target;
+      const slant = 40 + this.env.wind * 90;
+      ctx.strokeStyle = `rgba(178, 198, 228, ${0.3 + 0.25 * this.env.rain})`;
       ctx.lineWidth = 1;
       for (const d of this.raindrops) {
         ctx.beginPath();
         ctx.moveTo(d.x, d.y);
-        ctx.lineTo(d.x - 4, d.y + 12);
+        ctx.lineTo(d.x - slant * 0.02, d.y + 12);
         ctx.stroke();
         if (!this.paused) {
           d.y += d.v * 0.016;
-          d.x -= 60 * 0.016;
+          d.x -= slant * 0.016;
           if (d.y > ch) {
             d.y = -10;
-            d.x = Math.random() * cw;
+            d.x = Math.random() * (cw + 60);
           }
         }
       }
-      ctx.fillStyle = this.weather === "storm" ? "rgba(20,30,50,0.28)" : "rgba(60,80,110,0.14)";
-      ctx.fillRect(0, 0, cw, ch);
-      // lightning flash
-      if (this.weather === "storm" && Math.random() < 0.004) {
-        ctx.fillStyle = "rgba(255,255,255,0.5)";
-        ctx.fillRect(0, 0, cw, ch);
+      // splash ripples along the bottom of the screen
+      ctx.strokeStyle = `rgba(200, 215, 235, ${0.25 * this.env.rain})`;
+      for (let i = 0; i < 6; i++) {
+        const hx = hash2(i, Math.floor(t * 6)) * cw;
+        const hy = ch - 6 - hash2(i, Math.floor(t * 6) + 40) * 18;
+        ctx.beginPath();
+        ctx.ellipse(hx, hy, 3 + hash2(i, 3) * 4, 1.4, 0, 0, Math.PI * 2);
+        ctx.stroke();
       }
-    } else if (this.weather === "fog") {
+    }
+
+    // ---- snow ----
+    if (this.weather === "snow") {
+      ctx.fillStyle = "rgba(235, 242, 250, 0.9)";
+      for (let i = 0; i < 60; i++) {
+        const hx = (hash2(i, 3) * cw + Math.sin(t * 0.7 + i) * 30 + this.env.wind * 60) % cw;
+        const hy = (hash2(i, 9) * ch + t * (26 + (i % 7) * 9)) % ch;
+        ctx.beginPath();
+        ctx.arc(hx, hy, 1.3 + (i % 3) * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "rgba(235, 242, 250, 0.08)";
+      ctx.fillRect(0, 0, cw, ch);
+    }
+
+    // ---- fog: soft wash + drifting banks ----
+    if (this.env.fog > 0.03) {
+      const f = this.env.fog;
       const g = ctx.createLinearGradient(0, 0, 0, ch);
-      g.addColorStop(0, "rgba(210,220,225,0.34)");
-      g.addColorStop(1, "rgba(210,220,225,0.12)");
+      g.addColorStop(0, `rgba(206, 214, 220, ${0.34 * f})`);
+      g.addColorStop(1, `rgba(206, 214, 220, ${0.12 * f})`);
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, cw, ch);
-    } else if (this.weather === "cloudy") {
-      ctx.fillStyle = "rgba(80,90,100,0.10)";
+      ctx.fillStyle = `rgba(208, 216, 222, ${0.1 * f})`;
+      for (let i = 0; i < 3; i++) {
+        const bx = ((t * (8 + i * 5)) % (cw + 700)) - 350 + i * 260;
+        const by = ch * (0.25 + i * 0.22) + Math.sin(t * 0.3 + i * 2) * 20;
+        ctx.beginPath();
+        ctx.ellipse(bx, by, 330, 90, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // ---- wind streaks ----
+    if (this.env.wind > 0.55) {
+      ctx.strokeStyle = `rgba(255, 255, 255, ${0.05 + 0.05 * this.env.wind})`;
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < 7; i++) {
+        const wy = (hash2(i, 21) * ch + t * 130 * (0.6 + hash2(i, 5))) % ch;
+        const wx = (t * (170 + i * 26)) % (cw + 200) - 100;
+        ctx.beginPath();
+        ctx.moveTo(wx, wy);
+        ctx.quadraticCurveTo(wx + 40, wy - 4, wx + 90, wy);
+        ctx.stroke();
+      }
+    }
+
+    // ---- overcast / storm darkening ----
+    if (this.env.dark > 0.02) {
+      ctx.fillStyle =
+        this.weather === "storm"
+          ? `rgba(18, 26, 44, ${0.16 * this.env.dark})`
+          : `rgba(60, 80, 110, ${0.14 * this.env.dark})`;
+      ctx.fillRect(0, 0, cw, ch);
+    }
+    // lightning flash
+    if (this.weather === "storm" && Math.random() < 0.004) {
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
       ctx.fillRect(0, 0, cw, ch);
     }
     void this.fogOffset;
@@ -1365,12 +1660,15 @@ export class GameCanvas {
   // prop draw helpers (kept local so world.ts stays data-only)
   private drawTree(x: number, y: number, r: number, pine: boolean, tint: number) {
     const ctx = this.ctx;
+    const sway = Math.sin(this.time * 1.1 + x * 0.03) * (1 + this.env.wind * this.windGust() * 6);
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
     ctx.ellipse(x + 4, y + 4, r * 0.75, r * 0.32, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#5d4a33";
     ctx.fillRect(x - 3.5, y - r * 0.35, 7, r * 0.45);
+    ctx.save();
+    ctx.translate(sway, 0);
     if (pine) {
       for (let i = 3; i >= 1; i--) {
         const ly = y - r * 0.25 * (i - 1) - r * 0.15;
@@ -1397,6 +1695,7 @@ export class GameCanvas {
       ctx.arc(x - r * 0.15, y - r * 0.95, r * 0.4, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
   }
 
   private drawBramble(x: number, y: number, w: number, h: number) {
