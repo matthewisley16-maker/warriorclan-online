@@ -33,19 +33,44 @@ import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } f
 import type { CatSkin } from "@/game/draw";
 
 /** Fill any missing appearance fields with defaults (matches the save validator). */
-function fullSkin(s: { fur: string; furDark?: string; eye: string } & Partial<Omit<CatSkin, "fur" | "furDark" | "eye">>) {
+function fullSkin(
+  s?: Partial<{
+    fur: string;
+    furDark: string;
+    eye: string;
+    chest: string;
+    pattern: CatSkin["pattern"];
+    furLength: number;
+    tail: CatSkin["tail"];
+    ears: CatSkin["ears"];
+    size: number;
+    scar: boolean;
+  }> | null,
+) {
+  const a = s ?? {};
+  const fur = a.fur || "#d96b2f";
   return {
-    fur: s.fur,
-    furDark: s.furDark || "#5a3a20",
-    eye: s.eye,
-    chest: s.chest,
-    pattern: s.pattern ?? ("solid" as const),
-    furLength: s.furLength ?? 1,
-    tail: s.tail ?? ("normal" as const),
-    ears: s.ears ?? ("normal" as const),
-    size: s.size ?? 1,
-    scar: s.scar ?? false,
+    fur,
+    furDark: a.furDark || shade(fur, 0.62),
+    eye: a.eye || "#4fae6e",
+    chest: a.chest,
+    pattern: a.pattern ?? ("solid" as const),
+    furLength: a.furLength ?? 1,
+    tail: a.tail ?? ("normal" as const),
+    ears: a.ears ?? ("normal" as const),
+    size: a.size ?? 1,
+    scar: a.scar ?? false,
   };
+}
+
+/** Darken a hex color for the derived furDark shade. */
+function shade(hex: string, f: number): string {
+  const n = hex.replace("#", "");
+  if (n.length !== 6) return "#5a3a20";
+  const r = Math.round(parseInt(n.slice(0, 2), 16) * f);
+  const g = Math.round(parseInt(n.slice(2, 4), 16) * f);
+  const b = Math.round(parseInt(n.slice(4, 6), 16) * f);
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
 const CLANS = [
