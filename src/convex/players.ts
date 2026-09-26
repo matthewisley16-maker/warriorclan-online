@@ -266,3 +266,11 @@ export const resetPlayer = mutation({
     return true;
   },
 });
+
+/** My auth userId (for world-clock leader election). */
+export const getMyUserId = query({
+  args: {},
+  handler: async (ctx) => {
+    return await getAuthUserId(ctx);
+  },
+});

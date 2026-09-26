@@ -18,6 +18,7 @@ export const heartbeat = mutation({
     clan: v.optional(v.string()),
     rank: v.optional(v.string()),
     appearance,
+    inputSequence: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);

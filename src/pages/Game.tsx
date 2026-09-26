@@ -74,6 +74,9 @@ export default function Game() {
   const sendChat = useMutation(api.chat.send);
 
   const remotesRaw = useQuery(api.presence.listOnline, phase === "playing" && mode === "open" ? {} : "skip");
+  // Shared world clock + weather — the SERVER is the single authority.
+  // Everyone renders from this state; the deterministic leader advances it.
+  const worldState = useQuery(api.worldState.getWorldState, phase === "playing" ? {} : "skip");
 
   // --- HUD state ---
   const [areaName, setAreaName] = useState("Warrior Territories");
@@ -264,6 +267,7 @@ export default function Game() {
         const g = gameRef.current;
         if (!g) return;
         heartbeat({
+          inputSequence: ++inputSeq.current,
           x: posRef.current.x,
           y: posRef.current.y,
           facing: 1,
@@ -327,6 +331,53 @@ export default function Game() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, pendingSpawn]);
+
+  // --- shared time & weather: render from the SERVER state, never a private
+  // clock. The engine's local clock only smooths transitions between
+  // authoritative updates. ---
+  const worldAppliedRef = useRef(0);
+  useEffect(() => {
+    const g = gameRef.current;
+    if (!g || !worldState) return;
+    // only apply when the serverTick is NEWER than the last one we applied
+    if (worldState.serverTick <= worldAppliedRef.current) return;
+    worldAppliedRef.current = worldState.serverTick;
+    const gs = g as unknown as {
+      dayTime: number; weather: string; weatherUntil: number; GAME_DAY_SECONDS?: number;
+    };
+    const dayLen = worldState.dayLengthS ?? 600;
+    gs.dayTime = (worldState.worldTime / dayLen) * 600; // engine uses 600s day
+    gs.weather = worldState.weather as WeatherKind;
+    gs.weatherUntil = Number.MAX_SAFE_INTEGER; // server owns weather changes
+  }, [worldState]);
+
+  // Leader drives the shared clock: claim (idempotent), then tick it every
+  // 5s with real elapsed time. The server rejects non-leaders, so exactly
+  // one client writes; everyone else just renders the subscribed state.
+  const tickWorld = useMutation(api.worldState.tickWorld);
+  const claimLeadership = useMutation(api.worldState.claimLeadership);
+  const myUserId = useQuery(api.players.getMyUserId, phase === "playing" && mode === "open" ? {} : "skip");
+  const leaderRef = useRef(false);
+  useEffect(() => {
+    if (phase !== "playing" || mode !== "open" || !myUserId) return;
+    let alive = true;
+    (async () => {
+      try {
+        leaderRef.current = await claimLeadership({ myUserId });
+      } catch { leaderRef.current = false; }
+    })();
+    const t = window.setInterval(() => {
+      if (!alive || !leaderRef.current) return;
+      tickWorld({ myUserId, advanceSeconds: 5 }).catch(() => {
+        leaderRef.current = false; // lost leadership; stop ticking
+      });
+    }, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, mode, myUserId]);
 
   // Sync remotes into the engine.
   useEffect(() => {
@@ -529,6 +580,8 @@ export default function Game() {
   dialogueRef.current = dialogue;
   /** guards against double-sends when Enter is pressed repeatedly */
   const lastSendAt = useRef(0);
+  /** monotonic client input sequence — the server rejects already-processed inputs */
+  const inputSeq = useRef(0);
 
   const advanceStory = useCallback(() => {
     const step = storySteps[storyStepRef.current];

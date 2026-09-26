@@ -62,6 +62,10 @@ export interface RemotePlayer {
   facing: number;
   moving: boolean;
   emote?: string;
+  // server authority metadata (ordering + staleness rejection)
+  serverTick?: number;
+  stateVersion?: number;
+  lastProcessedInput?: number;
 }
 
 export interface ChatBubble {
@@ -918,8 +922,11 @@ export class GameCanvas {
   /** ambient dust/firefly particles */
   private motes: EnvParticle[] = [];
 
-  // multiplayer remotes (set by React)
+  // multiplayer remotes (set by React) — rendered positions are interpolated
+  // toward the latest SERVER state (smooth movement, no packet-snap)
   public remotes = new Map<string, RemotePlayer>();
+  /** render positions for remote cats: eased toward server state each frame */
+  private remoteRender = new Map<string, { x: number; y: number; facing: number }>();
   public bubbles: ChatBubble[] = [];
 
   // interiors
@@ -1396,6 +1403,22 @@ export class GameCanvas {
       this.bubbles = this.bubbles.filter((b) => b.until > now);
     }
 
+    // --- remote interpolation: ease toward the latest SERVER-confirmed state.
+    // Never render raw packet positions; stale updates (older stateVersion)
+    // were already rejected by the server, so easing here is always toward
+    // the newest accepted state. ---
+    for (const [uid, r] of this.remotes) {
+      const cur = this.remoteRender.get(uid) ?? { x: r.x, y: r.y, facing: r.facing };
+      const k = 1 - Math.pow(0.001, dt); // smooth ~100ms catch-up
+      cur.x += (r.x - cur.x) * k;
+      cur.y += (r.y - cur.y) * k;
+      if (r.facing !== cur.facing) cur.facing = r.facing;
+      this.remoteRender.set(uid, cur);
+    }
+    for (const uid of [...this.remoteRender.keys()]) {
+      if (!this.remotes.has(uid)) this.remoteRender.delete(uid);
+    }
+
     // --- prey AI ---
     if (!this.paused && this.prey.length < PREY_MAX && Math.random() < 0.02) this.respawnPreyTick();
     if (!this.interiorId) {
@@ -1485,10 +1508,13 @@ export class GameCanvas {
       let nearDoor: string | null = null;
       for (const o of allObjects) {
         if (!o.interior || !o.doorAt) continue;
-        // door point: the doorway gap on the object's south face
+        // door point: the doorway gap on the object's south face. Solid dens
+        // (bushes/brambles/log piles) can't be walked into, so the trigger
+        // radius extends OUTSIDE the collision box — walk up to the entrance
+        // and you step in (E also works via the nearby prompt).
         const doorX = o.x + o.doorAt.dx * 32;
         const doorY = o.y + o.h / 2 + o.doorAt.dy * 32;
-        const th = Math.max(20, o.w * 0.16);
+        const th = o.solid ? Math.max(30, o.w * 0.28) : Math.max(20, o.w * 0.16);
         if (Math.hypot(doorX - this.px, doorY - this.py) < th) {
           nearDoor = o.interior;
           break;
@@ -1505,11 +1531,17 @@ export class GameCanvas {
       }
       for (const o of allObjects) {
         if (o.detail) continue; // garnish never shows an interact prompt
-        if (o.interior) continue; // doorways are walked through, not pressed
         const d = Math.hypot(o.x - this.px, o.y - this.py);
         if (d < bestD) {
           bestD = d;
-          near = { kind: "object", label: o.label ?? o.id, interact: o.interact };
+          // interior objects show "Enter <label>" and work with E as well as
+          // the walk-in trigger
+          near = {
+            kind: "object",
+            label: o.interior ? `Enter ${o.label ?? o.id}` : o.label ?? o.id,
+            interact: o.interact,
+            interior: o.interior,
+          };
         }
       }
       for (const n of this.npcStates) {
@@ -2094,17 +2126,18 @@ export class GameCanvas {
         },
       });
     }
-    // remote players
-    for (const [, r] of this.remotes) {
-      if (r.x < viewL - 60 || r.x > viewR + 60 || r.y < viewT - 60 || r.y > viewB + 60) continue;
+    // remote players (interpolated render positions)
+    for (const [uid, r] of this.remotes) {
+      const rp = this.remoteRender.get(uid) ?? r;
+      if (rp.x < viewL - 60 || rp.x > viewR + 60 || rp.y < viewT - 60 || rp.y > viewB + 60) continue;
       ents.push({
-        y: r.y,
+        y: rp.y,
         draw: () => {
           drawCat(
             ctx,
             { ...r.appearance },
-            r.x,
-            r.y,
+            rp.x,
+            rp.y,
             (r.facing >= 0 ? 1 : -1) as 1 | -1,
             r.moving ? "walk" : "sit",
             this.time,
@@ -2117,14 +2150,14 @@ export class GameCanvas {
           const tw = Math.max(ctx.measureText(label).width, sub ? ctx.measureText(sub).width * 1 : 0);
           ctx.fillStyle = "rgba(24,34,52,0.62)";
           ctx.beginPath();
-          ctx.roundRect(r.x - tw / 2 - 7, r.y - 47, tw + 14, sub ? 29 : 17, 8);
+          ctx.roundRect(rp.x - tw / 2 - 7, rp.y - 47, tw + 14, sub ? 29 : 17, 8);
           ctx.fill();
           ctx.fillStyle = "#dbe8ff";
-          ctx.fillText(label, r.x, r.y - 35);
+          ctx.fillText(label, rp.x, rp.y - 35);
           if (sub) {
             ctx.font = "500 9px system-ui, sans-serif";
             ctx.fillStyle = "rgba(186, 208, 240, 0.95)";
-            ctx.fillText(sub, r.x, r.y - 24);
+            ctx.fillText(sub, rp.x, rp.y - 24);
           }
         },
       });
@@ -2200,8 +2233,8 @@ export class GameCanvas {
         bx = this.px;
         by = this.py;
       } else if (b.track) {
-        // follow the remote cat; drop the bubble if that player left
-        const r = this.remotes.get(b.track);
+        // follow the remote cat (interpolated); drop if that player left
+        const r = this.remoteRender.get(b.track) ?? this.remotes.get(b.track);
         if (!r) continue;
         bx = r.x;
         by = r.y;

@@ -158,6 +158,28 @@ check(g2.interiorId === "smudge-house", "standing at the doorway re-enters after
 g.exitInterior();
 step(2);
 
+// ---------- TEST 3b: camp dens (SOLID objects) are enterable ----------
+const warriorsDen = allObjects.find((o) => o.id === "warriors-den")!;
+const wdDoorX = warriorsDen.x + (warriorsDen.doorAt?.dx ?? 0) * 32;
+const wdDoorY = warriorsDen.y + warriorsDen.h / 2 + (warriorsDen.doorAt?.dy ?? 0) * 32;
+// walk the player to just outside the den's collision (south face)
+const wdApproach = { x: wdDoorX, y: wdDoorY + 26 };
+check(!!isSolidPoint(warriorsDen.x, warriorsDen.y), "warriors-den is solid (can't walk through it)");
+check(!isSolidPoint(wdApproach.x, wdApproach.y), "den approach point (south face) is walkable");
+step(120); // let the previous exit's door cooldown (~1.2s) elapse
+eng.px = wdApproach.x;
+eng.py = wdApproach.y;
+step(6);
+check(g2.interiorId === "tc-warriors-den", "walking up to the den AUTO-ENTERS it");
+g.exitInterior();
+step(120); // cooldown elapses
+eng.px = wdApproach.x;
+eng.py = wdApproach.y;
+step(220); // re-arm window elapses while standing at the den
+check(g2.interiorId === "tc-warriors-den", "den re-enters after re-arm window (walk-in + E both work)");
+g.exitInterior();
+step(2);
+
 // ---------- TEST 4: every interior enter/exit survives (no crash) ----------
 let allOk = true;
 for (const id of Object.keys(interiors)) {

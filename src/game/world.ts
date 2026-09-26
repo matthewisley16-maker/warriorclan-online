@@ -284,14 +284,12 @@ const tcCampObjects: WorldObject[] = [
     id: "leader-den",
     x: cc.x + t(3.4), y: cc.y - t(6.8), w: t(2.2), h: t(2.2),
     label: "Leader's den", interact: "leader-den", interior: "tc-leader-den",
-    style: "bramble", solid: true,
-  },
+    style: "bramble", solid: true, doorAt: { dx: 0, dy: 0 }},
   {
     id: "medicine-den",
     x: cc.x + t(8.2), y: cc.y - t(4.2), w: t(3.6), h: t(3),
     label: "Medicine cat's den", interact: "medicine-den", interior: "tc-medicine-den",
-    style: "bush", solid: true, scale: 1.2,
-  },
+    style: "bush", solid: true, scale: 1.2, doorAt: { dx: 0, dy: 0 }},
   {
     id: "medicine-stone",
     x: cc.x + t(8.4), y: cc.y - t(1.2), w: t(1.6), h: t(1.2),
@@ -301,26 +299,22 @@ const tcCampObjects: WorldObject[] = [
     id: "nursery",
     x: cc.x - t(7.4), y: cc.y + t(4.2), w: t(4), h: t(3.2),
     label: "Nursery", interact: "nursery", interior: "tc-nursery",
-    style: "bramble", solid: true, scale: 1.2,
-  },
+    style: "bramble", solid: true, scale: 1.2, doorAt: { dx: 0, dy: 0 }},
   {
     id: "warriors-den",
     x: cc.x + t(4.6), y: cc.y + t(5.4), w: t(3.6), h: t(3),
     label: "Warriors' den", interact: "warriors-den", interior: "tc-warriors-den",
-    style: "bush", solid: true, scale: 1.2,
-  },
+    style: "bush", solid: true, scale: 1.2, doorAt: { dx: 0, dy: 0 }},
   {
     id: "apprentices-den",
     x: cc.x + t(8.6), y: cc.y + t(2.6), w: t(3), h: t(2.6),
     label: "Apprentices' den", interact: "apprentices-den", interior: "tc-apprentices-den",
-    style: "bramble", solid: true, scale: 1.15,
-  },
+    style: "bramble", solid: true, scale: 1.15, doorAt: { dx: 0, dy: 0 }},
   {
     id: "elders-den",
     x: cc.x - t(8.2), y: cc.y - t(1.6), w: t(4.4), h: t(2.4),
     label: "Elders' den", interact: "elders-den", interior: "tc-elders-den",
-    style: "log", solid: true, scale: 1.2,
-  },
+    style: "log", solid: true, scale: 1.2, doorAt: { dx: 0, dy: 0 }},
   {
     id: "fresh-kill",
     x: cc.x - t(1.6), y: cc.y - t(1.2), w: t(1.8), h: t(1.4),
@@ -442,7 +436,7 @@ const sc = { x: t(96), y: t(20) }; // ShadowClan camp
 // Distinct environmental dressing per Clan camp (book-faithful):
 const otherClanObjects: WorldObject[] = [
   // --- WindClan: wind-swept open camp — gorse shelter, heather, rocks ---
-  { id: "wc-gorse-shelter", x: wc.x - t(3), y: wc.y - t(3.4), w: t(3.2), h: t(2.4), label: "Gorse bush shelter", style: "bramble", interior: "wc-warriors-den", solid: true },
+  { id: "wc-gorse-shelter", x: wc.x - t(3), y: wc.y - t(3.4), w: t(3.2), h: t(2.4), label: "Gorse bush shelter", style: "bramble", interior: "wc-warriors-den", solid: true, doorAt: { dx: 0, dy: 0 }},
   { id: "wc-heather-1", x: wc.x + t(2.6), y: wc.y - t(3), w: t(1.6), h: t(1.2), label: "Heather patch", style: "flowerbed" },
   { id: "wc-heather-2", x: wc.x - t(6), y: wc.y + t(1), w: t(1.6), h: t(1.2), label: "Heather patch", style: "flowerbed" },
   { id: "wc-boulder-1", x: wc.x + t(3.4), y: wc.y + t(3.2), w: t(2.2), h: t(1.8), label: "Moork boulder", style: "rock", solid: true },
@@ -456,7 +450,7 @@ const otherClanObjects: WorldObject[] = [
   { id: "rc-apprentices", x: rc.x - t(2.2), y: rc.y - t(2.2), w: t(2.6), h: t(2), label: "RiverClan apprentices' den", interact: "apprentices-den", style: "bush", solid: true },
   { id: "rc-stones", x: rc.x + t(4.4), y: rc.y - t(3.4), w: t(1.6), h: t(1.2), label: "Smooth stones", style: "stone" },
   // --- ShadowClan: dark pines — mud, boulders, brambles, marsh pool ---
-  { id: "sc-bramble-1", x: sc.x - t(3.4), y: sc.y - t(3), w: t(2.8), h: t(2.2), label: "Tangled bramble", style: "bramble", interior: "sc-warriors-den", solid: true },
+  { id: "sc-bramble-1", x: sc.x - t(3.4), y: sc.y - t(3), w: t(2.8), h: t(2.2), label: "Tangled bramble", style: "bramble", interior: "sc-warriors-den", solid: true, doorAt: { dx: 0, dy: 0 }},
   { id: "sc-bramble-2", x: sc.x + t(3), y: sc.y - t(2.6), w: t(2.4), h: t(2), label: "Tangled bramble", style: "bramble", solid: true },
   { id: "sc-boulder", x: sc.x + t(1.6), y: sc.y + t(1.2), w: t(2.2), h: t(1.8), label: "Mossy boulder", style: "rock", solid: true },
   { id: "sc-mud-pool", x: sc.x - t(1.4), y: sc.y + t(3.8), w: t(2.6), h: t(1.8), label: "Muddy pool", style: "reeds" },
@@ -464,29 +458,28 @@ const otherClanObjects: WorldObject[] = [
   { id: "sc-apprentices", x: sc.x - t(1.2), y: sc.y - t(1.4), w: t(2.6), h: t(2), label: "ShadowClan apprentices' den", interact: "apprentices-den", style: "bramble", solid: true },
   // WindClan — a shallow scoop ringed by gorse
   { id: "wc-rock", x: wc.x, y: wc.y - t(5), w: t(4), h: t(3), label: "WindClan meeting rock", interact: "windclan-camp", style: "rock", solid: true, scale: 1.4 },
-  { id: "wc-nursery", x: wc.x - t(5.4), y: wc.y + t(2.6), w: t(3.4), h: t(2.6), label: "WindClan nursery", interact: "nursery", style: "bramble", interior: "wc-nursery-room", solid: true },
-  { id: "wc-elders", x: wc.x + t(5.2), y: wc.y - t(0.4), w: t(3.6), h: t(2.2), label: "WindClan elders' den", interact: "elders-den", style: "log", interior: "wc-elders-room", solid: true },
+  { id: "wc-nursery", x: wc.x - t(5.4), y: wc.y + t(2.6), w: t(3.4), h: t(2.6), label: "WindClan nursery", interact: "nursery", style: "bramble", interior: "wc-nursery-room", solid: true, doorAt: { dx: 0, dy: 0 }},
+  { id: "wc-elders", x: wc.x + t(5.2), y: wc.y - t(0.4), w: t(3.6), h: t(2.2), label: "WindClan elders' den", interact: "elders-den", style: "log", interior: "wc-elders-room", solid: true, doorAt: { dx: 0, dy: 0 }},
   { id: "wc-freshkill", x: wc.x - t(1), y: wc.y + t(1.4), w: t(1.8), h: t(1.4), label: "Fresh-kill pile", interact: "fresh-kill", style: "fresh-kill" },
   { id: "wc-entrance", x: wc.x, y: wc.y + t(6.4), w: t(2.2), h: t(1.8), label: "Gorse tunnel", style: "bramble" },
   // RiverClan — a gravel hollow behind reed beds
   { id: "rc-rock", x: rc.x, y: rc.y - t(5.2), w: t(4), h: t(3), label: "RiverClan meeting rock", interact: "riverclan-camp", style: "rock", solid: true, scale: 1.4 },
-  { id: "rc-nursery", x: rc.x - t(5.4), y: rc.y + t(2.4), w: t(3.4), h: t(2.6), label: "RiverClan nursery", interact: "nursery", style: "bramble", interior: "rc-nursery-room", solid: true },
-  { id: "rc-elders", x: rc.x + t(5.2), y: rc.y - t(0.4), w: t(3.6), h: t(2.2), label: "RiverClan elders' den", interact: "elders-den", style: "log", interior: "rc-elders-room", solid: true },
+  { id: "rc-nursery", x: rc.x - t(5.4), y: rc.y + t(2.4), w: t(3.4), h: t(2.6), label: "RiverClan nursery", interact: "nursery", style: "bramble", interior: "rc-nursery-room", solid: true, doorAt: { dx: 0, dy: 0 }},
+  { id: "rc-elders", x: rc.x + t(5.2), y: rc.y - t(0.4), w: t(3.6), h: t(2.2), label: "RiverClan elders' den", interact: "elders-den", style: "log", interior: "rc-elders-room", solid: true, doorAt: { dx: 0, dy: 0 }},
   { id: "rc-freshkill", x: rc.x - t(1), y: rc.y + t(1.4), w: t(1.8), h: t(1.4), label: "Fresh-kill pile", interact: "fresh-kill", style: "fresh-kill" },
-  { id: "rc-reeds", x: rc.x - t(7.4), y: rc.y - t(2.4), w: t(2), h: t(3), label: "Reed bed", style: "reeds", interior: "rc-warriors-den", solid: true },
+  { id: "rc-reeds", x: rc.x - t(7.4), y: rc.y - t(2.4), w: t(2), h: t(3), label: "Reed bed", style: "reeds", interior: "rc-warriors-den", solid: true, doorAt: { dx: 0, dy: 0 }},
   { id: "rc-fishing", x: rc.x + t(8), y: rc.y + t(4), w: t(2.4), h: t(1.8), label: "Fishing spot", interact: "river", style: "stone" },
   // ShadowClan — pine hollow with boulders
   { id: "sc-rock", x: sc.x, y: sc.y - t(5), w: t(4), h: t(3), label: "ShadowClan meeting rock", interact: "shadowclan-camp", style: "rock", solid: true, scale: 1.4 },
-  { id: "sc-nursery", x: sc.x - t(5.4), y: sc.y + t(2.6), w: t(3.4), h: t(2.6), label: "ShadowClan nursery", interact: "nursery", style: "bramble", interior: "sc-nursery-room", solid: true },
-  { id: "sc-elders", x: sc.x + t(5.2), y: sc.y - t(0.4), w: t(3.6), h: t(2.2), label: "ShadowClan elders' den", interact: "elders-den", style: "log", interior: "sc-elders-room", solid: true },
+  { id: "sc-nursery", x: sc.x - t(5.4), y: sc.y + t(2.6), w: t(3.4), h: t(2.6), label: "ShadowClan nursery", interact: "nursery", style: "bramble", interior: "sc-nursery-room", solid: true, doorAt: { dx: 0, dy: 0 }},
+  { id: "sc-elders", x: sc.x + t(5.2), y: sc.y - t(0.4), w: t(3.6), h: t(2.2), label: "ShadowClan elders' den", interact: "elders-den", style: "log", interior: "sc-elders-room", solid: true, doorAt: { dx: 0, dy: 0 }},
   { id: "sc-freshkill", x: sc.x - t(1), y: sc.y + t(1.4), w: t(1.8), h: t(1.4), label: "Fresh-kill pile", interact: "fresh-kill", style: "fresh-kill" },
   { id: "sc-reeds", x: sc.x + t(7), y: sc.y + t(3.4), w: t(2.4), h: t(2), label: "Marsh pool", style: "reeds" },
   // Shared: Highstones / Moonstone
   {
     id: "moonstone", x: t(26), y: t(42), w: t(3), h: t(2.4),
     label: "Mothermouth — the Moonstone", interact: "moonstone", interior: "moonstone-cave",
-    style: "cave", solid: true, scale: 1.4,
-  },
+    style: "cave", solid: true, scale: 1.4, doorAt: { dx: 0, dy: 0 }},
   // ------------------------------------------------------------------
   // Twolegplace — a real residential neighborhood (Smudge's street).
   // Grid: backyards north of the main street, houses south of it.

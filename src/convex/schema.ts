@@ -85,6 +85,10 @@ const schema = defineSchema(
       emote: v.optional(v.string()),
       mode: v.union(v.literal("story"), v.literal("open")),
       updatedAt: v.number(),
+      // server authority: ordering + staleness rejection (see presence.ts)
+      inputSequence: v.optional(v.number()),
+      stateVersion: v.optional(v.number()),
+      serverTick: v.optional(v.number()),
     }).index("by_user", ["userId"])
       .index("by_updated", ["updatedAt"]),
 
@@ -117,6 +121,18 @@ const schema = defineSchema(
     })
       .index("by_to", ["toUserId"])
       .index("by_from", ["fromUserId"]),
+
+    // Shared world clock/weather — one authoritative row ("global").
+    worldState: defineTable({
+      serverTick: v.number(),
+      worldTime: v.number(),
+      weather: v.string(),
+      weatherIntensity: v.number(),
+      weatherStartedAt: v.number(),
+      weatherDurationMs: v.number(),
+      dayLengthS: v.number(),
+      leaderUserId: v.optional(v.id("users")),
+    }),
 
     // Direct messages — visible ONLY to the two participants.
     dmMessages: defineTable({
