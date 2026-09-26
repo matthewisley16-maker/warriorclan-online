@@ -24,7 +24,9 @@ export type InteractableKind =
 export type Style =
   | "rock" | "bramble" | "bush" | "log" | "tree" | "stump"
   | "fresh-kill" | "stone" | "house" | "barn" | "fence" | "cave"
-  | "reeds" | "nest" | "herbs" | "flowerbed" | "tallrock-big" | "prey-pile";
+  | "reeds" | "nest" | "herbs" | "flowerbed" | "tallrock-big" | "prey-pile"
+  // content-expansion styles (Into the Wild flavored)
+  | "feathers" | "mudpatch" | "puddle" | "driftwood" | "burrow" | "mossball" | "vines" | "toy" | "carpet" | "lamp" | "plank" | "haybale" | "fishing-spot";
 
 export interface WorldObject {
   id: string;
@@ -39,6 +41,8 @@ export interface WorldObject {
   style: Style;
   solid?: boolean;
   scale?: number;
+  /** visual garnish only — never shows an interact prompt */
+  detail?: boolean;
 }
 
 export interface NPCScheduleSlot {
@@ -268,6 +272,12 @@ const tcCampObjects: WorldObject[] = [
     x: cc.x, y: cc.y - t(8.6), w: t(6), h: t(4.6),
     label: "Tallrock", interact: "tallrock", style: "tallrock-big", solid: true, scale: 1.5,
   },
+  // Highrock garnish: weathered cracks, moss, and plants at its base
+  { id: "tallrock-crack", x: cc.x - t(1.4), y: cc.y - t(7.4), w: t(1.2), h: t(0.8), style: "vines", detail: true },
+  { id: "tallrock-crack-2", x: cc.x + t(1.2), y: cc.y - t(6.4), w: t(1), h: t(0.8), style: "vines", detail: true },
+  { id: "tallrock-moss", x: cc.x - t(2.2), y: cc.y - t(5.6), w: t(1.6), h: t(1), style: "mossball", detail: true },
+  { id: "tallrock-fern", x: cc.x + t(2.4), y: cc.y - t(5.2), w: t(1.2), h: t(1), style: "bush", detail: true },
+  { id: "tallrock-stone", x: cc.x - t(3), y: cc.y - t(4.6), w: t(1), h: t(0.8), style: "stone", detail: true },
   {
     id: "leader-den",
     x: cc.x + t(3.4), y: cc.y - t(6.8), w: t(2.2), h: t(2.2),
@@ -314,6 +324,13 @@ const tcCampObjects: WorldObject[] = [
     x: cc.x - t(1.6), y: cc.y - t(1.2), w: t(1.8), h: t(1.4),
     label: "Fresh-kill pile", interact: "fresh-kill", style: "fresh-kill",
   },
+  // fresh-kill garnish: distinct prey laid around the pile
+  { id: "fk-mouse", x: cc.x - t(2.8), y: cc.y - t(0.6), w: t(0.6), h: t(0.5), style: "prey-pile", detail: true },
+  { id: "fk-rabbit", x: cc.x - t(0.4), y: cc.y - t(2.4), w: t(1), h: t(0.8), style: "prey-pile", detail: true, scale: 1.4 },
+  { id: "fk-squirrel", x: cc.x - t(2.6), y: cc.y - t(2), w: t(0.9), h: t(0.7), style: "prey-pile", detail: true, scale: 1.2 },
+  { id: "fk-starling", x: cc.x - t(0.2), y: cc.y + t(0.2), w: t(0.8), h: t(0.6), style: "feathers", detail: true },
+  // nesting-material cache beside the warriors' den
+  { id: "nesting-cache", x: cc.x + t(3), y: cc.y + t(7.4), w: t(1.4), h: t(1), style: "mossball", detail: true },
   {
     id: "entrance",
     x: cc.x - t(0.5), y: cc.y + t(11.4), w: t(2.4), h: t(2),
@@ -326,6 +343,19 @@ const tcCampObjects: WorldObject[] = [
   { id: "tc-moss-1", x: cc.x - t(5.6), y: cc.y - t(3.8), w: t(1.8), h: t(1.2), label: "Soft moss", style: "bush" },
   { id: "tc-moss-2", x: cc.x + t(3.2), y: cc.y + t(2.2), w: t(1.8), h: t(1.2), label: "Soft moss", style: "bush" },
   { id: "tc-branch", x: cc.x - t(2.2), y: cc.y + t(7.6), w: t(3.2), h: t(1), label: "Fallen branch", style: "log" },
+  // clearing detail: grass patches, flattened earth, small stones, moss, leaves
+  { id: "tc-grass-a", x: cc.x - t(6.2), y: cc.y + t(0.4), w: t(1.6), h: t(1.2), style: "mossball", detail: true },
+  { id: "tc-grass-b", x: cc.x + t(5.4), y: cc.y - t(2), w: t(1.6), h: t(1.2), style: "mossball", detail: true },
+  { id: "tc-grass-c", x: cc.x - t(4), y: cc.y + t(6.4), w: t(1.4), h: t(1), style: "mossball", detail: true },
+  { id: "tc-earth-a", x: cc.x + t(0.6), y: cc.y + t(4.6), w: t(2), h: t(1.4), style: "mudpatch", detail: true },
+  { id: "tc-earth-b", x: cc.x - t(5), y: cc.y + t(3.2), w: t(1.6), h: t(1.2), style: "mudpatch", detail: true },
+  { id: "tc-stone-a", x: cc.x + t(1.2), y: cc.y - t(3.4), w: t(0.9), h: t(0.7), style: "stone", detail: true },
+  { id: "tc-stone-b", x: cc.x - t(3.6), y: cc.y - t(0.2), w: t(0.8), h: t(0.6), style: "stone", detail: true },
+  { id: "tc-stone-c", x: cc.x + t(6.6), y: cc.y + t(3.8), w: t(0.9), h: t(0.7), style: "stone", detail: true },
+  { id: "tc-leaves-a", x: cc.x - t(6.6), y: cc.y - t(0.6), w: t(1.4), h: t(1), style: "feathers", detail: true },
+  { id: "tc-leaves-b", x: cc.x + t(4.4), y: cc.y - t(0.8), w: t(1.4), h: t(1), style: "feathers", detail: true },
+  { id: "tc-twig-a", x: cc.x + t(2.8), y: cc.y + t(0.8), w: t(1), h: t(0.6), style: "log", detail: true },
+  { id: "tc-twig-b", x: cc.x - t(1), y: cc.y + t(8.6), w: t(0.9), h: t(0.5), style: "log", detail: true },
 ];
 
 const tcLandmarks: WorldObject[] = [
@@ -511,6 +541,63 @@ const otherClanObjects: WorldObject[] = [
   { id: "herbs-tc-2", x: t(33) + TC_OX, y: t(57) + TC_OY, w: t(1.2), h: t(1), label: "Catmint", interact: "herbs", style: "herbs" },
   { id: "herbs-rc-1", x: rc.x + t(7), y: rc.y - t(3), w: t(1.2), h: t(1), label: "Watermint", interact: "herbs", style: "herbs" },
   { id: "herbs-wc-1", x: wc.x - t(8), y: wc.y - t(4), w: t(1.2), h: t(1), label: "Chamomile", interact: "herbs", style: "herbs" },
+
+  // ---- territory-flavored detail scatter (Into the Wild ecosystems) ----
+  // RiverClan: river rocks, wet stones, driftwood, reeds, mud
+  { id: "rc-detail-driftwood", x: rc.x - t(6.4), y: rc.y + t(3), w: t(2.4), h: t(1), style: "driftwood", detail: true },
+  { id: "rc-detail-stones", x: rc.x + t(6.6), y: rc.y + t(1.6), w: t(1.4), h: t(1), style: "stone", detail: true },
+  { id: "rc-detail-stones2", x: rc.x - t(4.4), y: rc.y - t(3.6), w: t(1.2), h: t(0.9), style: "stone", detail: true },
+  { id: "rc-detail-mud", x: rc.x + t(3.2), y: rc.y - t(4.2), w: t(2), h: t(1.4), style: "mudpatch", detail: true },
+  { id: "rc-detail-reeds", x: rc.x + t(7), y: rc.y + t(3.6), w: t(1.6), h: t(1.2), style: "reeds", detail: true },
+  // WindClan: exposed stones, wind-swept grass, rabbit burrows
+  { id: "wc-detail-burrow", x: wc.x + t(6), y: wc.y - t(4.4), w: t(1.6), h: t(1.2), style: "burrow", detail: true },
+  { id: "wc-detail-burrow2", x: wc.x - t(7), y: wc.y + t(3.6), w: t(1.4), h: t(1), style: "burrow", detail: true },
+  { id: "wc-detail-stones", x: wc.x - t(2.6), y: wc.y - t(5), w: t(1.3), h: t(0.9), style: "stone", detail: true },
+  { id: "wc-detail-grass", x: wc.x + t(4.4), y: wc.y + t(0.6), w: t(1.5), h: t(1), style: "mossball", detail: true },
+  // ShadowClan: mud, wet roots, puddles, fallen branches, thick brambles
+  { id: "sc-detail-mud", x: sc.x + t(4.6), y: sc.y - t(3.6), w: t(2), h: t(1.4), style: "mudpatch", detail: true },
+  { id: "sc-detail-puddle", x: sc.x - t(4.2), y: sc.y - t(2.6), w: t(1.8), h: t(1.2), style: "puddle", detail: true },
+  { id: "sc-detail-roots", x: sc.x + t(2.4), y: sc.y + t(4.4), w: t(1.8), h: t(1), style: "vines", detail: true },
+  { id: "sc-detail-branch", x: sc.x - t(6.4), y: sc.y + t(0.8), w: t(2.2), h: t(0.9), style: "log", detail: true },
+  // Sunningrocks: basking stones + puddles
+  { id: "sr-detail-stone", x: t(7) + TC_OX, y: t(42) + TC_OY, w: t(1.2), h: t(0.9), style: "stone", detail: true },
+  { id: "sr-detail-puddle", x: t(9) + TC_OX, y: t(44) + TC_OY, w: t(1.4), h: t(1), style: "puddle", detail: true },
+  // Fourtrees: fern clusters + fallen leaves under the great oaks
+  { id: "ft-detail-fern", x: t(21) + TC_OX, y: t(69.4) + TC_OY, w: t(1.4), h: t(1), style: "bush", detail: true },
+  { id: "ft-detail-leaves", x: t(17.4) + TC_OX, y: t(67) + TC_OY, w: t(1.4), h: t(1), style: "feathers", detail: true },
+  // Farm: hay bales + mud
+  { id: "farm-haybale", x: t(120), y: t(152), w: t(1.8), h: t(1.4), style: "haybale", detail: true },
+  { id: "farm-haybale-2", x: t(130), y: t(160), w: t(1.6), h: t(1.2), style: "haybale", detail: true },
+  { id: "farm-mud", x: t(126), y: t(148), w: t(2), h: t(1.4), style: "mudpatch", detail: true },
+  // Sandy Hollow: training stones
+  { id: "sh-detail-stone", x: t(31) + TC_OX, y: t(64) + TC_OY, w: t(1), h: t(0.8), style: "stone", detail: true },
+  { id: "sh-detail-stone2", x: t(33) + TC_OX, y: t(62) + TC_OY, w: t(0.9), h: t(0.7), style: "stone", detail: true },
+  // ---- kittypet houses (enterable, each with a unique interior) ----
+  {
+    id: "smudge-house", x: t(74.5), y: t(141.5), w: t(1.4), h: t(1),
+    label: "Smudge's cozy home", interact: "twolegplace", interior: "smudge-house",
+    style: "house", solid: true, scale: 0.42,
+  },
+  {
+    id: "henry-house", x: t(63), y: t(139.5), w: t(1.4), h: t(1),
+    label: "Henry's house", interact: "twolegplace", interior: "henry-house",
+    style: "house", solid: true, scale: 0.42,
+  },
+  {
+    id: "princess-house", x: t(69.5), y: t(135.5), w: t(1.4), h: t(1),
+    label: "Princess's sunny house", interact: "twolegplace", interior: "princess-house",
+    style: "house", solid: true, scale: 0.42,
+  },
+  {
+    id: "marmalade-house", x: t(91.5), y: t(139.5), w: t(1.4), h: t(1),
+    label: "Marmalade's house", interact: "twolegplace", interior: "marmalade-house",
+    style: "house", solid: true, scale: 0.42,
+  },
+  {
+    id: "ginger-house", x: t(83.5), y: t(159.5), w: t(1.4), h: t(1),
+    label: "Ginger's house", interact: "twolegplace", interior: "ginger-house",
+    style: "house", solid: true, scale: 0.42,
+  },
 ];
 
 export const allObjects: WorldObject[] = [...tcCampObjects, ...tcLandmarks, ...otherClanObjects];

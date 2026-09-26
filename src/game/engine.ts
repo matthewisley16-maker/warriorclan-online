@@ -146,12 +146,17 @@ function pickWeather(): WeatherKind {
 // Interiors
 // ---------------------------------------------------------------------------
 
+/** Prop styles available inside interior rooms. */
+type InteriorPropStyle =
+  | "nest" | "herbs" | "stone" | "moss" | "plank" | "hay" | "bowl"
+  | "vines" | "toy" | "carpet" | "lamp";
+
 interface InteriorDef {
   id: string;
   name: string;
   /** wall layout in a 24x18 room of 32px cells; 1 = wall */
   walls: string[];
-  props: { id: string; x: number; y: number; label: string; style: "nest" | "herbs" | "stone" | "moss" | "plank" | "hay" | "bowl" }[];
+  props: { id: string; x: number; y: number; label: string; style: InteriorPropStyle }[];
   /** text shown when entering */
   desc: string;
   npcs?: string[]; // npc ids positioned here
@@ -185,6 +190,14 @@ export const interiors: Record<string, InteriorDef> = {
       { id: "nest", x: 12, y: 6, label: "Bluestar's moss nest", style: "nest" },
       { id: "moss1", x: 6, y: 10, label: "Soft lichen", style: "moss" },
       { id: "moss2", x: 18, y: 10, label: "Soft lichen", style: "moss" },
+      { id: "ld-stone", x: 8, y: 5, label: "Smooth sitting stone", style: "stone" },
+      { id: "ld-fern", x: 17, y: 4, label: "Ferns at the den mouth", style: "moss" },
+      { id: "ld-moss3", x: 15, y: 11, label: "Fresh moss bedding", style: "moss" },
+      { id: "ld-moss4", x: 9, y: 13, label: "Worn lichen", style: "moss" },
+      { id: "ld-plank", x: 12, y: 14, label: "Worn rootway", style: "plank" },
+      { id: "ld-herb", x: 20, y: 13, label: "Sprigs of catmint", style: "herbs" },
+      { id: "ld-stone2", x: 4, y: 7, label: "Cracked stone", style: "stone" },
+      { id: "ld-feather", x: 13, y: 3, label: "Feather from StarClan's wings", style: "moss" },
     ],
     desc: "A hidden den behind Tallrock, soft with moss and lichen. Starlight filters through a crack in the stone.",
     npcs: ["bluestar"],
@@ -194,15 +207,29 @@ export const interiors: Record<string, InteriorDef> = {
     name: "The Medicine Cat's Den",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "herb1", x: 5, y: 6, label: "Marigold", style: "herbs" },
-      { id: "herb2", x: 7, y: 5, label: "Catmint", style: "herbs" },
-      { id: "herb3", x: 9, y: 6, label: "Poppy seeds", style: "herbs" },
-      { id: "herb4", x: 5, y: 9, label: "Cobwebs", style: "herbs" },
-      { id: "herb5", x: 7, y: 9, label: "Feverfew", style: "herbs" },
+      // separate, labeled herb stores in stone crevices (book herbs)
+      { id: "herb-marigold", x: 4, y: 4, label: "Marigold — for wounds", style: "herbs" },
+      { id: "herb-catmint", x: 6, y: 4, label: "Catmint — for greencough", style: "herbs" },
+      { id: "herb-poppy", x: 8, y: 4, label: "Poppy seeds — for pain", style: "herbs" },
+      { id: "herb-cobweb", x: 4, y: 7, label: "Cobwebs — to stop bleeding", style: "moss" },
+      { id: "herb-burdock", x: 6, y: 7, label: "Burdock root — for rat bites", style: "herbs" },
+      { id: "herb-dock", x: 8, y: 7, label: "Dock — to soothe scratches", style: "herbs" },
+      { id: "herb-horsetail", x: 4, y: 10, label: "Horsetail — for infections", style: "herbs" },
+      { id: "herb-yarrow", x: 6, y: 10, label: "Yarrow — to expel poison", style: "herbs" },
+      { id: "herb-comfrey", x: 8, y: 10, label: "Comfrey — for broken bones", style: "herbs" },
+      { id: "herb-chamomile", x: 10, y: 7, label: "Chamomile — for strength", style: "herbs" },
+      { id: "herb-feverfew", x: 10, y: 10, label: "Feverfew — for headaches", style: "herbs" },
+      { id: "herb-drying", x: 18, y: 4, label: "Herbs drying in the cracks", style: "vines" },
+      { id: "herb-storage", x: 20, y: 6, label: "Moss-lined storage crevice", style: "moss" },
       { id: "pool", x: 17, y: 8, label: "Pool of rainwater", style: "stone" },
+      { id: "patient-nest", x: 13, y: 4, label: "Patient's nest", style: "nest" },
+      { id: "patient-nest-2", x: 16, y: 13, label: "Second patient's nest", style: "nest" },
       { id: "nest", x: 13, y: 11, label: "Spottedleaf's nest", style: "nest" },
+      { id: "md-fern", x: 3, y: 13, label: "Ferns shading the entrance", style: "moss" },
+      { id: "md-stone", x: 20, y: 10, label: "Flat mixing stone", style: "stone" },
+      { id: "md-root", x: 6, y: 13, label: "Roots threading the wall", style: "vines" },
     ],
-    desc: "A crevice in the rock, screened by a bramble. Cracks in the stone hold neat stores of herbs. A smooth pool reflects the sky.",
+    desc: "A crevice in the rock, screened by a bramble. Cracks in the stone hold neat stores of herbs — marigold, catmint, poppy seed, cobweb. A smooth pool reflects the sky.",
     npcs: ["spottedleaf"],
   },
   "tc-nursery": {
@@ -210,10 +237,16 @@ export const interiors: Record<string, InteriorDef> = {
     name: "The Nursery",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "nest1", x: 8, y: 7, label: "Queen's nest", style: "nest" },
-      { id: "nest2", x: 15, y: 7, label: "Queen's nest", style: "nest" },
-      { id: "nest3", x: 11, y: 12, label: "Kit nest", style: "nest" },
-      { id: "feathers", x: 18, y: 12, label: "Feathers and moss", style: "moss" },
+      { id: "nest1", x: 8, y: 7, label: "Willowpelt's nest, freshly lined", style: "nest" },
+      { id: "nest2", x: 15, y: 7, label: "Brindleface's flattened nest", style: "nest" },
+      { id: "nest3", x: 11, y: 12, label: "Frostfur's nest, moss heaped high", style: "nest" },
+      { id: "nest4", x: 17, y: 12, label: "Speckletail's worn nest", style: "nest" },
+      { id: "kit-moss", x: 9, y: 13, label: "Kits' moss-ball pile", style: "moss" },
+      { id: "kit-toy", x: 19, y: 7, label: "A stray bundle of moss for the kits", style: "moss" },
+      { id: "feathers", x: 18, y: 12, label: "Feathers and moss for lining", style: "moss" },
+      { id: "feathers-2", x: 6, y: 4, label: "Soft pigeon feathers", style: "moss" },
+      { id: "bramble", x: 12, y: 3, label: "Protective bramble screen", style: "plank" },
+      { id: "fern", x: 5, y: 10, label: "Ferns for warmth", style: "moss" },
     ],
     desc: "The deepest, best-guarded den in camp, lined with feathers and moss. Kits tumble over their sleeping mothers.",
     npcs: ["willowpelt"],
@@ -223,11 +256,18 @@ export const interiors: Record<string, InteriorDef> = {
     name: "The Warriors' Den",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "nest1", x: 7, y: 6, label: "Moss nest", style: "nest" },
-      { id: "nest2", x: 12, y: 6, label: "Moss nest", style: "nest" },
-      { id: "nest3", x: 17, y: 6, label: "Moss nest", style: "nest" },
-      { id: "nest4", x: 7, y: 11, label: "Moss nest", style: "nest" },
-      { id: "nest5", x: 17, y: 11, label: "Moss nest", style: "nest" },
+      { id: "nest1", x: 7, y: 6, label: "Lionheart's neatly arranged nest", style: "nest" },
+      { id: "nest2", x: 12, y: 6, label: "Tigerclaw's nest, tightly packed", style: "nest" },
+      { id: "nest3", x: 17, y: 6, label: "Whitestorm's nest, feathers on top", style: "nest" },
+      { id: "nest4", x: 7, y: 11, label: "Darkstripe's flattened nest", style: "nest" },
+      { id: "nest5", x: 17, y: 11, label: "Longtail's half-made nest", style: "nest" },
+      { id: "nest6", x: 12, y: 14, label: "Spare nest, freshly mossed", style: "nest" },
+      { id: "wd-moss-cache", x: 5, y: 14, label: "Stack of spare moss", style: "moss" },
+      { id: "wd-twigs", x: 20, y: 13, label: "Twigs woven in the walls", style: "vines" },
+      { id: "wd-stone", x: 20, y: 4, label: "Stone propping the thorns", style: "stone" },
+      { id: "wd-leaf", x: 4, y: 4, label: "Fallen leaves in the corner", style: "moss" },
+      { id: "wd-feather", x: 14, y: 9, label: "A starling feather", style: "moss" },
+      { id: "wd-root", x: 9, y: 9, label: "Root crossing the floor", style: "vines" },
     ],
     desc: "A dark, tangled thornbush. Inside, moss-lined nests are packed tight — the first line of defense if the camp is attacked.",
     npcs: ["lionheart", "tigerclaw"],
@@ -237,9 +277,15 @@ export const interiors: Record<string, InteriorDef> = {
     name: "The Apprentices' Den",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "nest1", x: 9, y: 7, label: "Moss nest", style: "nest" },
-      { id: "nest2", x: 14, y: 7, label: "Moss nest", style: "nest" },
-      { id: "nest3", x: 11, y: 12, label: "Moss nest", style: "nest" },
+      { id: "nest1", x: 9, y: 7, label: "Graypaw's untidy nest", style: "nest" },
+      { id: "nest2", x: 14, y: 7, label: "Sandpaw's neat nest", style: "nest" },
+      { id: "nest3", x: 11, y: 12, label: "Dustpaw's nest, moss everywhere", style: "nest" },
+      { id: "nest4", x: 16, y: 12, label: "Ravenpaw's nest, hidden in the corner", style: "nest" },
+      { id: "ad-moss", x: 5, y: 11, label: "Stolen moss pile (Dustpaw)", style: "moss" },
+      { id: "ad-twigs", x: 19, y: 5, label: "Practice pounce twigs", style: "plank" },
+      { id: "ad-feather", x: 6, y: 4, label: "Feather for a game of catch", style: "moss" },
+      { id: "ad-leaf", x: 20, y: 10, label: "Crisped leaves, never cleared", style: "moss" },
+      { id: "ad-stone", x: 12, y: 9, label: "Stones the apprentices stack", style: "stone" },
     ],
     desc: "A bramble thicket, warm with the smell of young cats. The apprentices' moss nests are never tidy.",
     npcs: ["graypaw", "sandpaw"],
@@ -249,9 +295,15 @@ export const interiors: Record<string, InteriorDef> = {
     name: "The Elders' Den",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "nest1", x: 8, y: 8, label: "Elder's nest", style: "nest" },
-      { id: "nest2", x: 16, y: 8, label: "Elder's nest", style: "nest" },
-      { id: "ivy", x: 12, y: 5, label: "Ivy-draped walls", style: "moss" },
+      { id: "nest1", x: 8, y: 8, label: "Halftail's nest, worn thin", style: "nest" },
+      { id: "nest2", x: 16, y: 8, label: "Smallear's nest, perfectly molded", style: "nest" },
+      { id: "nest3", x: 12, y: 13, label: "Patchpelt's nest by the entrance", style: "nest" },
+      { id: "ivy", x: 12, y: 5, label: "Ivy-draped walls", style: "vines" },
+      { id: "ed-moss", x: 6, y: 12, label: "Fresh moss, the apprentices' duty", style: "moss" },
+      { id: "ed-stone", x: 19, y: 12, label: "Stone for aching joints", style: "stone" },
+      { id: "ed-leaves", x: 5, y: 5, label: "Old dry leaves in the corners", style: "moss" },
+      { id: "ed-root", x: 18, y: 4, label: "Roots of the fallen log", style: "vines" },
+      { id: "ed-tick", x: 14, y: 10, label: "Mouse-bile for ticks", style: "herbs" },
     ],
     desc: "A fallen log draped in ivy. The elders swap stories of battles and prophecies, and complain about the damp.",
     npcs: ["halftail"],
@@ -273,12 +325,118 @@ export const interiors: Record<string, InteriorDef> = {
     name: "Rusty's Twoleg Nest",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "bowl", x: 6, y: 8, label: "Food bowl", style: "bowl" },
+      // living room + kitchen + hallway in one small nest
+      { id: "rh-carpet", x: 12, y: 9, label: "Worn rug by the fire", style: "carpet" },
+      { id: "rh-sofa", x: 17, y: 7, label: "Twoleg sleeping-soft (sofa)", style: "plank" },
+      { id: "rh-chair", x: 7, y: 5, label: "Twoleg perch (chair)", style: "plank" },
+      { id: "rh-table", x: 12, y: 5, label: "Twoleg eating-table", style: "plank" },
+      { id: "rh-lamp", x: 19, y: 12, label: "Glowing lamp", style: "lamp" },
+      { id: "rh-counter", x: 5, y: 10, label: "Kitchen counter", style: "plank" },
+      { id: "bowl", x: 6, y: 8, label: "Your food bowl", style: "bowl" },
       { id: "bowl2", x: 8, y: 8, label: "Water bowl", style: "bowl" },
-      { id: "plank", x: 14, y: 7, label: "Soft cushion", style: "plank" },
-      { id: "plank2", x: 18, y: 10, label: "Twoleg chair", style: "plank" },
+      { id: "rh-toy", x: 14, y: 12, label: "A woolly mouse toy", style: "toy" },
+      { id: "rh-toy2", x: 10, y: 13, label: "Rolling twoleg ball", style: "toy" },
+      { id: "rh-cushion", x: 15, y: 10, label: "Soft cushion", style: "plank" },
+      { id: "rh-books", x: 19, y: 4, label: "Twoleg leaf-clusters (books)", style: "plank" },
+      { id: "rh-window", x: 4, y: 13, label: "Sunny window ledge", style: "plank" },
     ],
     desc: "Warm, soft, and safe — and unbearably small. The Twolegs are out; the garden door is open.",
+    npcs: [],
+  },
+  "smudge-house": {
+    id: "smudge-house",
+    name: "Smudge's Cozy Home",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "sh-carpet", x: 12, y: 8, label: "Thick soft carpet", style: "carpet" },
+      { id: "sh-bed", x: 12, y: 5, label: "Smudge's plush cat bed", style: "nest" },
+      { id: "sh-bowl", x: 7, y: 7, label: "Food bowl, always full", style: "bowl" },
+      { id: "sh-bowl2", x: 9, y: 7, label: "Fresh water bowl", style: "bowl" },
+      { id: "sh-toy", x: 15, y: 9, label: "Feather wand toy", style: "toy" },
+      { id: "sh-toy2", x: 16, y: 11, label: "Catnip mouse", style: "toy" },
+      { id: "sh-toy3", x: 9, y: 12, label: "Jingly ball", style: "toy" },
+      { id: "sh-sofa", x: 18, y: 6, label: "Twoleg sofa", style: "plank" },
+      { id: "sh-lamp", x: 5, y: 12, label: "Warm reading lamp", style: "lamp" },
+      { id: "sh-window", x: 19, y: 13, label: "Window over the garden", style: "plank" },
+    ],
+    desc: "Smudge's Twolegs dote on him. Toys everywhere, a plush bed, and the best view of the garden.",
+    npcs: [],
+  },
+  "henry-house": {
+    id: "henry-house",
+    name: "Henry's House",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "hh-bed", x: 8, y: 5, label: "Henry's large cat bed", style: "nest" },
+      { id: "hh-post", x: 16, y: 6, label: "Tall scratching post", style: "plank" },
+      { id: "hh-bowl", x: 7, y: 9, label: "Food bowl", style: "bowl" },
+      { id: "hh-bowl2", x: 9, y: 9, label: "Water bowl", style: "bowl" },
+      { id: "hh-toy", x: 13, y: 11, label: "Springy toy", style: "toy" },
+      { id: "hh-toy2", x: 15, y: 12, label: "Crinkle ball", style: "toy" },
+      { id: "hh-carpet", x: 11, y: 8, label: "Hearth rug", style: "carpet" },
+      { id: "hh-shelf", x: 19, y: 5, label: "Twoleg shelf of curious objects", style: "plank" },
+      { id: "hh-table", x: 6, y: 13, label: "Kitchen table", style: "plank" },
+      { id: "hh-lamp", x: 20, y: 12, label: "Corner lamp", style: "lamp" },
+    ],
+    desc: "Henry's Twolegs keep a tidy house with a scratching post he is too dignified to use.",
+    npcs: [],
+  },
+  "princess-house": {
+    id: "princess-house",
+    name: "Princess's Sunny House",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "ph-window", x: 12, y: 4, label: "Wide sunny windowsill", style: "plank" },
+      { id: "ph-bed", x: 12, y: 6, label: "Princess's cushioned bed", style: "nest" },
+      { id: "ph-plant", x: 6, y: 5, label: "Houseplants (not for eating)", style: "moss" },
+      { id: "ph-plant2", x: 18, y: 5, label: "Fern on a stand", style: "moss" },
+      { id: "ph-bowl", x: 8, y: 10, label: "Porcelain food bowl", style: "bowl" },
+      { id: "ph-bowl2", x: 10, y: 10, label: "Porcelain water bowl", style: "bowl" },
+      { id: "ph-carpet", x: 13, y: 10, label: "Pale delicate carpet", style: "carpet" },
+      { id: "ph-shelf", x: 19, y: 9, label: "Shelves of twoleg ornaments", style: "plank" },
+      { id: "ph-toy", x: 16, y: 12, label: "A single dignified toy", style: "toy" },
+      { id: "ph-chair", x: 6, y: 12, label: "Upholstered chair", style: "plank" },
+    ],
+    desc: "Bright, quiet, and full of sun. Princess's Twolegs keep an immaculate, gentle home.",
+    npcs: [],
+  },
+  "marmalade-house": {
+    id: "marmalade-house",
+    name: "Marmalade's House",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "mh-bed", x: 10, y: 6, label: "Marmalade's worn barn-style bed", style: "nest" },
+      { id: "mh-blanket", x: 14, y: 6, label: "Piled blankets", style: "plank" },
+      { id: "mh-box", x: 17, y: 8, label: "A twoleg box (his favorite)", style: "plank" },
+      { id: "mh-box2", x: 19, y: 10, label: "Another box (also his)", style: "plank" },
+      { id: "mh-bowl", x: 6, y: 8, label: "Food bowl, licked clean", style: "bowl" },
+      { id: "mh-bowl2", x: 8, y: 8, label: "Water bowl", style: "bowl" },
+      { id: "mh-toy", x: 12, y: 11, label: "Chewed toy mouse", style: "toy" },
+      { id: "mh-toy2", x: 9, y: 13, label: "Ball under the table", style: "toy" },
+      { id: "mh-table", x: 12, y: 9, label: "Heavy wooden table", style: "plank" },
+      { id: "mh-counter", x: 5, y: 12, label: "Kitchen counter to spy from", style: "plank" },
+      { id: "mh-lamp", x: 19, y: 13, label: "Kitchen lamp", style: "lamp" },
+    ],
+    desc: "A big, busy kitchen-house. Marmalade rules it from the top of the table and naps in boxes.",
+    npcs: [],
+  },
+  "ginger-house": {
+    id: "ginger-house",
+    name: "Ginger's House",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "gh-bed", x: 8, y: 6, label: "Ginger's traveling basket bed", style: "nest" },
+      { id: "gh-carpet", x: 12, y: 9, label: "Bright patterned rug", style: "carpet" },
+      { id: "gh-bowl", x: 7, y: 10, label: "Food bowl", style: "bowl" },
+      { id: "gh-bowl2", x: 9, y: 10, label: "Water bowl", style: "bowl" },
+      { id: "gh-toy", x: 14, y: 7, label: "Dangling feather toy", style: "toy" },
+      { id: "gh-toy2", x: 16, y: 12, label: "Stuffed fish", style: "toy" },
+      { id: "gh-books", x: 19, y: 5, label: "Stacked twoleg scrolls (books)", style: "plank" },
+      { id: "gh-sofa", x: 17, y: 8, label: "Long sofa", style: "plank" },
+      { id: "gh-lamp", x: 5, y: 5, label: "Hallway lamp", style: "lamp" },
+      { id: "gh-window", x: 4, y: 12, label: "Front-window perch", style: "plank" },
+    ],
+    desc: "A well-walked house with a view of the whole street — Ginger patrols it twice a day.",
     npcs: [],
   },
   barn: {
@@ -286,10 +444,14 @@ export const interiors: Record<string, InteriorDef> = {
     name: "The Farm Barn",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "hay1", x: 6, y: 6, label: "Hay bales", style: "hay" },
-      { id: "hay2", x: 18, y: 6, label: "Hay bales", style: "hay" },
-      { id: "hay3", x: 12, y: 12, label: "Warm hay pile", style: "hay" },
+      { id: "hay1", x: 6, y: 6, label: "Hay bales, stacked high", style: "hay" },
+      { id: "hay2", x: 18, y: 6, label: "Hay bales, cow-warm", style: "hay" },
+      { id: "hay3", x: 12, y: 12, label: "Warm hay pile for sleeping", style: "hay" },
+      { id: "hay4", x: 9, y: 10, label: "Loose straw scatter", style: "hay" },
       { id: "plank", x: 16, y: 11, label: "Twoleg workbench", style: "plank" },
+      { id: "bn-box", x: 5, y: 12, label: "Feed sacks", style: "plank" },
+      { id: "bn-bowl", x: 15, y: 5, label: "The farm cat's water bowl", style: "bowl" },
+      { id: "bn-rider", x: 8, y: 4, label: "Barn rafters with pigeon nests", style: "vines" },
     ],
     desc: "The barn breathes warm hay and cow. Mice rustle between the bales. A safe place for any cat willing to share.",
     npcs: [],
@@ -299,6 +461,9 @@ export const interiors: Record<string, InteriorDef> = {
 // ---------------------------------------------------------------------------
 // Prey
 // ---------------------------------------------------------------------------
+
+/** Prey lifecycle: alive → dying (brief death pose) → removed from the world. */
+type PreyPhase = "alive" | "dying" | "removed";
 
 interface PreyState {
   id: string;
@@ -312,9 +477,9 @@ interface PreyState {
   fleeing: boolean;
   waitUntil: number;
   seed: number;
-  alive: boolean;
-  /** engine time until which a killed prey lingers briefly before despawning */
-  deadUntil?: number;
+  phase: PreyPhase;
+  /** engine time at which a dying prey despawns (removed → filtered out) */
+  deadUntil: number;
 }
 
 const PREY_FLEE_DIST = 90;
@@ -591,14 +756,15 @@ export class GameCanvas {
         fleeing: false,
         waitUntil: Math.random() * 3,
         seed: Math.random() * 1000,
-        alive: true,
+        phase: "alive" as PreyPhase,
+        deadUntil: 0,
       });
       created++;
     }
   }
 
   private respawnPreyTick() {
-    const alive = this.prey.filter((p) => p.alive).length;
+    const alive = this.prey.filter((p) => p.phase === "alive").length;
     if (alive < PREY_MAX * 0.6) {
       this.spawnPrey(Math.floor(PREY_MAX * 0.25));
     }
@@ -822,7 +988,7 @@ export class GameCanvas {
     if (!this.paused && this.prey.length < PREY_MAX && Math.random() < 0.02) this.respawnPreyTick();
     if (!this.interiorId) {
       for (const p of this.prey) {
-        if (!p.alive) continue;
+        if (p.phase !== "alive") continue; // dying/dead prey: AI fully stopped
         const dToPlayer = Math.hypot(this.px - p.x, this.py - p.y);
         // flee from the player unless sneaking
         if (dToPlayer < PREY_FLEE_DIST && !this.sneaking) {
@@ -860,16 +1026,18 @@ export class GameCanvas {
             if (Math.abs(ux) > 0.2) p.facing = ux > 0 ? 1 : -1;
           }
         }
-        // catch! Prey dies: stops fleeing, shows a brief death effect, then despawns.
+        // catch! Prey enters the dying phase exactly once — further kills on
+        // the same animal are ignored, so the reward can never double-fire.
         if (dToPlayer < PREY_CATCH_DIST && !this.paused) {
-          p.alive = false;
+          p.phase = "dying";
+          p.fleeing = false;
           p.deadUntil = this.time + 0.55;
           this.huntedCount++;
           this.cb.onPreyCaught(p.kind);
         }
       }
-      // remove fully-despawned prey so nothing invisible lingers
-      this.prey = this.prey.filter((p) => p.alive || this.time < (p.deadUntil ?? 0));
+      // hard despawn: dying prey is removed from the active world entirely
+      this.prey = this.prey.filter((p) => p.phase === "alive" || this.time < p.deadUntil);
     }
 
     // --- area + nearby detection ---
@@ -886,6 +1054,7 @@ export class GameCanvas {
     let bestD = 88;
     if (!this.interiorId) {
       for (const o of allObjects) {
+        if (o.detail) continue; // garnish never shows an interact prompt
         const d = Math.hypot(o.x - this.px, o.y - this.py);
         if (d < bestD) {
           bestD = d;
@@ -901,7 +1070,7 @@ export class GameCanvas {
       }
       // prey nearby (pounce!)
       for (const p of this.prey) {
-        if (!p.alive) continue;
+        if (p.phase !== "alive") continue; // dead prey is not targetable
         const d = Math.hypot(p.x - this.px, p.y - this.py);
         if (d < 60 && d < bestD) {
           bestD = d;
@@ -1145,6 +1314,65 @@ export class GameCanvas {
           ctx.ellipse(x, y - 1.5, 6.5, 3, 0, 0, Math.PI * 2);
           ctx.fill();
           break;
+        case "vines":
+          // trailing roots / hanging greenery / drying herbs
+          ctx.strokeStyle = "#4a6a3a";
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.moveTo(x - 10, y - 10);
+          ctx.quadraticCurveTo(x + Math.sin(this.time + x) * 3, y, x - 6, y + 10);
+          ctx.moveTo(x + 8, y - 12);
+          ctx.quadraticCurveTo(x + Math.cos(this.time + x) * 3, y - 2, x + 12, y + 8);
+          ctx.stroke();
+          ctx.fillStyle = "#56804a";
+          ctx.beginPath();
+          ctx.ellipse(x, y, 3, 2, 0.4, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+        case "toy":
+          // yarn ball with a loose thread
+          ctx.fillStyle = "#d977a0";
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(255,255,255,0.55)";
+          ctx.lineWidth = 0.9;
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0.6, 2.6);
+          ctx.moveTo(x + 5, y);
+          ctx.quadraticCurveTo(x + 10, y + 2, x + 13, y - 1);
+          ctx.stroke();
+          break;
+        case "carpet":
+          // household rug
+          ctx.fillStyle = "rgba(150, 70, 60, 0.9)";
+          ctx.beginPath();
+          ctx.roundRect(x - 20, y - 14, 40, 28, 4);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(220, 200, 170, 0.5)";
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.roundRect(x - 16, y - 10, 32, 20, 3);
+          ctx.stroke();
+          break;
+        case "lamp":
+          // twoleg lamp with warm glow
+          ctx.fillStyle = "#5a4a3a";
+          ctx.fillRect(x - 2, y - 14, 4, 14);
+          ctx.fillStyle = "#ffe9a8";
+          ctx.beginPath();
+          ctx.ellipse(x, y - 16, 8, 5, 0, Math.PI, 0);
+          ctx.fill();
+          {
+            const lg = ctx.createRadialGradient(x, y - 16, 2, x, y - 16, 34);
+            lg.addColorStop(0, "rgba(255, 230, 160, 0.3)");
+            lg.addColorStop(1, "rgba(255, 230, 160, 0)");
+            ctx.fillStyle = lg;
+            ctx.beginPath();
+            ctx.arc(x, y - 16, 34, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          break;
       }
     }
     // NPCs assigned to this room (drawn near their home positions)
@@ -1283,9 +1511,27 @@ export class GameCanvas {
             case "herbs": drawHerbPatch(ctx, o.x, o.y, this.time); break;
             case "nest": this.drawBush(o.x, o.y, w, h); break;
             case "prey-pile": drawFreshKillPile(ctx, o.x, o.y); break;
+            // content-expansion styles
+            case "feathers": this.drawFeathers(o.x, o.y, w, h); break;
+            case "mudpatch": this.drawMudPatch(o.x, o.y, w, h); break;
+            case "puddle": this.drawPuddle(o.x, o.y, w, h); break;
+            case "driftwood": this.drawDriftwood(o.x, o.y, w, h); break;
+            case "burrow": this.drawBurrow(o.x, o.y, w, h); break;
+            case "mossball": this.drawMossBall(o.x, o.y, w, h); break;
+            case "vines": this.drawVines(o.x, o.y, w, h); break;
+            case "toy": this.drawToy(o.x, o.y, w, h); break;
+            case "carpet": this.drawCarpet(o.x, o.y, w, h); break;
+            case "lamp": this.drawLamp(o.x, o.y, w, h); break;
+            case "plank": this.drawPlank(o.x, o.y, w, h); break;
+            case "haybale": this.drawHaybale(o.x, o.y, w, h); break;
+            case "fishing-spot": this.drawFishingSpot(o.x, o.y, w, h); break;
+          }
+          // detail objects are pure garnish — no interaction marker
+          if (o.detail) {
+            ctx.restore?.call(ctx);
           }
           // den entrance marker for enterable dens
-          if (o.interior) {
+          if (o.interior && !o.detail) {
             ctx.fillStyle = "rgba(255,235,180,0.9)";
             ctx.beginPath();
             ctx.arc(o.x, o.y - h * 0.75 - 8, 3, 0, Math.PI * 2);
@@ -1296,7 +1542,7 @@ export class GameCanvas {
     }
     // prey (killed prey renders briefly in a death pose, then despawns)
     for (const p of this.prey) {
-      if (!p.alive && this.time > (p.deadUntil ?? 0)) continue;
+      if (p.phase === "removed" || (p.phase === "dying" && this.time > p.deadUntil)) continue;
       if (p.x < viewL || p.x > viewR || p.y < viewT || p.y > viewB) continue;
       ents.push({
         y: p.y,
@@ -1310,7 +1556,7 @@ export class GameCanvas {
             false,
             this.time,
             p.seed,
-            !p.alive,
+            p.phase === "dying",
           ),
       });
     }
@@ -1955,6 +2201,183 @@ export class GameCanvas {
     ctx.beginPath();
     ctx.ellipse(x - w * 0.1, y - h * 0.14, w * 0.26, h * 0.22, 0, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // ---- content-expansion prop renderers ----
+
+  private drawFeathers(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + w;
+      ctx.fillStyle = i % 2 === 0 ? "rgba(235,230,215,0.85)" : "rgba(180,170,150,0.8)";
+      ctx.beginPath();
+      ctx.ellipse(x + Math.cos(a) * w * 0.3, y + Math.sin(a) * h * 0.3, 2.6, 1.1, a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  private drawMudPatch(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(90, 70, 48, 0.55)";
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.5, h * 0.42, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(74, 57, 38, 0.5)";
+    ctx.beginPath();
+    ctx.ellipse(x + w * 0.12, y + h * 0.08, w * 0.3, h * 0.24, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawPuddle(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    const g = ctx.createRadialGradient(x, y, 1, x, y, Math.max(w, h) * 0.5);
+    g.addColorStop(0, "rgba(150, 180, 210, 0.55)");
+    g.addColorStop(1, "rgba(120, 150, 185, 0.25)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.45, h * 0.35, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawDriftwood(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.15)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.3, w * 0.45, h * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#9a8a72";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.45, y - h * 0.28, w * 0.9, h * 0.5, h * 0.25);
+    ctx.fill();
+  }
+
+  private drawBurrow(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#6d5433";
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.34, h * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#2a1f12";
+    ctx.beginPath();
+    ctx.ellipse(x, y + 2, w * 0.18, h * 0.12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(120, 96, 62, 0.7)";
+    ctx.beginPath();
+    ctx.ellipse(x + w * 0.3, y - h * 0.14, w * 0.16, h * 0.1, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawMossBall(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#4f7a43";
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.4, h * 0.32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#5f8f4e";
+    ctx.beginPath();
+    ctx.ellipse(x - w * 0.1, y - h * 0.1, w * 0.22, h * 0.16, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawVines(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.strokeStyle = "#4a6a3a";
+    ctx.lineWidth = 1.6;
+    for (let i = 0; i < 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(x - w * 0.3 + i * w * 0.35, y - h * 0.3);
+      ctx.quadraticCurveTo(x + Math.sin(i * 2.2) * w * 0.2, y, x - w * 0.2 + i * w * 0.3, y + h * 0.3);
+      ctx.stroke();
+    }
+  }
+
+  private drawToy(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#d977a0";
+    ctx.beginPath();
+    ctx.arc(x, y - 2, Math.min(w, h) * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.arc(x, y - 2, Math.min(w, h) * 0.3, 0.5, 2.4);
+    ctx.stroke();
+  }
+
+  private drawCarpet(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(150, 70, 60, 0.85)";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.45, y - h * 0.35, w * 0.9, h * 0.7, 3);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(220, 200, 170, 0.5)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.38, y - h * 0.28, w * 0.76, h * 0.56, 2);
+    ctx.stroke();
+  }
+
+  private drawLamp(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#5a4a3a";
+    ctx.fillRect(x - 1.5, y - h * 0.4, 3, h * 0.4);
+    ctx.fillStyle = "#ffe9a8";
+    ctx.beginPath();
+    ctx.ellipse(x, y - h * 0.45, w * 0.28, h * 0.2, 0, Math.PI, 0);
+    ctx.fill();
+    const g = ctx.createRadialGradient(x, y - h * 0.45, 2, x, y - h * 0.45, w * 0.8);
+    g.addColorStop(0, "rgba(255, 230, 160, 0.28)");
+    g.addColorStop(1, "rgba(255, 230, 160, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y - h * 0.45, w * 0.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawPlank(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#7a5b3a";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.5, y - h * 0.3, w, h * 0.6, 2);
+    ctx.fill();
+  }
+
+  private drawHaybale(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.15)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.32, w * 0.42, h * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#c9a84a";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.4, y - h * 0.35, w * 0.8, h * 0.65, 4);
+    ctx.fill();
+    ctx.strokeStyle = "#a8873a";
+    ctx.lineWidth = 1;
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(x + i * w * 0.22, y - h * 0.35);
+      ctx.lineTo(x + i * w * 0.22, y + h * 0.3);
+      ctx.stroke();
+    }
+  }
+
+  private drawFishingSpot(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    const g = ctx.createRadialGradient(x, y, 1, x, y, w * 0.5);
+    g.addColorStop(0, "rgba(160, 200, 230, 0.4)");
+    g.addColorStop(1, "rgba(120, 160, 200, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.45, h * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(220, 235, 250, 0.35)";
+    ctx.lineWidth = 0.8;
+    for (let i = 1; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.ellipse(x, y, i * 6 + Math.sin(this.time * 2 + x) * 1.5, i * 3, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   private drawStump(x: number, y: number, r: number) {
