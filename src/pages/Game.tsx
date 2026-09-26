@@ -379,8 +379,13 @@ export default function Game() {
       }
 
       if (target.kind === "prey") {
-        // pounce handled by proximity; give a small flourish
-        setDialogue({ name: "Hunt", text: "You pounce! The prey never knew what hit it. (+4 XP)" });
+        // The pounce IS the kill: the engine marks the prey dying (exactly
+        // once) and reports the kind, so XP is awarded here and only here.
+        const kind = gameRef.current?.pounceAt();
+        if (kind) {
+          addXp({ amount: 4 }).catch(() => undefined);
+          setDialogue({ name: "Hunt", text: `You pounce! The ${kind} never knew what hit it. (+4 XP)` });
+        }
         return;
       }
       if (target.kind === "object") {

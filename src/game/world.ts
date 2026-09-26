@@ -377,9 +377,23 @@ const tcLandmarks: WorldObject[] = [
     id: "sandy-hollow", x: t(31) + TC_OX, y: t(62) + TC_OY, w: t(3), h: t(2.6),
     label: "Sandy Hollow", interact: "training-hollow", style: "stump",
   },
+  // Fourtrees — the four great oaks from Into the Wild, one per corner of
+  // the clearing (each a distinct oak: trunks, layered canopies, variation)
   {
-    id: "fourtrees", x: t(19) + TC_OX, y: t(68) + TC_OY, w: t(4), h: t(3),
-    label: "Fourtrees", interact: "fourtrees", style: "tree", scale: 2,
+    id: "fourtrees", x: t(17.6) + TC_OX, y: t(66.4) + TC_OY, w: t(2.6), h: t(2),
+    label: "Fourtrees — the Great Oak (north)", interact: "fourtrees", style: "tree", scale: 1.8, solid: true,
+  },
+  {
+    id: "fourtrees-2", x: t(21.2) + TC_OX, y: t(66.6) + TC_OY, w: t(2.4), h: t(1.9),
+    label: "Fourtrees — the Twin Oak (east)", style: "tree", scale: 1.55, solid: true,
+  },
+  {
+    id: "fourtrees-3", x: t(17.4) + TC_OX, y: t(70.2) + TC_OY, w: t(2.5), h: t(1.95),
+    label: "Fourtrees — the Broad Oak (west)", style: "tree", scale: 1.65, solid: true,
+  },
+  {
+    id: "fourtrees-4", x: t(21) + TC_OX, y: t(70) + TC_OY, w: t(2.3), h: t(1.8),
+    label: "Fourtrees — the Young Oak (south)", style: "tree", scale: 1.4, solid: true,
   },
   {
     id: "great-rock", x: t(17) + TC_OX, y: t(66) + TC_OY, w: t(3), h: t(2.4),
@@ -482,8 +496,8 @@ const otherClanObjects: WorldObject[] = [
     label: "Rusty's Twoleg nest", interact: "twolegplace", interior: "rusty-house",
     style: "house", solid: true, scale: 1.2,
   },
-  { id: "house-2", x: t(64), y: t(138), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1.1 },
-  { id: "house-3", x: t(92), y: t(138), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 0.95 },
+  { id: "house-2", x: t(63.6), y: t(138), w: t(3.8), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1.1 },
+  { id: "house-3", x: t(92.4), y: t(138), w: t(3.8), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 0.95 },
   { id: "house-4", x: t(70), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1 },
   { id: "house-5", x: t(85), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1.05 },
   // Southern street row (across the main street)
@@ -516,12 +530,12 @@ const otherClanObjects: WorldObject[] = [
   { id: "fence-rusty-w", x: t(75.2), y: t(136.4), w: t(0.8), h: t(7), label: "Garden fence", style: "fence", solid: true },
   { id: "fence-rusty-e", x: t(81.4), y: t(136.4), w: t(0.8), h: t(7), label: "Garden fence", style: "fence", solid: true },
   { id: "gate-rusty", x: t(78), y: t(143.2), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
-  { id: "fence-2-n", x: t(62), y: t(140), w: t(6), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
-  { id: "fence-2-e", x: t(64), y: t(140), w: t(0.8), h: t(6), label: "Garden fence", style: "fence", solid: true },
-  { id: "gate-2", x: t(64), y: t(145.4), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
-  { id: "fence-3-n", x: t(90), y: t(140), w: t(6), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
-  { id: "fence-3-w", x: t(90), y: t(140), w: t(0.8), h: t(6), label: "Garden fence", style: "fence", solid: true },
-  { id: "gate-3", x: t(92), y: t(145.4), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
+  { id: "fence-2-n", x: t(66.95), y: t(140), w: t(3.6), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-2-e", x: t(61.6), y: t(140), w: t(0.8), h: t(6), label: "Garden fence", style: "fence", solid: true },
+  { id: "gate-2", x: t(64), y: t(141.6), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
+  { id: "fence-3-n", x: t(94.95), y: t(140), w: t(3.6), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
+  { id: "fence-3-w", x: t(89.6), y: t(140), w: t(0.8), h: t(6), label: "Garden fence", style: "fence", solid: true },
+  { id: "gate-3", x: t(92), y: t(141.6), w: t(1.6), h: t(0.8), label: "Garden gate", style: "fence" },
   { id: "fence-s-1", x: t(56), y: t(156), w: t(8), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
   { id: "fence-s-2", x: t(66), y: t(156), w: t(8), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
   { id: "fence-s-3", x: t(80), y: t(156), w: t(8), h: t(0.8), label: "Garden fence", style: "fence", solid: true },
@@ -536,23 +550,23 @@ const otherClanObjects: WorldObject[] = [
   // Front doors sit just south of each house, clear of the solid footprint.
   // The five kittypet doors were previously unreachable (embedded inside
   // another house's collision) — relocated to their own doorsteps.
-  { id: "house-2-door", x: t(64), y: t(140.6), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-a", style: "door" },
-  { id: "house-3-door", x: t(92), y: t(140.6), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-c", style: "door" },
-  { id: "house-4-door", x: t(70), y: t(136.5), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-b", style: "door" },
-  { id: "house-5-door", x: t(85), y: t(136.5), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-e", style: "door" },
-  { id: "house-6-door", x: t(58), y: t(160.7), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-a", style: "door" },
-  { id: "house-7-door", x: t(70), y: t(162.6), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-d", style: "door" },
-  { id: "house-8-door", x: t(84), y: t(160.7), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-b", style: "door" },
-  { id: "house-9-door", x: t(96), y: t(162.6), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-e", style: "door" },
+  { id: "house-2-door", x: t(64), y: t(139.4), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-a", style: "door" },
+  { id: "house-3-door", x: t(92), y: t(139.4), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-c", style: "door" },
+  { id: "house-4-door", x: t(70), y: t(135.3), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-b", style: "door" },
+  { id: "house-5-door", x: t(85), y: t(135.3), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-e", style: "door" },
+  { id: "house-6-door", x: t(58), y: t(159.4), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-a", style: "door" },
+  { id: "house-7-door", x: t(70), y: t(161.3), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-d", style: "door" },
+  { id: "house-8-door", x: t(84), y: t(159.4), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-b", style: "door" },
+  { id: "house-9-door", x: t(96), y: t(161.3), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-e", style: "door" },
   // Rusty's own front door (the nest itself was already enterable)
-  { id: "rusty-front-door", x: t(78), y: t(142.3), w: t(1.2), h: t(0.9), label: "Rusty's front door", interact: "twolegplace", interior: "rusty-house", style: "door" },
+  { id: "rusty-front-door", x: t(78), y: t(141.6), w: t(1.2), h: t(0.9), label: "Rusty's front door", interact: "twolegplace", interior: "rusty-house", style: "door" },
   // Kittypet doorstep doors — relocated OUT of neighboring collision so the
   // doorway is actually reachable from the street.
-  { id: "smudge-door", x: t(74.5), y: t(143.1), w: t(1.2), h: t(0.9), label: "Smudge's front door", interact: "twolegplace", interior: "smudge-house", style: "door" },
-  { id: "henry-door", x: t(61.2), y: t(143.1), w: t(1.2), h: t(0.9), label: "Henry's front door", interact: "twolegplace", interior: "henry-house", style: "door" },
-  { id: "princess-door", x: t(69.5), y: t(137.4), w: t(1.2), h: t(0.9), label: "Princess's front door", interact: "twolegplace", interior: "princess-house", style: "door" },
-  { id: "marmalade-door", x: t(94.6), y: t(143.1), w: t(1.2), h: t(0.9), label: "Marmalade's front door", interact: "twolegplace", interior: "marmalade-house", style: "door" },
-  { id: "ginger-door", x: t(83.5), y: t(161.4), w: t(1.2), h: t(0.9), label: "Ginger's front door", interact: "twolegplace", interior: "ginger-house", style: "door" },
+  { id: "smudge-door", x: t(74.5), y: t(142.2), w: t(1.2), h: t(0.9), label: "Smudge's front door", interact: "twolegplace", interior: "smudge-house", style: "door" },
+  { id: "henry-door", x: t(61.2), y: t(142.2), w: t(1.2), h: t(0.9), label: "Henry's front door", interact: "twolegplace", interior: "henry-house", style: "door" },
+  { id: "princess-door", x: t(69.5), y: t(138.2), w: t(1.2), h: t(0.9), label: "Princess's front door", interact: "twolegplace", interior: "princess-house", style: "door" },
+  { id: "marmalade-door", x: t(94.6), y: t(142.2), w: t(1.2), h: t(0.9), label: "Marmalade's front door", interact: "twolegplace", interior: "marmalade-house", style: "door" },
+  { id: "ginger-door", x: t(83.5), y: t(162.2), w: t(1.2), h: t(0.9), label: "Ginger's front door", interact: "twolegplace", interior: "ginger-house", style: "door" },
   // Front paths so each doorway reads as an entrance, not a random door
   { id: "path-2", x: t(64), y: t(141.6), w: t(1.2), h: t(2.2), style: "mudpatch", detail: true },
   { id: "path-3", x: t(92), y: t(141.6), w: t(1.2), h: t(2.2), style: "mudpatch", detail: true },

@@ -1,0 +1,172 @@
+// Behavior verification: prey pounce rules + walk-through doors.
+// Run: bun scripts/check-pounce-doors.ts
+
+type AnyFn = (...args: unknown[]) => unknown;
+const gradient = { addColorStop: (() => undefined) as AnyFn };
+function makeCtx() {
+  const target: Record<string, unknown> = {};
+  return new Proxy(target, {
+    get(_t, prop) {
+      if (prop === "measureText") return () => ({ width: 12 });
+      if (prop === "createRadialGradient" || prop === "createLinearGradient" || prop === "createPattern")
+        return () => gradient;
+      if (prop === "canvas") return canvas;
+      return () => undefined;
+    },
+    set() {
+      return true;
+    },
+  });
+}
+const ctx = makeCtx();
+const canvas = {
+  getContext: () => ctx,
+  getBoundingClientRect: () => ({ width: 1280, height: 720, left: 0, top: 0, right: 1280, bottom: 720 }),
+  width: 0,
+  height: 0,
+  style: {},
+};
+(globalThis as Record<string, unknown>).window = {
+  addEventListener: () => undefined,
+  removeEventListener: () => undefined,
+  setTimeout,
+  clearTimeout,
+};
+let rafCb: ((t: number) => void) | null = null;
+(globalThis as Record<string, unknown>).requestAnimationFrame = (cb: (t: number) => void) => {
+  rafCb = cb;
+  return 1;
+};
+(globalThis as Record<string, unknown>).cancelAnimationFrame = () => undefined;
+(globalThis as Record<string, unknown>).performance = { now: () => 0 };
+
+const { GameCanvas, interiors } = await import("../src/game/engine");
+const { allObjects, isSolidPoint, SPAWN } = await import("../src/game/world");
+
+let simT = 0;
+const caught: string[] = [];
+const g = new GameCanvas(canvas as unknown as HTMLCanvasElement, SPAWN, {
+  onAreaChange: () => undefined,
+  onNearby: () => undefined,
+  onMove: () => undefined,
+  onInteract: () => undefined,
+  onPreyCaught: (k: string) => caught.push(k),
+  onClock: () => undefined,
+  onWeatherChange: () => undefined,
+  onInteriorChange: () => undefined,
+  onNpcIdle: () => undefined,
+} as never);
+
+function frames(n: number) {
+  for (let i = 0; i < n; i++) {
+    simT += 16.7;
+    rafCb?.(simT);
+    rafCb = null;
+    (g as unknown as { raf: number }).raf = 1; // keep the loop "alive"
+    // re-kick: engine schedules itself via requestAnimationFrame each frame
+    (globalThis as Record<string, unknown>).requestAnimationFrame = (cb: (t: number) => void) => {
+      rafCb = cb;
+      return 1;
+    };
+  }
+}
+// simpler: drive update/render directly each frame
+function step(n: number) {
+  for (let i = 0; i < n; i++) {
+    simT += 16.7;
+    rafCb?.(simT);
+  }
+}
+
+let failures = 0;
+const check = (cond: boolean, label: string) => {
+  console.log(`${cond ? "OK " : "✗  "} ${label}`);
+  if (!cond) failures++;
+};
+
+// ---------- TEST 1: walking over prey does NOT kill it ----------
+step(5);
+const eng = g as unknown as { prey: { id: string; x: number; y: number; phase: string }[]; px: number; py: number; time: number };
+eng.prey = [
+  {
+    id: "test-mouse",
+    x: eng.px,
+    y: eng.py, // directly under the player
+    kind: "mouse",
+    home: { x: eng.px, y: eng.py },
+    tx: eng.px,
+    ty: eng.py,
+    facing: 1,
+    fleeing: false,
+    waitUntil: 0,
+    seed: 1,
+    phase: "alive",
+    deadUntil: 0,
+  } as never,
+];
+step(30); // ~half a second of walking "through" the prey
+const aliveAfterWalk = eng.prey.some((p) => p.id === "test-mouse" && p.phase === "alive");
+check(aliveAfterWalk && caught.length === 0, "walking over prey does NOT kill it");
+
+// ---------- TEST 2: pounceAt() (the E path) kills + rewards exactly once ----------
+const kind = g.pounceAt();
+check(kind === "mouse", `pounceAt() kills the prey (returned ${kind})`);
+check(caught.length === 1 && caught[0] === "mouse", "onPreyCaught fired exactly once");
+const second = g.pounceAt();
+check(second === null && caught.length === 1, "second pounce on the same (dying) prey is ignored");
+step(45); // death pose elapses
+check(!eng.prey.some((p) => p.id === "test-mouse"), "prey fully despawned after the death pose");
+
+// ---------- TEST 3: walk-through doors — approach, auto-enter, walk out ----------
+const door = allObjects.find((o) => o.id === "smudge-door")!;
+// pathfind a straight approach: stand 20px below the door
+const below = { x: door.x, y: door.y + door.h / 2 + 20 };
+check(!isSolidPoint(below.x, below.y), "smudge-door approach point is walkable");
+eng.px = below.x;
+eng.py = below.y;
+eng.camX = below.x;
+eng.camY = below.y;
+const g2 = g as unknown as { interiorId: string | null; doorArmed: boolean; doorCooldownUntil: number; time: number };
+step(3);
+check(g2.interiorId === "smudge-house", "walking into the doorway auto-enters (no E needed)");
+step(5);
+check(g2.interiorId === "smudge-house", "staying inside keeps the room loaded");
+
+// walk out through the doorway gap
+const geo = (await import("../src/game/engine"));
+const roomGeo = (geo as unknown as { ROOM_GEO: Record<string, { w: number; h: number }> }).ROOM_GEO["smudge-house"];
+const gw = roomGeo.w;
+const gh = roomGeo.h;
+g2.px = (gw / 2) * 32;
+g2.py = (gh - 2) * 32;
+step(6);
+check(g2.interiorId === null, "walking into the bottom-wall gap exits the room");
+check(g2.doorArmed === false, "exit disarms re-entry (no bounce-back)");
+step(10);
+check(g2.interiorId === null, "standing near the door after exit does NOT re-enter");
+
+// step away, then come back — re-entry must work again
+g2.py += 90; // walk away
+step(4);
+check(g2.doorArmed === true, "stepping away re-arms the door");
+g2.py -= 90; // return
+step(4);
+check(g2.interiorId === "smudge-house", "returning to the door walks back in");
+
+// ---------- TEST 4: every interior enter/exit survives (no crash) ----------
+let allOk = true;
+for (const id of Object.keys(interiors)) {
+  try {
+    g.enterInterior(id);
+    step(3);
+    g.exitInterior();
+    step(1);
+  } catch (e) {
+    allOk = false;
+    console.log("   ✗", id, e instanceof Error ? e.message : e);
+  }
+}
+check(allOk, "all interiors cycle enter/exit without exceptions");
+
+console.log(failures === 0 ? "\nALL BEHAVIOR TESTS PASS" : `\n${failures} FAILURE(S)`);
+process.exit(failures === 0 ? 0 : 1);

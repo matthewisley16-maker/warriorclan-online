@@ -167,20 +167,89 @@ interface InteriorDef {
 const ROOM_W = 24;
 const ROOM_H = 18;
 
-function emptyRoom(): string[] {
+/** Wall rows for a w x h room with a door in the bottom wall. */
+function roomSized(w: number, h: number, cave = false): string[] {
   const rows: string[] = [];
-  for (let y = 0; y < ROOM_H; y++) {
-    rows.push(y === 0 || y === ROOM_H - 1 ? "1".repeat(ROOM_W) : "1" + "0".repeat(ROOM_W - 2) + "1");
+  for (let y = 0; y < h; y++) {
+    let row = "1".repeat(w);
+    if (y > 0 && y < h - 1) {
+      row = "1" + "0".repeat(w - 2) + "1";
+      if (cave) {
+        // round the corners like a scooped-out den
+        const indent = y === 1 || y === h - 2 ? 2 : 1;
+        row = "1".repeat(indent + 1) + "0".repeat(w - 2 * (indent + 1)) + "1".repeat(indent + 1);
+      }
+    }
+    rows.push(row);
   }
+  // doorway: two-cell gap in the bottom wall
+  const mid = Math.floor(w / 2) - 1;
+  const bottom = rows[h - 1];
+  rows[h - 1] = bottom.slice(0, mid) + "00" + bottom.slice(mid + 2);
   return rows;
 }
 
+function emptyRoom(): string[] {
+  return roomSized(ROOM_W, ROOM_H);
+}
+
 function roomWithDoor(doorSide: "bottom", doorX: number): string[] {
-  const rows = emptyRoom();
-  const mid = doorX;
-  const bottom = rows[ROOM_H - 1];
-  rows[ROOM_H - 1] = bottom.slice(0, mid) + "00" + bottom.slice(mid + 2);
-  return rows;
+  return roomSized(ROOM_W, ROOM_H);
+}
+
+/** Per-interior geometry: floor size, shape and palette. */
+interface RoomGeo {
+  w: number;
+  h: number;
+  cave: boolean;
+  floor: [string, string, string]; // base, speckle, accent
+  wall: [string, string]; // face, top edge
+}
+const ROOM_GEO: Record<string, RoomGeo> = {
+  // Clan dens — natural scooped shapes with earth/sand floors (book: sandy ravine)
+  "tc-leader-den":    { w: 16, h: 12, cave: true,  floor: ["#8a7454", "#7c6748", "#6e5a3e"], wall: ["#4a3a28", "#5d4a33"] },
+  "tc-medicine-den":  { w: 22, h: 16, cave: true,  floor: ["#7d6a4d", "#6f5e44", "#8a7757"], wall: ["#473723", "#5a4732"] },
+  "tc-nursery":       { w: 18, h: 13, cave: true,  floor: ["#9a7f58", "#8a714c", "#a68a60"], wall: ["#4d3a24", "#61492e"] },
+  "tc-warriors-den":  { w: 20, h: 15, cave: true,  floor: ["#846c48", "#76603f", "#907854"], wall: ["#423424", "#54432e"] },
+  "tc-apprentices-den": { w: 14, h: 11, cave: true, floor: ["#8d7752", "#7d6a46", "#99825c"], wall: ["#463626", "#584631"] },
+  "tc-elders-den":    { w: 17, h: 12, cave: false, floor: ["#8c7250", "#7d6444", "#9a805c"], wall: ["#4f3d26", "#63503a"] },
+  "wc-warriors-den":  { w: 18, h: 13, cave: false, floor: ["#a5905c", "#968250", "#b19c66"], wall: ["#5d4c30", "#6f5b3c"] },
+  "wc-nursery-room":  { w: 14, h: 11, cave: false, floor: ["#ab9662", "#9c8858", "#b7a26c"], wall: ["#604e32", "#725e40"] },
+  "wc-elders-room":   { w: 13, h: 10, cave: false, floor: ["#a28d5a", "#937f52", "#ad9764"], wall: ["#5b4a2f", "#6d5a3b"] },
+  "rc-warriors-den":  { w: 19, h: 14, cave: true,  floor: ["#6d6f52", "#5f6146", "#7a7c5c"], wall: ["#3c4634", "#4d5842"] },
+  "rc-nursery-room":  { w: 14, h: 11, cave: true,  floor: ["#71735a", "#63654c", "#7c7e62"], wall: ["#3d4736", "#4e5944"] },
+  "rc-elders-room":   { w: 13, h: 10, cave: false, floor: ["#6a6c50", "#5c5e44", "#757759"], wall: ["#3b4533", "#4c5741"] },
+  "sc-warriors-den":  { w: 19, h: 14, cave: true,  floor: ["#4f4a38", "#443f30", "#5a5540"], wall: ["#2e2c20", "#3d3a2c"] },
+  "sc-nursery-room":  { w: 14, h: 11, cave: true,  floor: ["#544e3a", "#494433", "#5e5842"], wall: ["#302e22", "#3f3c2e"] },
+  "sc-elders-room":   { w: 13, h: 10, cave: true,  floor: ["#4a4534", "#3f3b2c", "#544f3c"], wall: ["#2d2b1f", "#3c392b"] },
+  // Twoleg homes — wooden floors, walls to match; different sizes per house
+  "rusty-house":      { w: 22, h: 16, cave: false, floor: ["#a8784e", "#9c6e46", "#b48458"], wall: ["#cfc0a4", "#e0d2b8"] },
+  "smudge-house":     { w: 17, h: 12, cave: false, floor: ["#b08056", "#a4744d", "#bc8c60"], wall: ["#d8c8ac", "#e6d8be"] },
+  "henry-house":      { w: 18, h: 13, cave: false, floor: ["#9c7048", "#8f6642", "#a87a50"], wall: ["#c6b494", "#d6c6a6"] },
+  "princess-house":   { w: 16, h: 12, cave: false, floor: ["#c49a68", "#b78e5e", "#d0a672"], wall: ["#e2d4b8", "#efe3c9"] },
+  "marmalade-house":  { w: 21, h: 15, cave: false, floor: ["#a07648", "#946d42", "#ac8252"], wall: ["#c8b694", "#d8c8a8"] },
+  "ginger-house":     { w: 16, h: 12, cave: false, floor: ["#ac7e50", "#a0744a", "#b88a5a"], wall: ["#d0c0a0", "#ded0b2"] },
+  "house-a":          { w: 15, h: 11, cave: false, floor: ["#a87c50", "#9c724a", "#b4865a"], wall: ["#cec0a2", "#ded2b6"] },
+  "house-b":          { w: 23, h: 17, cave: false, floor: ["#a2764a", "#966e44", "#ae8256"], wall: ["#c6b694", "#d6c8a8"] },
+  "house-c":          { w: 18, h: 13, cave: false, floor: ["#8c6844", "#805f3e", "#987250"], wall: ["#b4a484", "#c4b494"] },
+  "house-d":          { w: 20, h: 15, cave: false, floor: ["#b48454", "#a87a4e", "#c0905e"], wall: ["#d4c4a4", "#e2d4b6"] },
+  "house-e":          { w: 21, h: 15, cave: false, floor: ["#ae8052", "#a2764c", "#ba8c5c"], wall: ["#d2c2a2", "#e0d2b4"] },
+  "barn":             { w: 24, h: 18, cave: false, floor: ["#96703f", "#8a6639", "#a27a46"], wall: ["#8a5a3a", "#9c6a46"] },
+  "moonstone-cave":   { w: 15, h: 12, cave: true,  floor: ["#5c5e66", "#50525a", "#686a72"], wall: ["#33343c", "#43454f"] },
+};
+
+/**
+ * Props are authored on a 24x18 design grid; remap them proportionally into
+ * each room's real size so nothing lands inside a wall of a smaller room.
+ */
+function propPx(
+  roomId: string,
+  prop: { x: number; y: number },
+): { x: number; y: number } {
+  const geo = ROOM_GEO[roomId];
+  const gx = geo ? (prop.x / 24) * geo.w : prop.x;
+  const gy = geo ? (prop.y / 18) * geo.h : prop.y;
+  return { x: gx * 32 + 16, y: gy * 32 + 16 };
 }
 
 export const interiors: Record<string, InteriorDef> = {
@@ -727,6 +796,13 @@ export const interiors: Record<string, InteriorDef> = {
   },
 };
 
+// Fit every room's wall grid to its geometry (rounded cave dens, varied
+// sizes) — the doorway gap stays centered in the bottom wall.
+for (const room of Object.values(interiors)) {
+  const geo = ROOM_GEO[room.id];
+  if (geo) room.walls = roomSized(geo.w, geo.h, geo.cave);
+}
+
 // ---------------------------------------------------------------------------
 // Prey
 // ---------------------------------------------------------------------------
@@ -849,6 +925,10 @@ export class GameCanvas {
   /** saved position to return to when leaving an interior */
   private exitPos: { x: number; y: number } | null = null;
   private huntedCount = 0;
+  /** prevents instant re-enter when stepping back out through a doorway */
+  private doorCooldownUntil = 0;
+  /** re-armed once the player steps away from every doorway */
+  private doorArmed = true;
   private sneaking = false;
 
   constructor(canvas: HTMLCanvasElement, spawn: { x: number; y: number }, cb: GameCallbacks) {
@@ -900,6 +980,7 @@ export class GameCanvas {
     this.camX = x;
     this.camY = y;
     this.interiorId = null;
+    this.doorCooldownUntil = this.time + 1.2;
     this.cb.onInteriorChange(null);
   }
 
@@ -908,10 +989,12 @@ export class GameCanvas {
     if (!room) return;
     if (!this.interiorId) this.exitPos = { x: this.px, y: this.py };
     this.interiorId = id;
-    this.px = (ROOM_W / 2) * 32;
-    this.py = (ROOM_H - 3) * 32;
+    const geo = ROOM_GEO[id];
+    this.px = ((geo?.w ?? ROOM_W) / 2) * 32;
+    this.py = ((geo?.h ?? ROOM_H) - 3) * 32;
     this.camX = this.px;
     this.camY = this.py;
+    this.doorArmed = false;
     this.cb.onInteriorChange(id);
   }
 
@@ -924,7 +1007,33 @@ export class GameCanvas {
       this.camX = this.px;
       this.camY = this.py;
     }
+    this.doorArmed = false; // must step away before walking back in
+    this.doorCooldownUntil = this.time + 1.2;
     this.cb.onInteriorChange(null);
+  }
+
+  /**
+   * Pounce on prey: the ONLY way prey dies. Returns the prey kind if a live
+   * prey was in pounce range (React awards the XP), null otherwise.
+   */
+  pounceAt(): string | null {
+    let target: (typeof this.prey)[number] | null = null;
+    let bestD = 64;
+    for (const p of this.prey) {
+      if (p.phase !== "alive") continue;
+      const d = Math.hypot(p.x - this.px, p.y - this.py);
+      if (d < bestD) {
+        bestD = d;
+        target = p;
+      }
+    }
+    if (!target) return null;
+    target.phase = "dying";
+    target.fleeing = false;
+    target.deadUntil = this.time + 0.55; // brief death pose, then despawn
+    this.huntedCount++;
+    this.cb.onPreyCaught(target.kind);
+    return target.kind;
   }
 
   addBubble(b: ChatBubble) {
@@ -1178,16 +1287,28 @@ export class GameCanvas {
       if (dx !== 0) this.pxFacing = dx > 0 ? 1 : -1;
 
       if (this.interiorId) {
-        const nx = Math.max(40, Math.min(ROOM_W * 32 - 40, this.px + dx));
-        const ny = Math.max(40, Math.min(ROOM_H * 32 - 30, this.py + dy));
-        // interior walls: crude grid check
         const room = interiors[this.interiorId];
+        const geo = ROOM_GEO[this.interiorId];
+        const gw = (geo?.w ?? ROOM_W) * 32;
+        const gh = (geo?.h ?? ROOM_H) * 32;
+        const nx = Math.max(40, Math.min(gw - 40, this.px + dx));
+        const ny = Math.max(40, Math.min(gh - 30, this.py + dy));
+        // interior walls: grid check against the room's real wall rows
         const cx = Math.floor(nx / 32);
         const cy = Math.floor(ny / 32);
         const wall = room.walls[Math.min(room.walls.length - 1, cy)]?.[cx] === "1";
         if (!wall) {
           this.px = nx;
           this.py = ny;
+        }
+        // walk-out: step into the doorway gap at the bottom wall to leave —
+        // no key press needed (mirrors the walk-in entrances outside)
+        if (
+          this.py > ((geo?.h ?? ROOM_H) - 2.1) * 32 &&
+          Math.abs(this.px - gw / 2) < 40
+        ) {
+          this.exitInterior();
+          this.doorCooldownUntil = this.time + 1.2;
         }
       } else {
         if (this.canMoveTo(this.px + dx, this.py)) this.px += dx;
@@ -1295,15 +1416,9 @@ export class GameCanvas {
             if (Math.abs(ux) > 0.2) p.facing = ux > 0 ? 1 : -1;
           }
         }
-        // catch! Prey enters the dying phase exactly once — further kills on
-        // the same animal are ignored, so the reward can never double-fire.
-        if (dToPlayer < PREY_CATCH_DIST && !this.paused) {
-          p.phase = "dying";
-          p.fleeing = false;
-          p.deadUntil = this.time + 0.55;
-          this.huntedCount++;
-          this.cb.onPreyCaught(p.kind);
-        }
+        // NOTE: walking over prey does NOT kill it. Prey only dies when the
+        // player deliberately pounces (press E on the "Pounce — <animal>"
+        // prompt) via pounceAt(). Crouch-walking close keeps it calm.
       }
       // hard despawn: dying prey is removed from the active world entirely
       this.prey = this.prey.filter((p) => p.phase === "alive" || this.time < p.deadUntil);
@@ -1322,12 +1437,30 @@ export class GameCanvas {
     let near: NearbyTarget | null = null;
     let bestD = 88;
     if (!this.interiorId) {
+      // walk-through entrances: step up to any doorway or den mouth and the
+      // player walks straight in — no key needed. Re-entry is armed only
+      // after stepping away, so exiting never bounces you back inside.
+      let nearDoor: string | null = null;
+      for (const o of allObjects) {
+        if (!o.interior) continue;
+        const th = Math.max(o.w, o.h) / 2 + 10;
+        if (Math.hypot(o.x - this.px, o.y - this.py) < th) {
+          nearDoor = o.interior;
+          break;
+        }
+      }
+      if (!nearDoor) {
+        this.doorArmed = true;
+      } else if (this.doorArmed && !this.paused && this.time > this.doorCooldownUntil) {
+        this.enterInterior(nearDoor);
+      }
       for (const o of allObjects) {
         if (o.detail) continue; // garnish never shows an interact prompt
+        if (o.interior) continue; // doorways are walked through, not pressed
         const d = Math.hypot(o.x - this.px, o.y - this.py);
         if (d < bestD) {
           bestD = d;
-          near = { kind: "object", label: o.label ?? o.id, interact: o.interact, interior: o.interior };
+          near = { kind: "object", label: o.label ?? o.id, interact: o.interact };
         }
       }
       for (const n of this.npcStates) {
@@ -1357,9 +1490,8 @@ export class GameCanvas {
     } else {
       const room = interiors[this.interiorId];
       for (const prop of room.props) {
-        const px2 = prop.x * 32 + 16;
-        const py2 = prop.y * 32 + 16;
-        const d = Math.hypot(px2 - this.px, py2 - this.py);
+        const pp = propPx(room.id, prop);
+        const d = Math.hypot(pp.x - this.px, pp.y - this.py);
         if (d < bestD) {
           bestD = d;
           near = { kind: "object", label: prop.label };
@@ -1369,16 +1501,21 @@ export class GameCanvas {
       for (const npcId of room.npcs ?? []) {
         const n = this.npcStates.find((s) => s.def.id === npcId);
         if (!n) continue;
-        const hx = 6 + (hash2(npcId.length * 7 + 3, npcId.charCodeAt(0)) * (ROOM_W - 13));
-        const hy = 6 + (hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (ROOM_H - 13));
+        const gw3 = ROOM_GEO[room.id]?.w ?? ROOM_W;
+        const gh3 = ROOM_GEO[room.id]?.h ?? ROOM_H;
+        const hx = 2.5 + hash2(npcId.length * 7 + 3, npcId.charCodeAt(0)) * (gw3 - 6);
+        const hy = 2.5 + hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (gh3 - 6);
         const d = Math.hypot(hx * 32 + 16 - this.px, hy * 32 + 16 - this.py);
         if (d < bestD) {
           bestD = d;
           near = { kind: "npc", label: n.def.name, npcId: n.def.id };
         }
       }
-      // exit door
-      const doorD = Math.hypot((ROOM_W / 2) * 32 - this.px, (ROOM_H - 1) * 32 - this.py);
+      // exit door hint (walk-out is primary; E still works near the gap)
+      const geoHint = ROOM_GEO[room.id];
+      const gwx = ((geoHint?.w ?? ROOM_W) / 2) * 32;
+      const ghy = ((geoHint?.h ?? ROOM_H) - 1) * 32;
+      const doorD = Math.hypot(gwx - this.px, ghy - this.py);
       if (doorD < 70 && !near) {
         near = { kind: "object", label: "Leave the den", interact: "exit-interior" as unknown as InteractableKind };
       }
@@ -1485,39 +1622,59 @@ export class GameCanvas {
     const room = interiors[this.interiorId!];
     if (!room) return;
 
+    const geo = ROOM_GEO[room.id] ?? { w: ROOM_W, h: ROOM_H, cave: false, floor: ["#5a4632", "#50402c", "#66543a"], wall: ["#4a3826", "#5a4736"] };
+    const RW = geo.w;
+    const RH = geo.h;
     ctx.save();
     ctx.translate(cw / 2, ch / 2);
     ctx.scale(this.scale, this.scale);
     ctx.translate(-this.camX, -this.camY);
 
-    // floor
-    ctx.fillStyle = "#5a4632";
-    ctx.fillRect(0, 0, ROOM_W * 32, ROOM_H * 32);
-    // floor texture
-    for (let y = 0; y < ROOM_H; y++) {
-      for (let x = 0; x < ROOM_W; x++) {
+    // dark surround beyond the room
+    ctx.fillStyle = "#171310";
+    ctx.fillRect(-800, -800, RW * 32 + 1600, RH * 32 + 1600);
+    // floor in the room's own palette (base + mottled speckle + worn paths)
+    ctx.fillStyle = geo.floor[0];
+    ctx.fillRect(0, 0, RW * 32, RH * 32);
+    for (let y = 0; y < RH; y++) {
+      for (let x = 0; x < RW; x++) {
         const h = hash2(x, y);
-        if (h > 0.6) {
-          ctx.fillStyle = "rgba(0,0,0,0.06)";
+        if (h > 0.72) {
+          ctx.fillStyle = geo.floor[2];
           ctx.fillRect(x * 32, y * 32, 32, 32);
+        } else if (h > 0.5) {
+          ctx.fillStyle = geo.floor[1];
+          ctx.globalAlpha = 0.5;
+          ctx.fillRect(x * 32, y * 32, 32, 32);
+          ctx.globalAlpha = 1;
+        }
+        if (h < 0.06) {
+          // sparse floor detail: pebbles / wood knots
+          ctx.fillStyle = "rgba(0,0,0,0.12)";
+          ctx.beginPath();
+          ctx.arc(x * 32 + hash2(x * 3, y) * 24 + 4, y * 32 + hash2(y * 3, x) * 24 + 4, 2.2, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
     }
-    // walls
+    // walls with per-room color + lit top edge
     for (let y = 0; y < room.walls.length; y++) {
       for (let x = 0; x < room.walls[y].length; x++) {
         if (room.walls[y][x] === "1") {
-          ctx.fillStyle = "#4a3826";
+          ctx.fillStyle = geo.wall[0];
           ctx.fillRect(x * 32, y * 32, 32, 32);
-          ctx.fillStyle = "rgba(255,255,255,0.04)";
-          ctx.fillRect(x * 32, y * 32, 32, 4);
+          ctx.fillStyle = geo.wall[1];
+          ctx.fillRect(x * 32, y * 32, 32, 5);
+          ctx.fillStyle = "rgba(0,0,0,0.18)";
+          ctx.fillRect(x * 32, y * 32 + 27, 32, 5);
         }
       }
     }
-    // props
+    // props (remapped into this room's real bounds)
     for (const prop of room.props) {
-      const x = prop.x * 32 + 16;
-      const y = prop.y * 32 + 16;
+      const pp = propPx(room.id, prop);
+      const x = pp.x;
+      const y = pp.y;
       ctx.fillStyle = "rgba(0,0,0,0.2)";
       ctx.beginPath();
       ctx.ellipse(x, y + 6, 14, 5, 0, 0, Math.PI * 2);
@@ -1678,8 +1835,10 @@ export class GameCanvas {
     for (const npcId of room.npcs ?? []) {
       const n = this.npcStates.find((s) => s.def.id === npcId);
       if (!n) continue;
-      const hx = 6 + (hash2(npcId.length * 7 + 3, npcId.charCodeAt(0)) * (ROOM_W - 13));
-      const hy = 6 + (hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (ROOM_H - 13));
+      const gw2 = geo?.w ?? ROOM_W;
+      const gh2 = geo?.h ?? ROOM_H;
+      const hx = 2.5 + hash2(npcId.length * 7 + 3, npcId.charCodeAt(0)) * (gw2 - 6);
+      const hy = 2.5 + hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (gh2 - 6);
       const nxp = hx * 32 + 16;
       const nyp = hy * 32 + 16;
       drawCat(ctx, n.def, nxp, nyp, n.facing, n.pose === "walk" ? "sit" : n.pose, this.time, n.phase);
@@ -1717,7 +1876,7 @@ export class GameCanvas {
     ctx.fillStyle = "rgba(255,255,255,0.35)";
     ctx.font = "600 12px system-ui, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("↓ leave through the gap", (ROOM_W / 2) * 32, (ROOM_H - 0.4) * 32);
+    ctx.fillText("↓ leave through the gap", (geo.w / 2) * 32, (geo.h - 0.4) * 32);
 
     ctx.restore();
 
@@ -1796,7 +1955,7 @@ export class GameCanvas {
         y: o.y,
         draw: () => {
           switch (o.style) {
-            case "tree": this.drawTree(o.x, o.y, 42, false, 0.7); break;
+            case "tree": this.drawTree(o.x, o.y, Math.max(34, Math.min(84, (o.w + o.h) * 0.3)), false, hash2(Math.round(o.x), Math.round(o.y))); break;
             case "bramble": this.drawBramble(o.x, o.y, w, h); break;
             case "bush": this.drawBush(o.x, o.y, w, h); break;
             case "log": this.drawLog(o.x, o.y, w, h); break;
@@ -1982,6 +2141,7 @@ export class GameCanvas {
     const r1 = Math.min(GROUND_ROWS - 1, Math.ceil(viewB / GROUND_CELL));
 
     const waterWave = Math.sin(this.time * 1.6) * 0.06;
+    const shimmer = Math.sin(this.time * 2.1) * 0.04;
 
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
@@ -1990,6 +2150,20 @@ export class GameCanvas {
         const pair = GROUND_COLORS[kind] ?? GROUND_COLORS[0];
         ctx.fillStyle = h > (kind === 2 ? 0.5 - waterWave : 0.5) ? pair[0] : pair[1];
         ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL, GROUND_CELL + 0.5, GROUND_CELL + 0.5);
+        if (kind === 2) {
+          // water cells: depth shading + moving highlight ribbons
+          const depth = hash2(c * 7, r * 3);
+          ctx.fillStyle = depth > 0.6 ? "rgba(20, 60, 96, 0.35)" : "rgba(40, 90, 130, 0.22)";
+          ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL, GROUND_CELL + 0.5, GROUND_CELL + 0.5);
+          const bandY = r * GROUND_CELL + ((Math.sin(this.time * 1.3 + c * 0.9 + r * 0.4) * 0.5 + 0.5) * GROUND_CELL);
+          ctx.fillStyle = `rgba(190, 225, 245, ${0.14 + shimmer})`;
+          ctx.fillRect(c * GROUND_CELL, bandY, GROUND_CELL + 0.5, 2);
+          // sparkle
+          if (h > 0.93) {
+            ctx.fillStyle = "rgba(235, 248, 255, 0.5)";
+            ctx.fillRect(c * GROUND_CELL + 10, bandY - 6, 3, 1.5);
+          }
+        }
       }
     }
 
@@ -2314,21 +2488,49 @@ export class GameCanvas {
       ctx.fillRect(0, 0, cw, ch);
     }
 
-    // ---- fog: soft wash + drifting banks ----
+    // ---- fog: layered ground mist that drifts like real fog ----
+    // Several stacked horizontal bands, each a wide soft ribbon with an
+    // irregular top edge (drawn with overlapping wide rounded strokes, not
+    // circles), slowly sliding sideways and thinning toward the sky.
     if (this.env.fog > 0.03) {
       const f = this.env.fog;
+      // vertical wash: thicker at the ground, clear sky above
       const g = ctx.createLinearGradient(0, 0, 0, ch);
-      g.addColorStop(0, `rgba(206, 214, 220, ${0.34 * f})`);
-      g.addColorStop(1, `rgba(206, 214, 220, ${0.12 * f})`);
+      g.addColorStop(0, `rgba(204, 212, 220, ${0.05 * f})`);
+      g.addColorStop(0.55, `rgba(206, 214, 222, ${0.16 * f})`);
+      g.addColorStop(1, `rgba(210, 218, 224, ${0.3 * f})`);
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, cw, ch);
-      ctx.fillStyle = `rgba(208, 216, 222, ${0.1 * f})`;
-      for (let i = 0; i < 3; i++) {
-        const bx = ((t * (8 + i * 5)) % (cw + 700)) - 350 + i * 260;
-        const by = ch * (0.25 + i * 0.22) + Math.sin(t * 0.3 + i * 2) * 20;
+      // drifting mist bands
+      const bands = 5;
+      for (let i = 0; i < bands; i++) {
+        const depth = i / (bands - 1); // 0 = far/high, 1 = near/low
+        const speed = 14 + depth * 30;
+        const y = ch * (0.34 + depth * 0.6) + Math.sin(t * 0.22 + i * 1.7) * 12;
+        const h = ch * (0.1 + depth * 0.13);
+        const alpha = (0.05 + 0.1 * depth) * f;
+        // each band is a chain of wide, soft horizontal lobes
+        const lobes = 6;
+        const period = (cw + 520) / lobes;
+        ctx.fillStyle = `rgba(212, 219, 226, ${alpha})`;
+        for (let L = -1; L < lobes + 1; L++) {
+          const lx = ((t * speed + L * period + i * 137) % (cw + 520)) - 260;
+          const lh = h * (0.7 + 0.3 * Math.sin(t * 0.5 + L * 2.1 + i));
+          ctx.beginPath();
+          ctx.ellipse(lx, y, period * 0.72, lh, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      // faint mist threads close to the ground for texture
+      ctx.strokeStyle = `rgba(216, 222, 228, ${0.07 * f})`;
+      ctx.lineWidth = 8;
+      for (let i = 0; i < 4; i++) {
+        const wy = ch * (0.78 + i * 0.05);
+        const wx = ((t * (26 + i * 9)) % (cw + 400)) - 200;
         ctx.beginPath();
-        ctx.ellipse(bx, by, 330, 90, 0, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(wx, wy);
+        ctx.quadraticCurveTo(wx + 120, wy - 8, wx + 260, wy);
+        ctx.stroke();
       }
     }
 
@@ -2363,42 +2565,132 @@ export class GameCanvas {
   }
 
   // prop draw helpers (kept local so world.ts stays data-only)
+  /**
+   * Stylized trees: oak / pine / birch (species chosen per-tree via tint).
+   * Layered foliage clusters with highlights, tapered trunk with bark
+   * texture, root flare, and shadow — readable and lush, never a blob.
+   */
   private drawTree(x: number, y: number, r: number, pine: boolean, tint: number) {
     const ctx = this.ctx;
     const sway = Math.sin(this.time * 1.1 + x * 0.03) * (1 + this.env.wind * this.windGust() * 6);
-    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    const s = tint; // 0..1 variation seed
+    // shadow
+    ctx.fillStyle = "rgba(10, 20, 12, 0.22)";
     ctx.beginPath();
-    ctx.ellipse(x + 4, y + 4, r * 0.75, r * 0.32, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + 6, y + 5, r * 0.85, r * 0.3, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#5d4a33";
-    ctx.fillRect(x - 3.5, y - r * 0.35, 7, r * 0.45);
-    ctx.save();
-    ctx.translate(sway, 0);
-    if (pine) {
-      for (let i = 3; i >= 1; i--) {
-        const ly = y - r * 0.25 * (i - 1) - r * 0.15;
-        const lw = r * (0.45 + i * 0.22);
-        ctx.fillStyle = i % 2 === 0 ? "#2e5c38" : "#356840";
-        ctx.beginPath();
-        ctx.moveTo(x - lw, ly);
-        ctx.lineTo(x, ly - r * 0.75);
-        ctx.lineTo(x + lw, ly);
-        ctx.closePath();
-        ctx.fill();
+
+    const species = pine ? "pine" : s < 0.18 ? "birch" : "oak";
+    const trunkH = r * (species === "pine" ? 0.95 : 0.62);
+
+    // root flare
+    ctx.fillStyle = "#4c3b28";
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.22, y - 2);
+    ctx.quadraticCurveTo(x - r * 0.34, y + 3, x - r * 0.44, y + 6);
+    ctx.lineTo(x + r * 0.44, y + 6);
+    ctx.quadraticCurveTo(x + r * 0.34, y + 3, x + r * 0.22, y - 2);
+    ctx.closePath();
+    ctx.fill();
+
+    // trunk (tapered) + bark strokes
+    ctx.fillStyle = species === "birch" ? "#d8d3c4" : "#5d4a33";
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.12, y - trunkH);
+    ctx.quadraticCurveTo(x - r * 0.09, y - trunkH * 0.4, x - r * 0.14, y - 2);
+    ctx.lineTo(x + r * 0.14, y - 2);
+    ctx.quadraticCurveTo(x + r * 0.09, y - trunkH * 0.4, x + r * 0.12, y - trunkH);
+    ctx.closePath();
+    ctx.fill();
+    if (species === "birch") {
+      ctx.fillStyle = "rgba(60,60,56,0.55)";
+      for (let i = 0; i < 4; i++) {
+        ctx.fillRect(x - r * 0.1 + (i % 2) * 4, y - trunkH + 8 + i * 10, 6 + (i % 2) * 3, 2);
       }
     } else {
-      const base = tint > 0.5 ? "#4a8a4c" : "#417f45";
-      const light = tint > 0.5 ? "#5d9f58" : "#549251";
-      ctx.fillStyle = base;
+      ctx.strokeStyle = "rgba(40,28,16,0.4)";
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < 3; i++) {
+        const bx = x - r * 0.06 + i * r * 0.06;
+        ctx.beginPath();
+        ctx.moveTo(bx, y - 4);
+        ctx.quadraticCurveTo(bx + 2, y - trunkH * 0.5, bx - 1, y - trunkH + 6);
+        ctx.stroke();
+      }
+    }
+    // a branch reaching out (oak only)
+    if (species === "oak") {
+      ctx.strokeStyle = "#54432e";
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(x - r * 0.35, y - r * 0.35, r * 0.6, 0, Math.PI * 2);
-      ctx.arc(x + r * 0.35, y - r * 0.4, r * 0.62, 0, Math.PI * 2);
-      ctx.arc(x, y - r * 0.75, r * 0.68, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = light;
+      ctx.moveTo(x + r * 0.05, y - trunkH * 0.72);
+      ctx.quadraticCurveTo(x + r * 0.4, y - trunkH * 0.95, x + r * 0.62, y - trunkH * 1.05);
+      ctx.stroke();
+    }
+
+    ctx.save();
+    ctx.translate(sway, 0);
+    if (species === "pine") {
+      // layered boughs, darkest at the bottom
+      const layers = 4;
+      for (let i = layers; i >= 1; i--) {
+        const ly = y - trunkH * (1 - i / (layers + 1)) - r * 0.18;
+        const lw = r * (0.4 + i * 0.2);
+        const lh = r * 0.7;
+        ctx.fillStyle = i % 2 === 0 ? "#2b5734" : "#34683f";
+        ctx.beginPath();
+        ctx.moveTo(x - lw, ly);
+        ctx.quadraticCurveTo(x - lw * 0.4, ly - lh * 0.7, x, ly - lh);
+        ctx.quadraticCurveTo(x + lw * 0.4, ly - lh * 0.7, x + lw, ly);
+        ctx.closePath();
+        ctx.fill();
+        // rim light on each bough
+        ctx.strokeStyle = "rgba(140, 200, 130, 0.28)";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(x - lw * 0.75, ly - lh * 0.28);
+        ctx.quadraticCurveTo(x, ly - lh * 0.92, x + lw * 0.75, ly - lh * 0.28);
+        ctx.stroke();
+      }
+    } else {
+      // canopy: layered clusters, light from upper-left
+      const leafA = species === "birch" ? "#6fae5c" : s > 0.5 ? "#4a8a4c" : "#417f45";
+      const leafB = species === "birch" ? "#84c06a" : "#4f9852";
+      const leafC = species === "birch" ? "#9ed07d" : "#5daa5d";
+      const cy = y - trunkH - r * 0.34;
+      const clusters: [number, number, number][] = [
+        [-r * 0.52, r * 0.08, r * 0.5],
+        [r * 0.5, r * 0.02, r * 0.52],
+        [-r * 0.22, -r * 0.3, r * 0.56],
+        [r * 0.28, -r * 0.26, r * 0.54],
+        [0, -r * 0.06, r * 0.62],
+      ];
+      for (const [dx, dy, cr] of clusters) {
+        ctx.fillStyle = leafA;
+        ctx.beginPath();
+        ctx.arc(x + dx, cy + dy, cr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // mid tone
+      ctx.fillStyle = leafB;
       ctx.beginPath();
-      ctx.arc(x - r * 0.15, y - r * 0.95, r * 0.4, 0, Math.PI * 2);
+      ctx.arc(x - r * 0.16, cy - r * 0.2, r * 0.42, 0, Math.PI * 2);
+      ctx.arc(x + r * 0.26, cy - r * 0.14, r * 0.38, 0, Math.PI * 2);
       ctx.fill();
+      // highlight
+      ctx.fillStyle = leafC;
+      ctx.beginPath();
+      ctx.arc(x - r * 0.1, cy - r * 0.42, r * 0.26, 0, Math.PI * 2);
+      ctx.fill();
+      // scattered leaf dabs for texture
+      ctx.fillStyle = "rgba(255,255,240,0.12)";
+      for (let i = 0; i < 5; i++) {
+        const lx = x - r * 0.6 + hash2(i, Math.floor(x)) * r * 1.2;
+        const ly = cy - r * 0.5 + hash2(i, Math.floor(y)) * r * 0.9;
+        ctx.beginPath();
+        ctx.ellipse(lx, ly, 2.6, 1.4, hash2(i, 3) * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.restore();
   }
@@ -2428,24 +2720,42 @@ export class GameCanvas {
 
   private drawBush(x: number, y: number, w: number, h: number) {
     const ctx = this.ctx;
+    const s = Math.abs(Math.sin(x * 0.53 + y * 0.21));
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
-    ctx.ellipse(x, y + h * 0.42, w * 0.6, h * 0.26, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y + h * 0.4, w * 0.6, h * 0.24, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#356340";
+    // dark under-layer
+    ctx.fillStyle = s > 0.5 ? "#2f5c3a" : "#356340";
     ctx.beginPath();
-    ctx.arc(x - w * 0.22, y - h * 0.05, w * 0.34, 0, Math.PI * 2);
-    ctx.arc(x + w * 0.22, y - h * 0.05, w * 0.34, 0, Math.PI * 2);
-    ctx.arc(x, y - h * 0.28, w * 0.38, 0, Math.PI * 2);
+    ctx.arc(x - w * 0.26, y - h * 0.08, w * 0.36, 0, Math.PI * 2);
+    ctx.arc(x + w * 0.26, y - h * 0.08, w * 0.36, 0, Math.PI * 2);
+    ctx.arc(x, y - h * 0.3, w * 0.4, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#41764a";
+    // mid layer
+    ctx.fillStyle = s > 0.5 ? "#3d7248" : "#437a4d";
     ctx.beginPath();
-    ctx.arc(x - w * 0.08, y - h * 0.34, w * 0.22, 0, Math.PI * 2);
+    ctx.arc(x - w * 0.16, y - h * 0.26, w * 0.3, 0, Math.PI * 2);
+    ctx.arc(x + w * 0.2, y - h * 0.22, w * 0.28, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#1e2b1c";
+    // highlights (light from upper-left)
+    ctx.fillStyle = "#549159";
     ctx.beginPath();
-    ctx.ellipse(x + w * 0.16, y + h * 0.1, w * 0.14, h * 0.16, 0, 0, Math.PI * 2);
+    ctx.arc(x - w * 0.12, y - h * 0.4, w * 0.16, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = "rgba(140, 200, 130, 0.35)";
+    ctx.beginPath();
+    ctx.arc(x - w * 0.3, y - h * 0.18, w * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    // berry dots on some bushes
+    if (s > 0.72) {
+      ctx.fillStyle = "#b5484a";
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.arc(x - w * 0.2 + i * w * 0.2, y - h * (0.15 + (i % 2) * 0.2), 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   private drawLog(x: number, y: number, w: number, h: number) {
@@ -2472,27 +2782,50 @@ export class GameCanvas {
 
   private drawRock(x: number, y: number, w: number, h: number) {
     const ctx = this.ctx;
+    const s = Math.abs(Math.sin(x * 0.37 + y * 0.11));
     ctx.fillStyle = "rgba(0,0,0,0.2)";
     ctx.beginPath();
-    ctx.ellipse(x, y + h * 0.45, w * 0.55, h * 0.26, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y + h * 0.4, w * 0.58, h * 0.24, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#8b8d92";
+    // base body: irregular faceted silhouette (two variants)
+    ctx.fillStyle = s > 0.5 ? "#84868c" : "#8d8f94";
     ctx.beginPath();
-    ctx.moveTo(x - w * 0.5, y + h * 0.35);
-    ctx.lineTo(x - w * 0.32, y - h * 0.35);
-    ctx.lineTo(x + w * 0.08, y - h * 0.5);
-    ctx.lineTo(x + w * 0.45, y - h * 0.1);
-    ctx.lineTo(x + w * 0.5, y + h * 0.35);
+    ctx.moveTo(x - w * 0.5, y + h * 0.32);
+    ctx.lineTo(x - w * 0.42, y - h * 0.14);
+    ctx.lineTo(x - w * (0.18 + s * 0.1), y - h * 0.48);
+    ctx.lineTo(x + w * (0.12 + s * 0.08), y - h * 0.52);
+    ctx.lineTo(x + w * 0.4, y - h * 0.16);
+    ctx.lineTo(x + w * 0.5, y + h * 0.32);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = "#9fa1a6";
+    // lit facet
+    ctx.fillStyle = "#a3a5aa";
     ctx.beginPath();
-    ctx.moveTo(x - w * 0.32, y - h * 0.35);
-    ctx.lineTo(x + w * 0.08, y - h * 0.5);
-    ctx.lineTo(x + w * 0.12, y - h * 0.05);
-    ctx.lineTo(x - w * 0.2, y + h * 0.02);
+    ctx.moveTo(x - w * 0.42, y - h * 0.14);
+    ctx.lineTo(x - w * (0.18 + s * 0.1), y - h * 0.48);
+    ctx.lineTo(x + w * (0.12 + s * 0.08), y - h * 0.52);
+    ctx.lineTo(x + w * 0.05, y - h * 0.05);
     ctx.closePath();
     ctx.fill();
+    // crack
+    ctx.strokeStyle = "rgba(40,42,48,0.5)";
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(x + w * 0.1, y - h * 0.4);
+    ctx.lineTo(x + w * 0.02, y - h * 0.12);
+    ctx.lineTo(x + w * 0.16, y + h * 0.18);
+    ctx.stroke();
+    // moss patch on some rocks
+    if (s > 0.55) {
+      ctx.fillStyle = "rgba(96, 142, 84, 0.75)";
+      ctx.beginPath();
+      ctx.ellipse(x - w * 0.24, y - h * 0.3, w * 0.16, h * 0.12, -0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(120, 168, 104, 0.6)";
+      ctx.beginPath();
+      ctx.ellipse(x - w * 0.28, y - h * 0.34, w * 0.08, h * 0.06, -0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   private drawStone(x: number, y: number, w: number, h: number) {
