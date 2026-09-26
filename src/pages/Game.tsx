@@ -1,259 +1,40 @@
-// WarriorCatsRPG — main game page: canvas engine + full HUD (chat, world map,
-// codex, story tracker, emotes, multiplayer presence, day/night + weather).
+// WarriorCatsRPG — main game page: canvas engine + HUD wiring. UI building
+// blocks live in gameUi.tsx; map rendering in WorldMapData.tsx.
 
 import { useMutation, useQuery } from "convex/react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
   Clock,
-  CloudRain,
-  CloudSun,
-  Compass,
   MessageCircle,
-  Moon,
   PawPrint,
-  Snowflake,
   ScrollText,
-  Send,
-  Sun,
   Users,
-  Wind,
   X,
-  Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { api } from "@/convex/_generated/api";
 import { GameCanvas, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
 import { interiors } from "@/game/engine";
-import { areas, lore, npcs, areaAt, CLAN_SPAWNS, SPAWN } from "@/game/world";
+import { lore, npcs, areaAt, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
-import { quests } from "@/game/quests";
 import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } from "./MainMenu";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
 import { WorldMapCanvas, MapLegend, WorldMapOverlay } from "./WorldMapData";
+import {
+  ChatPanel,
+  CodexPanel,
+  EMOTES,
+  EmoteBar,
+  CLANS,
+  formatHour,
+  fullSkin,
+  weatherIcon,
+  type ChatBubbleKeyed,
+  type ChatChannel,
+} from "./gameUi";
 import type { CatSkin } from "@/game/draw";
-
-/** Fill any missing appearance fields with defaults (matches the save validator). */
-function fullSkin(
-  s?: Partial<{
-    fur: string;
-    furDark: string;
-    eye: string;
-    chest: string;
-    pattern: CatSkin["pattern"];
-    furLength: number;
-    tail: CatSkin["tail"];
-    ears: CatSkin["ears"];
-    size: number;
-    scar: boolean;
-  }> | null,
-) {
-  const a = s ?? {};
-  const fur = a.fur || "#d96b2f";
-  return {
-    fur,
-    furDark: a.furDark || shade(fur, 0.62),
-    eye: a.eye || "#4fae6e",
-    chest: a.chest,
-    pattern: a.pattern ?? ("solid" as const),
-    furLength: a.furLength ?? 1,
-    tail: a.tail ?? ("normal" as const),
-    ears: a.ears ?? ("normal" as const),
-    size: a.size ?? 1,
-    scar: a.scar ?? false,
-  };
-}
-
-/** Darken a hex color for the derived furDark shade. */
-function shade(hex: string, f: number): string {
-  const n = hex.replace("#", "");
-  if (n.length !== 6) return "#5a3a20";
-  const r = Math.round(parseInt(n.slice(0, 2), 16) * f);
-  const g = Math.round(parseInt(n.slice(2, 4), 16) * f);
-  const b = Math.round(parseInt(n.slice(4, 6), 16) * f);
-  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
-}
-
-const CLANS = [
-  {
-    id: "thunderclan",
-    name: "ThunderClan",
-    desc: "Brave and loyal. Warriors of the deep forest.",
-    territory: "Oak and beech forest, Tallrock camp, Sandy Hollow",
-    color: "#4a8a4c",
-  },
-  {
-    id: "riverclan",
-    name: "RiverClan",
-    desc: "Sleek and strong swimmers. Fishers of the river.",
-    territory: "Riverbanks, reed beds, gravel camp",
-    color: "#3d6f9e",
-  },
-  {
-    id: "windclan",
-    name: "WindClan",
-    desc: "Swift runners of the open moor.",
-    territory: "Open moorland, gorse camp, rabbit warrens",
-    color: "#88b15c",
-  },
-  {
-    id: "shadowclan",
-    name: "ShadowClan",
-    desc: "Proud night hunters. The pines are theirs.",
-    territory: "Cold pine forest and marshes",
-    color: "#356840",
-  },
-];
-import { cn } from "@/lib/utils";
-
-// ---------------------------------------------------------------------------
-// Chat panel
-// ---------------------------------------------------------------------------
-
-type ChatChannel = "global" | "clan" | "local";
-
-function ChatPanel({
-  onClose,
-  channel,
-  setChannel,
-  myClan,
-  onSend,
-  messages,
-}: {
-  onClose: () => void;
-  channel: ChatChannel;
-  setChannel: (c: ChatChannel) => void;
-  myClan?: string;
-  onSend: (text: string) => void;
-  messages: { id: string; fromName: string; text: string; mine?: boolean; channel: string }[];
-}) {
-  const [draft, setDraft] = useState("");
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 20 }}
-      className="pointer-events-auto absolute bottom-3 left-3 z-30 flex h-80 w-[min(340px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/60 bg-card/95 shadow-2xl shadow-black/30 backdrop-blur-md"
-    >
-      <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
-        <div className="flex gap-1">
-          {(["global", "clan", "local"] as ChatChannel[]).map((c) => (
-            <button
-              key={c}
-              onClick={() => setChannel(c)}
-              disabled={c === "clan" && !myClan}
-              className={cn(
-                "rounded-full px-2.5 py-1 text-[11px] font-medium capitalize transition-colors disabled:opacity-40",
-                channel === c ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-              )}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-        <Button variant="ghost" size="icon" onClick={onClose} className="size-6 rounded-full">
-          <X className="size-3.5" />
-        </Button>
-      </div>
-      <div className="flex-1 space-y-1.5 overflow-y-auto px-3 py-2">
-        {messages.length === 0 && (
-          <p className="pt-6 text-center text-xs text-muted-foreground">
-            No messages yet. Say hello to the forest.
-          </p>
-        )}
-        {messages.map((m) => (
-          <div key={m.id} className="text-[12px] leading-snug">
-            <span className={cn("font-semibold", m.mine ? "text-primary" : "text-foreground/80")}>
-              {m.fromName}
-            </span>
-            <span className="text-muted-foreground/60"> {m.channel === "clan" ? "(clan) " : ""}</span>
-            <span className="text-foreground/85"> {m.text}</span>
-          </div>
-        ))}
-      </div>
-      <form
-        className="flex gap-1.5 border-t border-border/60 p-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (draft.trim()) {
-            onSend(draft.trim());
-            setDraft("");
-          }
-        }}
-      >
-        <Input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Speak as a cat…"
-          className="h-8 flex-1 rounded-full bg-muted/50 text-xs"
-          maxLength={240}
-        />
-        <Button type="submit" size="icon" className="size-8 shrink-0 rounded-full">
-          <Send className="size-3.5" />
-        </Button>
-      </form>
-    </motion.div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Emote bar
-// ---------------------------------------------------------------------------
-
-const EMOTES: { label: string; icon: string; kind: "pose" | "emote" }[] = [
-  { label: "Sit", icon: "🐱", kind: "pose" },
-  { label: "Sleep", icon: "💤", kind: "pose" },
-  { label: "Groom", icon: "🫧", kind: "pose" },
-  { label: "Crouch", icon: "🐍", kind: "pose" },
-  { label: "Meow", icon: "🗣️", kind: "emote" },
-  { label: "Purr", icon: "💛", kind: "emote" },
-  { label: "Hiss", icon: "😤", kind: "emote" },
-  { label: "Happy tail", icon: "〰️", kind: "emote" },
-];
-
-function EmoteBar({ onEmote }: { onEmote: (e: (typeof EMOTES)[number]) => void }) {
-  return (
-    <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 gap-1 rounded-2xl border border-border/60 bg-card/90 p-1.5 shadow-lg backdrop-blur-sm">
-      {EMOTES.map((e) => (
-        <button
-          key={e.label}
-          title={e.label}
-          // Don't steal keyboard focus on click, so Space/Enter keep
-          // driving the game instead of re-triggering the emote.
-          onMouseDown={(ev) => ev.preventDefault()}
-          onClick={() => onEmote(e)}
-          className="flex size-9 flex-col items-center justify-center rounded-xl text-base transition-colors hover:bg-muted"
-        >
-          <span>{e.icon}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Weather + clock chips
-// ---------------------------------------------------------------------------
-
-function weatherIcon(w: WeatherKind) {
-  switch (w) {
-    case "clear": return <Sun className="size-3.5" />;
-    case "cloudy": return <CloudSun className="size-3.5" />;
-    case "rain": case "heavy-rain": return <CloudRain className="size-3.5" />;
-    case "storm": return <Zap className="size-3.5" />;
-    case "fog": return <CloudSun className="size-3.5" />;
-    case "wind": return <Wind className="size-3.5" />;
-    case "snow": return <Snowflake className="size-3.5" />;
-    default: return <Sun className="size-3.5" />;
-  }
-}
-
-function formatHour(h: number): string {
-  const hour12 = ((h + 11) % 12) + 1;
-  return `${hour12} ${h < 12 ? "am" : "pm"}`;
-}
 
 // ---------------------------------------------------------------------------
 // Main Game component
@@ -305,7 +86,7 @@ export default function Game() {
   const [chatChannel, setChatChannel] = useState<ChatChannel>("global");
   const [discovered, setDiscovered] = useState<string[]>(["camp"]);
   const [questsDone, setQuestsDone] = useState<string[]>([]);
-  const [pos, setPos] = useState({ x: 2848, y: 3184 });
+  const [pos, setPos] = useState({ x: 78 * 32, y: 146 * 32 });
   const [clock, setClock] = useState(8);
   const [weather, setWeather] = useState<WeatherKind>("clear");
   const [interior, setInterior] = useState<string | null>(null);
@@ -849,7 +630,7 @@ export default function Game() {
         </div>
       )}
 
-      {/* Minimap — synced to the real world, with legend and waypoint line */}
+      {/* Minimap — synced to the real world, with legend */}
       <div className="absolute right-3 top-14 z-20">
         <div className="rounded-xl border border-border/60 bg-card/90 p-1.5 shadow-lg backdrop-blur-sm">
           <WorldMapCanvas
@@ -1062,133 +843,4 @@ export default function Game() {
       </AnimatePresence>
     </main>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Codex
-// ---------------------------------------------------------------------------
-
-function CodexPanel({
-  open,
-  onClose,
-  questsDone,
-  discovered,
-  storyStep,
-  mode,
-}: {
-  open: boolean;
-  onClose: () => void;
-  questsDone: string[];
-  discovered: string[];
-  storyStep: number;
-  mode: GameMode;
-}) {
-  const [tab, setTab] = useState<"story" | "places" | "clan">("story");
-  if (!open) return null;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, x: 40 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 40 }}
-      className="pointer-events-auto absolute right-3 top-14 bottom-3 z-30 flex w-[min(360px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/60 bg-card/95 shadow-2xl shadow-black/30 backdrop-blur-md"
-    >
-      <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-        <h2 className="text-sm font-semibold tracking-tight">Warrior Codex</h2>
-        <Button variant="ghost" size="icon" onClick={onClose} className="size-7 rounded-full">
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div className="flex gap-1 border-b border-border/60 px-2 py-2">
-        {(
-          [
-            ["story", mode === "story" ? "Story" : "Objectives"],
-            ["places", "Territory"],
-            ["clan", "The Clans"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={cn(
-              "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-              tab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="flex-1 space-y-3 overflow-y-auto p-4">
-        {tab === "story" && (
-          <>
-            {mode === "story" ? (
-              storySteps.map((s, i) => (
-                <div
-                  key={s.id}
-                  className={cn(
-                    "rounded-xl border p-3",
-                    i < storyStep ? "border-primary/30 bg-primary/5" : i === storyStep ? "border-primary/60 bg-primary/10" : "border-border/60 bg-muted/30 opacity-70",
-                  )}
-                >
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{s.chapter}</p>
-                  <p className={cn("mt-0.5 text-[13px] font-semibold", i === storyStep && "text-primary")}>{s.title}</p>
-                  {i === storyStep && <p className="mt-1 text-xs text-muted-foreground">{s.objectiveLabel}</p>}
-                </div>
-              ))
-            ) : (
-              <>
-                {quests.map((q) => (
-                  <div
-                    key={q.id}
-                    className={cn("rounded-xl border p-3", questsDone.includes(q.id) ? "border-primary/30 bg-primary/5" : "border-border/60 bg-muted/30")}
-                  >
-                    <p className={cn("text-[13px] font-medium", questsDone.includes(q.id) && "text-primary")}>{q.title}</p>
-                    {!questsDone.includes(q.id) && <p className="mt-0.5 text-xs text-muted-foreground">{q.hint}</p>}
-                  </div>
-                ))}
-              </>
-            )}
-          </>
-        )}
-        {tab === "places" && (
-          <>
-            {areas.map((a) => {
-              const seen = discovered.includes(a.id);
-              return (
-                <div
-                  key={a.id}
-                  className={cn("flex items-center gap-3 rounded-xl border p-3", seen ? "border-border/60 bg-muted/30" : "border-dashed border-border/40 opacity-60")}
-                >
-                  <span className={cn("size-2.5 rounded-full", seen ? "bg-primary" : "bg-muted-foreground/30")} />
-                  <div>
-                    <p className="text-[13px] font-medium">{a.name}</p>
-                    <p className="text-xs text-muted-foreground">{seen ? "Discovered" : "Undiscovered"}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </>
-        )}
-        {tab === "clan" && (
-          <>
-            {CLANS.map((c) => (
-              <div key={c.id} className="rounded-xl border border-border/60 bg-muted/30 p-3">
-                <div className="flex items-center gap-2">
-                  <span className="size-3 rounded-full" style={{ backgroundColor: c.color }} />
-                  <p className="text-[13px] font-semibold">{c.name}</p>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">{c.desc}</p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground/70">{c.territory}</p>
-              </div>
-            ))}
-          </>
-        )}
-      </div>
-    </motion.div>
-  );
-}
-
-interface ChatBubbleKeyed {
-  key: string;
 }
