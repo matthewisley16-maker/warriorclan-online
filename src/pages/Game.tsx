@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/convex/_generated/api";
 import { GameCanvas, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
 import { interiors } from "@/game/engine";
-import { areas, lore, npcs, areaAt, CLAN_SPAWNS } from "@/game/world";
+import { areas, lore, npcs, areaAt, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
 import { quests } from "@/game/quests";
 import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } from "./MainMenu";
@@ -354,16 +354,41 @@ export default function Game() {
     setPhase("loading");
   }, [player, updateCat]);
 
-  // Finish the hand-off once the save is confirmed. Waits for the player
-  // query but with a timeout escape hatch so a stalled Convex connection
-  // (e.g. inside the embedded editor preview) can never hang the loading
-  // screen forever.
+  /**
+   * Preview/offline mode: when the backend can't be reached (the embedded
+   * editor preview often stalls Convex), play locally with the same cat.
+   * Network saves fail silently; the session itself is fully playable.
+   */
+  const offlineRef = useRef(false);
+  const offlineCatName = () => {
+    try {
+      return localStorage.getItem("wcrpg-cat-name") || "Rusty";
+    } catch {
+      return "Rusty";
+    }
+  };
+
+  // Finish the hand-off once the save is confirmed. If Convex is unreachable
+  // (embedded preview), fall back to a local session instead of bouncing
+  // back to the main menu.
   useEffect(() => {
     if (phase !== "loading") return;
     let cancelled = false;
-    const fallback = window.setTimeout(() => {
-      if (!cancelled) setPhase("menu");
-    }, 10000);
+    const beginOffline = () => {
+      if (cancelled) return;
+      offlineRef.current = true;
+      setMode(pendingMode ?? "open");
+      setMyCat((c) =>
+        c ?? { name: offlineCatName(), clan: "thunderclan", appearance: fullSkin(undefined) },
+      );
+      setPhase("playing");
+    };
+    // already known-offline: start instantly
+    if (offlineRef.current && !player) {
+      beginOffline();
+      return;
+    }
+    const fallback = window.setTimeout(beginOffline, 6000);
     if (!player) return () => { cancelled = true; window.clearTimeout(fallback); };
     const m = pendingMode ?? "open";
     setMode(m);
@@ -376,7 +401,7 @@ export default function Game() {
         if (!cancelled) setPhase("playing");
       })
       .catch(() => {
-        if (!cancelled) setPhase("menu");
+        if (!cancelled) beginOffline();
       });
     return () => {
       cancelled = true;
@@ -384,10 +409,11 @@ export default function Game() {
     };
   }, [phase, player, pendingMode, ensurePlayer]);
 
-  // Boot the engine.
+  // Boot the engine. Works with OR without a confirmed save (offline preview
+  // spawns in Twolegplace with the local cat).
   useEffect(() => {
-    if (phase !== "playing" || !player || !pendingMode || !canvasRef.current || gameRef.current) return;
-    const spawn = pendingSpawn ?? { x: player.x, y: player.y };
+    if (phase !== "playing" || !pendingMode || !canvasRef.current || gameRef.current) return;
+    const spawn = pendingSpawn ?? (player ? { x: player.x, y: player.y } : SPAWN);
 
     const game = new GameCanvas(canvasRef.current, spawn, {
       onAreaChange: (name, id) => {

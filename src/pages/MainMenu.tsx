@@ -885,15 +885,27 @@ export default function MainMenu({
             }}
           />
         )}
-        {screen === "character" && player && (
+        {screen === "character" && (
           <CharacterScreen
             key="character"
-            player={player}
+            player={
+              player ?? {
+                name: "Rusty",
+                clan: "thunderclan",
+                rank: "kittypet",
+                xp: 0,
+                skin: previewSkin,
+                inventory: [],
+                achievements: [],
+                storyStep: 0,
+                skills: { hunt: 1, fight: 1, herb: 0 },
+              }
+            }
             onClose={() => setScreen("menu")}
             onSave={(v) => {
-              if (v.name && v.name !== player.name) onSaveName(v.name);
+              if (v.name && (!player || v.name !== player.name)) onSaveName(v.name);
               if (v.skin) onSaveSkin(v.skin);
-              if (v.clan && v.clan !== (player.clan ?? "thunderclan")) onSaveClan(v.clan);
+              if (v.clan && (!player || v.clan !== (player.clan ?? "thunderclan"))) onSaveClan(v.clan);
               setScreen("menu");
             }}
           />
@@ -966,13 +978,12 @@ export default function MainMenu({
             transition={{ delay: 0.55 }}
             className="mt-auto flex flex-wrap items-center justify-center gap-2.5 pt-5"
           >
-            <MenuButton icon={User} label="Character" onClick={() => setScreen("character")} disabled={!player} />
+            <MenuButton icon={User} label="Character" onClick={() => setScreen("character")} />
             <MenuButton icon={SettingsIcon} label="Settings" onClick={() => setScreen("settings")} />
             <MenuButton
               icon={ArrowRight}
               label="Continue"
               onClick={() => onPlay(player && (player.storyStep ?? 0) > 0 && (player.storyStep ?? 0) < 16 ? "story" : "open", "")}
-              disabled={!player}
             />
           </motion.div>
           <p className="mt-2.5 pb-1 text-center text-[10px] text-white/40">
