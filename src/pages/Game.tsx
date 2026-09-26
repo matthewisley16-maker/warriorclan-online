@@ -268,6 +268,8 @@ export default function Game() {
   const [pendingSpawn, setPendingSpawn] = useState<{ x: number; y: number } | null>(null);
   const [pauseOpen, setPauseOpen] = useState(false);
   const [catClanOpen, setCatClanOpen] = useState(false);
+  /** live facing for the minimap arrow (engine mutates a ref, so poll it) */
+  const [facing, setFacing] = useState<1 | -1>(1);
   const [gameSettings, setGameSettings] = useState<Settings>(() => loadSettings());
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -530,6 +532,16 @@ export default function Game() {
   useEffect(() => {
     gameRef.current?.setCameraScale(gameSettings.cameraDistance);
   }, [gameSettings, phase]);
+
+  // Keep the minimap arrow direction in sync with the player's facing.
+  useEffect(() => {
+    if (phase !== "playing") return;
+    const t = window.setInterval(() => {
+      const f = gameRef.current?.facing;
+      if (f) setFacing((prev) => (prev === f ? prev : f));
+    }, 250);
+    return () => window.clearInterval(t);
+  }, [phase]);
 
   // Esc toggles the in-game pause menu (unless typing in chat).
   useEffect(() => {
@@ -843,7 +855,7 @@ export default function Game() {
           <WorldMapCanvas
             px={pos.x}
             py={pos.y}
-            facing={gameRef.current?.facing ?? 1}
+            facing={facing}
             playerClan={myCat?.clan}
             discovered={discovered}
             size={116}
@@ -952,7 +964,7 @@ export default function Game() {
             onClose={() => setMapOpen(false)}
             px={pos.x}
             py={pos.y}
-            facing={gameRef.current?.facing ?? 1}
+            facing={facing}
             playerClan={myCat?.clan}
             discovered={discovered}
             remotePlayers={(gameRef.current?.remoteList ?? []).map((r) => ({ x: r.x, y: r.y }))}
