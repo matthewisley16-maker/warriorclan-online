@@ -1,27 +1,41 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { SPAWN } from "../game/world";
+import { SPAWN, CLAN_SPAWNS, appearance } from "../game/saveShared";
 
-/** Get the current player's save. Creates one on first call. */
+export const defaultAppearance = {
+  fur: "#d96b2f",
+  furDark: "#b04f1d",
+  eye: "#4fae6e",
+  chest: "#f4e9d8",
+  pattern: "solid" as const,
+  furLength: 1,
+  tail: "normal" as const,
+  ears: "normal" as const,
+  size: 1,
+  scar: false,
+};
+
 export const getPlayer = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) return null;
-    const existing = await ctx.db
+    return await ctx.db
       .query("players")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .first();
-    if (existing) return existing;
-    return null;
   },
 });
 
-/** Create the initial save. Called by ensurePlayer mutation below. */
+/** Create the save if absent. */
 export const ensurePlayer = mutation({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    mode: v.union(v.literal("story"), v.literal("open")),
+    appearance,
+    catName: v.string(),
+  },
+  handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Not signed in");
     const existing = await ctx.db
@@ -32,11 +46,20 @@ export const ensurePlayer = mutation({
     const now = Date.now();
     const id = await ctx.db.insert("players", {
       userId,
-      catName: "Firepaw",
+      mode: args.mode,
+      catName: args.catName,
+      clan: undefined,
+      rank: args.mode === "story" ? "kittypet" : "apprentice",
+      xp: 0,
+      inventory: [],
+      achievements: [],
+      appearance: args.appearance,
       x: SPAWN.x,
       y: SPAWN.y,
-      discovered: ["thunderclan-territory"],
+      discovered: ["camp"],
+      storyStep: 0,
       questsDone: [],
+      skills: { hunt: 1, fight: 1, herb: 0 },
       createdAt: now,
       updatedAt: now,
     });
@@ -44,8 +67,7 @@ export const ensurePlayer = mutation({
   },
 });
 
-/** Save position + any newly discovered areas. */
-export const saveProgress = mutation({
+export const savePosition = mutation({
   args: {
     x: v.number(),
     y: v.number(),
@@ -54,59 +76,155 @@ export const saveProgress = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Not signed in");
-    const player = await ctx.db
+    const p = await ctx.db
       .query("players")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .first();
-    if (!player) throw new Error("No player save");
+    if (!p) throw new Error("No player save");
     const discovered =
-      args.discovered && args.discovered.length > player.discovered.length
+      args.discovered && args.discovered.length > (p.discovered?.length ?? 0)
         ? args.discovered
-        : player.discovered;
-    await ctx.db.patch(player._id, {
-      x: args.x,
-      y: args.y,
-      discovered,
+        : p.discovered;
+    await ctx.db.patch(p._id, { x: args.x, y: args.y, discovered, updatedAt: Date.now() });
+    return true;
+  },
+});
+
+export const completeQuest = mutation({
+  args: { questId: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const questsDone = p.questsDone ?? [];
+    if (questsDone.includes(args.questId)) return false;
+    await ctx.db.patch(p._id, {
+      questsDone: [...questsDone, args.questId],
+      xp: (p.xp ?? 0) + 10,
       updatedAt: Date.now(),
     });
     return true;
   },
 });
 
-/** Mark a quest/objective as done (e.g. "met-bluestar"). */
-export const completeQuest = mutation({
-  args: { questId: v.string() },
+export const setStoryStep = mutation({
+  args: { step: v.number() },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Not signed in");
-    const player = await ctx.db
+    const p = await ctx.db
       .query("players")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .first();
-    if (!player) throw new Error("No player save");
-    if (player.questsDone.includes(args.questId)) return false;
-    const questsDone = [...player.questsDone, args.questId];
-    await ctx.db.patch(player._id, { questsDone, updatedAt: Date.now() });
+    if (!p) throw new Error("No player save");
+    await ctx.db.patch(p._id, {
+      storyStep: Math.max(args.step, p.storyStep ?? 0),
+      updatedAt: Date.now(),
+    });
     return true;
   },
 });
 
-/** Reset the save back to spawn (used by the "New game" button). */
+export const joinClan = mutation({
+  args: { clan: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const spawn = CLAN_SPAWNS[args.clan] ?? SPAWN;
+    await ctx.db.patch(p._id, {
+      clan: args.clan,
+      rank: "apprentice",
+      x: spawn.x,
+      y: spawn.y,
+      updatedAt: Date.now(),
+    });
+    return true;
+  },
+});
+
+export const addXp = mutation({
+  args: { amount: v.number() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const xp = (p.xp ?? 0) + args.amount;
+    let rank = p.rank ?? "kit";
+    if (xp >= 300) rank = "warrior";
+    else if (xp >= 100) rank = "apprentice";
+    await ctx.db.patch(p._id, { xp, rank, updatedAt: Date.now() });
+    return { xp, rank };
+  },
+});
+
+export const addItem = mutation({
+  args: { item: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const inventory = p.inventory ?? [];
+    if (inventory.includes(args.item)) return false;
+    await ctx.db.patch(p._id, { inventory: [...inventory, args.item], updatedAt: Date.now() });
+    return true;
+  },
+});
+
+export const unlockAchievement = mutation({
+  args: { achievement: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const achievements = p.achievements ?? [];
+    if (achievements.includes(args.achievement)) return false;
+    await ctx.db.patch(p._id, {
+      achievements: [...achievements, args.achievement],
+      updatedAt: Date.now(),
+    });
+    return true;
+  },
+});
+
 export const resetPlayer = mutation({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Not signed in");
-    const player = await ctx.db
+    const p = await ctx.db
       .query("players")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .first();
-    if (player) {
-      await ctx.db.patch(player._id, {
+    if (p) {
+      await ctx.db.patch(p._id, {
         x: SPAWN.x,
         y: SPAWN.y,
-        discovered: ["thunderclan-territory"],
+        discovered: ["camp"],
+        storyStep: 0,
         questsDone: [],
+        xp: 0,
+        rank: "kittypet",
         updatedAt: Date.now(),
       });
     }

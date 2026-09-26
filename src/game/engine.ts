@@ -1,5 +1,6 @@
-// WarriorCatsRPG — canvas engine. Renders the ThunderClan forest world
-// programmatically (no external assets) and simulates the player + NPCs.
+// WarriorCatsRPG — canvas engine: renders the four-Clan world, simulates the
+// player, NPC schedules, prey AI, day/night, weather, multiplayer remotes,
+// emotes, and interior rooms.
 
 import {
   allObjects,
@@ -14,41 +15,92 @@ import {
   groundMap,
   isSolidPoint,
   npcs,
-  playerDef,
-  TILE,
+  preyZones,
   trees,
   WORLD_H,
   WORLD_W,
   type InteractableKind,
   type NPCDef,
+  type PreyKind,
 } from "./world";
+import {
+  drawBarn,
+  drawCat,
+  drawCave,
+  drawFence,
+  drawFlowerBed,
+  drawFreshKillPile,
+  drawHerbPatch,
+  drawHouse,
+  drawPrey,
+  drawReeds,
+  drawTallRock,
+  type CatPose,
+  type CatSkin,
+  type PreySprite,
+} from "./draw";
 
 export interface NearbyTarget {
-  kind: "object" | "npc";
+  kind: "object" | "npc" | "prey" | "remote";
   label: string;
   interact?: InteractableKind;
   npcId?: string;
+  interior?: string;
+  preyId?: string;
+  remoteUserId?: string;
+}
+
+export interface RemotePlayer {
+  userId: string;
+  catName: string;
+  clan?: string;
+  rank?: string;
+  appearance: CatSkin;
+  x: number;
+  y: number;
+  facing: number;
+  moving: boolean;
+  emote?: string;
+}
+
+export interface ChatBubble {
+  name: string;
+  text: string;
+  until: number;
+  x: number;
+  y: number;
 }
 
 export interface GameCallbacks {
-  onAreaChange: (name: string) => void;
+  onAreaChange: (name: string, id: string) => void;
   onNearby: (target: NearbyTarget | null) => void;
   onInteract: (target: NearbyTarget) => void;
   onMove: (x: number, y: number) => void;
+  onPreyCaught: (kind: PreyKind) => void;
+  onClock: (hour: number) => void;
+  onWeatherChange: (w: WeatherKind) => void;
+  onInteriorChange: (id: string | null) => void;
 }
 
-// ---------------------------------------------------------------------------
-// Ground palette
-// ---------------------------------------------------------------------------
+export type WeatherKind =
+  | "clear" | "cloudy" | "rain" | "heavy-rain" | "fog" | "storm" | "wind";
 
+const WEATHERS: WeatherKind[] = ["clear", "cloudy", "rain", "heavy-rain", "fog", "storm", "wind"];
+const WEATHER_WEIGHTS: number[] = [30, 18, 14, 7, 8, 5, 18];
+
+// Ground palettes: [base, alt] per kind index, and night-dark multiplier.
 const GROUND_COLORS: Record<number, [string, string]> = {
   0: ["#3f7d43", "#468749"], // grass
   1: ["#cbb27e", "#d4bc8a"], // sand
   2: ["#3d6f9e", "#467cab"], // water
   3: ["#8d8f93", "#97999e"], // stone
-  4: ["#3a3d42", "#43464c"], // paved (Thunderpath)
+  4: ["#3a3d42", "#43464c"], // paved
   5: ["#35663c", "#3c7043"], // pine floor
-  6: ["#96794f", "#a18457"], // dirt trail
+  6: ["#96794f", "#a18457"], // dirt
+  7: ["#7fa854", "#88b15c"], // moor
+  8: ["#4a6350", "#526d59"], // marsh
+  9: ["#b3a37c", "#bcaa86"], // riverbank
+  10: ["#5c7d4a", "#648753"], // reeds
 };
 
 function hash2(x: number, y: number): number {
@@ -57,336 +109,195 @@ function hash2(x: number, y: number): number {
   return ((h ^ (h >> 16)) >>> 0) / 0xffffffff;
 }
 
-// ---------------------------------------------------------------------------
-// Cat sprite
-// ---------------------------------------------------------------------------
-
-interface CatSkin {
-  fur: string;
-  furDark: string;
-  eye: string;
-  chest?: string;
-}
-
-function drawCat(
-  ctx: CanvasRenderingContext2D,
-  skin: CatSkin,
-  x: number,
-  y: number,
-  facing: 1 | -1,
-  moving: boolean,
-  time: number,
-  phase: number,
-  scale = 1,
-) {
-  const idleFor = moving ? 0 : 2.2;
-  const sitting = !moving && Math.sin(time * 0.15 + phase) > 0.92 - idleFor * 0.2;
-  const bob = moving ? Math.abs(Math.sin(time * 9 + phase)) * 1.6 : Math.sin(time * 1.4 + phase) * 0.5;
-
-  ctx.save();
-  ctx.translate(x, y);
-
-  // shadow
-  ctx.fillStyle = "rgba(0,0,0,0.22)";
-  ctx.beginPath();
-  ctx.ellipse(0, 2, 15 * scale, 6 * scale, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.scale(facing * scale, scale);
-  ctx.translate(0, -bob);
-
-  // tail
-  const tailSway = Math.sin(time * 2.2 + phase) * (moving ? 5 : 9);
-  ctx.strokeStyle = skin.furDark;
-  ctx.lineWidth = 4.5;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  if (sitting) {
-    ctx.moveTo(-10, -4);
-    ctx.quadraticCurveTo(-20, -2, -16, 6);
-  } else {
-    ctx.moveTo(-11, -8);
-    ctx.quadraticCurveTo(-20, -14 + tailSway * 0.4, -24, -20 + tailSway);
+function pickWeather(): WeatherKind {
+  const total = WEATHER_WEIGHTS.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < WEATHERS.length; i++) {
+    r -= WEATHER_WEIGHTS[i];
+    if (r <= 0) return WEATHERS[i];
   }
-  ctx.stroke();
-
-  // hind leg
-  ctx.fillStyle = skin.furDark;
-  ctx.fillRect(-9, -4 + (moving ? Math.sin(time * 9 + phase) * 2.5 : 0), 4, 7);
-
-  // body
-  ctx.fillStyle = skin.fur;
-  ctx.beginPath();
-  if (sitting) {
-    ctx.ellipse(0, -7, 9, 11, 0, 0, Math.PI * 2);
-  } else {
-    ctx.ellipse(0, -7, 11.5, 7, 0, 0, Math.PI * 2);
-  }
-  ctx.fill();
-
-  // chest / belly
-  if (skin.chest) {
-    ctx.fillStyle = skin.chest;
-    ctx.beginPath();
-    ctx.ellipse(6, -4.5, 4.5, sitting ? 7 : 4.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // front leg
-  ctx.fillStyle = skin.fur;
-  ctx.fillRect(5, -4 + (moving ? Math.sin(time * 9 + phase + Math.PI) * 2.5 : 0), 4, 7);
-
-  // head
-  const headX = sitting ? 4 : 9;
-  const headY = sitting ? -16 : -11;
-  ctx.fillStyle = skin.fur;
-  ctx.beginPath();
-  ctx.arc(headX, headY, 6.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  // ears
-  ctx.beginPath();
-  ctx.moveTo(headX - 5.5, headY - 3.5);
-  ctx.lineTo(headX - 3, headY - 10);
-  ctx.lineTo(headX - 0.5, headY - 4.5);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(headX + 1, headY - 5);
-  ctx.lineTo(headX + 3.5, headY - 10.5);
-  ctx.lineTo(headX + 6, headY - 3.5);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = "#c98a8a";
-  ctx.beginPath();
-  ctx.moveTo(headX + 2.2, headY - 5.6);
-  ctx.lineTo(headX + 3.5, headY - 8.8);
-  ctx.lineTo(headX + 4.8, headY - 5.2);
-  ctx.closePath();
-  ctx.fill();
-
-  // muzzle
-  ctx.fillStyle = "rgba(255,255,255,0.25)";
-  ctx.beginPath();
-  ctx.ellipse(headX + 4, headY + 2.5, 3, 2.2, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // eye (blink)
-  const blink = Math.sin(time * 0.9 + phase * 3) > 0.985 ? 0.15 : 1;
-  ctx.fillStyle = skin.eye;
-  ctx.beginPath();
-  ctx.ellipse(headX + 3.5, headY - 0.5, 1.7, 1.7 * blink, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#1a1a1a";
-  ctx.beginPath();
-  ctx.ellipse(headX + 3.9, headY - 0.5, 0.8, 1.3 * blink, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // whiskers
-  ctx.strokeStyle = "rgba(255,255,255,0.5)";
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(headX + 6, headY + 1.5);
-  ctx.lineTo(headX + 11, headY + 0.5);
-  ctx.moveTo(headX + 6, headY + 2.5);
-  ctx.lineTo(headX + 11, headY + 3);
-  ctx.stroke();
-
-  ctx.restore();
+  return "clear";
 }
 
 // ---------------------------------------------------------------------------
-// Prop drawing
+// Interiors
 // ---------------------------------------------------------------------------
 
-function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, pine: boolean, tint: number) {
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.beginPath();
-  ctx.ellipse(x + 4, y + 4, r * 0.75, r * 0.32, 0, 0, Math.PI * 2);
-  ctx.fill();
+interface InteriorDef {
+  id: string;
+  name: string;
+  /** wall layout in a 24x18 room of 32px cells; 1 = wall */
+  walls: string[];
+  props: { id: string; x: number; y: number; label: string; style: "nest" | "herbs" | "stone" | "moss" | "plank" | "hay" | "bowl" }[];
+  /** text shown when entering */
+  desc: string;
+  npcs?: string[]; // npc ids positioned here
+}
 
-  ctx.fillStyle = "#5d4a33";
-  ctx.fillRect(x - 3.5, y - r * 0.35, 7, r * 0.45);
+const ROOM_W = 24;
+const ROOM_H = 18;
 
-  if (pine) {
-    const layers = 3;
-    for (let i = layers; i >= 1; i--) {
-      const ly = y - (r * 0.25 * (i - 1)) - r * 0.15;
-      const lw = r * (0.45 + i * 0.22);
-      const shade = i % 2 === 0 ? "#2e5c38" : "#356840";
-      ctx.fillStyle = shade;
-      ctx.beginPath();
-      ctx.moveTo(x - lw, ly);
-      ctx.lineTo(x, ly - r * 0.75);
-      ctx.lineTo(x + lw, ly);
-      ctx.closePath();
-      ctx.fill();
-    }
-  } else {
-    const base = tint > 0.5 ? "#4a8a4c" : "#417f45";
-    const light = tint > 0.5 ? "#5d9f58" : "#549251";
-    ctx.fillStyle = base;
-    ctx.beginPath();
-    ctx.arc(x - r * 0.35, y - r * 0.35, r * 0.6, 0, Math.PI * 2);
-    ctx.arc(x + r * 0.35, y - r * 0.4, r * 0.62, 0, Math.PI * 2);
-    ctx.arc(x, y - r * 0.75, r * 0.68, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = light;
-    ctx.beginPath();
-    ctx.arc(x - r * 0.15, y - r * 0.95, r * 0.4, 0, Math.PI * 2);
-    ctx.fill();
+function emptyRoom(): string[] {
+  const rows: string[] = [];
+  for (let y = 0; y < ROOM_H; y++) {
+    rows.push(y === 0 || y === ROOM_H - 1 ? "1".repeat(ROOM_W) : "1" + "0".repeat(ROOM_W - 2) + "1");
   }
+  return rows;
 }
 
-function drawBramble(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.beginPath();
-  ctx.ellipse(x, y + h * 0.42, w * 0.62, h * 0.28, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#5a4632";
-  ctx.beginPath();
-  ctx.ellipse(x, y, w * 0.55, h * 0.42, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // tangled vines
-  ctx.strokeStyle = "#6e573c";
-  ctx.lineWidth = 2;
-  for (let i = 0; i < 4; i++) {
-    ctx.beginPath();
-    ctx.arc(x - w * 0.2 + i * w * 0.14, y - h * 0.08, w * 0.3, Math.PI * 0.15, Math.PI * 0.95);
-    ctx.stroke();
-  }
-  // dark entrance
-  ctx.fillStyle = "#241c12";
-  ctx.beginPath();
-  ctx.ellipse(x, y + h * 0.12, w * 0.18, h * 0.2, 0, 0, Math.PI * 2);
-  ctx.fill();
+function roomWithDoor(doorSide: "bottom", doorX: number): string[] {
+  const rows = emptyRoom();
+  const mid = doorX;
+  const bottom = rows[ROOM_H - 1];
+  rows[ROOM_H - 1] = bottom.slice(0, mid) + "00" + bottom.slice(mid + 2);
+  return rows;
 }
 
-function drawBush(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.beginPath();
-  ctx.ellipse(x, y + h * 0.42, w * 0.6, h * 0.26, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#356340";
-  ctx.beginPath();
-  ctx.arc(x - w * 0.22, y - h * 0.05, w * 0.34, 0, Math.PI * 2);
-  ctx.arc(x + w * 0.22, y - h * 0.05, w * 0.34, 0, Math.PI * 2);
-  ctx.arc(x, y - h * 0.28, w * 0.38, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#41764a";
-  ctx.beginPath();
-  ctx.arc(x - w * 0.08, y - h * 0.34, w * 0.22, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#1e2b1c";
-  ctx.beginPath();
-  ctx.ellipse(x + w * 0.16, y + h * 0.1, w * 0.14, h * 0.16, 0, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawLog(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.beginPath();
-  ctx.ellipse(x, y + h * 0.45, w * 0.58, h * 0.24, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#6a5138";
-  ctx.beginPath();
-  ctx.roundRect(x - w * 0.5, y - h * 0.32, w, h * 0.64, h * 0.32);
-  ctx.fill();
-  ctx.fillStyle = "#7d6144";
-  ctx.beginPath();
-  ctx.roundRect(x - w * 0.5, y - h * 0.32, w, h * 0.28, h * 0.28);
-  ctx.fill();
-  ctx.fillStyle = "#4f7a43";
-  for (let i = 0; i < 3; i++) {
-    ctx.beginPath();
-    ctx.arc(x - w * 0.3 + i * w * 0.3, y + h * 0.05, h * 0.16, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-function drawRock(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  ctx.fillStyle = "rgba(0,0,0,0.2)";
-  ctx.beginPath();
-  ctx.ellipse(x, y + h * 0.45, w * 0.55, h * 0.26, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#8b8d92";
-  ctx.beginPath();
-  ctx.moveTo(x - w * 0.5, y + h * 0.35);
-  ctx.lineTo(x - w * 0.32, y - h * 0.35);
-  ctx.lineTo(x + w * 0.08, y - h * 0.5);
-  ctx.lineTo(x + w * 0.45, y - h * 0.1);
-  ctx.lineTo(x + w * 0.5, y + h * 0.35);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = "#9fa1a6";
-  ctx.beginPath();
-  ctx.moveTo(x - w * 0.32, y - h * 0.35);
-  ctx.lineTo(x + w * 0.08, y - h * 0.5);
-  ctx.lineTo(x + w * 0.12, y - h * 0.05);
-  ctx.lineTo(x - w * 0.2, y + h * 0.02);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function drawStone(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  ctx.fillStyle = "#84868b";
-  ctx.beginPath();
-  ctx.ellipse(x, y, w * 0.5, h * 0.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#a3a5aa";
-  ctx.beginPath();
-  ctx.ellipse(x - w * 0.1, y - h * 0.14, w * 0.26, h * 0.22, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // water glint (medicine stone pool)
-  ctx.fillStyle = "#5f8fb8";
-  ctx.beginPath();
-  ctx.ellipse(x + w * 0.08, y + h * 0.05, w * 0.16, h * 0.14, 0, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawFreshKill(ctx: CanvasRenderingContext2D, x: number, y: number) {
-  const mice: [number, number, string][] = [
-    [-6, 0, "#8f8f96"],
-    [5, 3, "#a5764a"],
-    [0, -5, "#7a7a80"],
-  ];
-  for (const [dx, dy, c] of mice) {
-    ctx.strokeStyle = c;
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(x + dx + 5, y + dy);
-    ctx.quadraticCurveTo(x + dx + 9, y + dy - 2, x + dx + 11, y + dy);
-    ctx.stroke();
-    ctx.fillStyle = c;
-    ctx.beginPath();
-    ctx.ellipse(x + dx, y + dy, 5, 3, 0.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(x + dx - 5, y + dy - 1, 1.6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-function drawStump(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.beginPath();
-  ctx.ellipse(x + 3, y + 4, r * 0.9, r * 0.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#6a5138";
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#57422d";
-  ctx.lineWidth = 1.5;
-  for (let i = 1; i <= 3; i++) {
-    ctx.beginPath();
-    ctx.arc(x, y, r * (i / 4), 0, Math.PI * 2);
-    ctx.stroke();
-  }
-}
+export const interiors: Record<string, InteriorDef> = {
+  "tc-leader-den": {
+    id: "tc-leader-den",
+    name: "The Leader's Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest", x: 12, y: 6, label: "Bluestar's moss nest", style: "nest" },
+      { id: "moss1", x: 6, y: 10, label: "Soft lichen", style: "moss" },
+      { id: "moss2", x: 18, y: 10, label: "Soft lichen", style: "moss" },
+    ],
+    desc: "A hidden den behind Tallrock, soft with moss and lichen. Starlight filters through a crack in the stone.",
+    npcs: ["bluestar"],
+  },
+  "tc-medicine-den": {
+    id: "tc-medicine-den",
+    name: "The Medicine Cat's Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "herb1", x: 5, y: 6, label: "Marigold", style: "herbs" },
+      { id: "herb2", x: 7, y: 5, label: "Catmint", style: "herbs" },
+      { id: "herb3", x: 9, y: 6, label: "Poppy seeds", style: "herbs" },
+      { id: "herb4", x: 5, y: 9, label: "Cobwebs", style: "herbs" },
+      { id: "herb5", x: 7, y: 9, label: "Feverfew", style: "herbs" },
+      { id: "pool", x: 17, y: 8, label: "Pool of rainwater", style: "stone" },
+      { id: "nest", x: 13, y: 11, label: "Spottedleaf's nest", style: "nest" },
+    ],
+    desc: "A crevice in the rock, screened by a bramble. Cracks in the stone hold neat stores of herbs. A smooth pool reflects the sky.",
+    npcs: ["spottedleaf"],
+  },
+  "tc-nursery": {
+    id: "tc-nursery",
+    name: "The Nursery",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 7, label: "Queen's nest", style: "nest" },
+      { id: "nest2", x: 15, y: 7, label: "Queen's nest", style: "nest" },
+      { id: "nest3", x: 11, y: 12, label: "Kit nest", style: "nest" },
+      { id: "feathers", x: 18, y: 12, label: "Feathers and moss", style: "moss" },
+    ],
+    desc: "The deepest, best-guarded den in camp, lined with feathers and moss. Kits tumble over their sleeping mothers.",
+    npcs: ["willowpelt"],
+  },
+  "tc-warriors-den": {
+    id: "tc-warriors-den",
+    name: "The Warriors' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 7, y: 6, label: "Moss nest", style: "nest" },
+      { id: "nest2", x: 12, y: 6, label: "Moss nest", style: "nest" },
+      { id: "nest3", x: 17, y: 6, label: "Moss nest", style: "nest" },
+      { id: "nest4", x: 7, y: 11, label: "Moss nest", style: "nest" },
+      { id: "nest5", x: 17, y: 11, label: "Moss nest", style: "nest" },
+    ],
+    desc: "A dark, tangled thornbush. Inside, moss-lined nests are packed tight — the first line of defense if the camp is attacked.",
+    npcs: ["lionheart", "tigerclaw"],
+  },
+  "tc-apprentices-den": {
+    id: "tc-apprentices-den",
+    name: "The Apprentices' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 9, y: 7, label: "Moss nest", style: "nest" },
+      { id: "nest2", x: 14, y: 7, label: "Moss nest", style: "nest" },
+      { id: "nest3", x: 11, y: 12, label: "Moss nest", style: "nest" },
+    ],
+    desc: "A bramble thicket, warm with the smell of young cats. The apprentices' moss nests are never tidy.",
+    npcs: ["graypaw", "sandpaw"],
+  },
+  "tc-elders-den": {
+    id: "tc-elders-den",
+    name: "The Elders' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 8, label: "Elder's nest", style: "nest" },
+      { id: "nest2", x: 16, y: 8, label: "Elder's nest", style: "nest" },
+      { id: "ivy", x: 12, y: 5, label: "Ivy-draped walls", style: "moss" },
+    ],
+    desc: "A fallen log draped in ivy. The elders swap stories of battles and prophecies, and complain about the damp.",
+    npcs: ["halftail"],
+  },
+  "moonstone-cave": {
+    id: "moonstone-cave",
+    name: "Mothermouth",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "stone", x: 12, y: 5, label: "The Moonstone", style: "stone" },
+      { id: "moss1", x: 4, y: 9, label: "Damp stone", style: "moss" },
+      { id: "moss2", x: 20, y: 9, label: "Damp stone", style: "moss" },
+    ],
+    desc: "Deep under Highstones, a single crystal burns with cold silver light. StarClan is close here.",
+    npcs: [],
+  },
+  "rusty-house": {
+    id: "rusty-house",
+    name: "Rusty's Twoleg Nest",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "bowl", x: 6, y: 8, label: "Food bowl", style: "bowl" },
+      { id: "bowl2", x: 8, y: 8, label: "Water bowl", style: "bowl" },
+      { id: "plank", x: 14, y: 7, label: "Soft cushion", style: "plank" },
+      { id: "plank2", x: 18, y: 10, label: "Twoleg chair", style: "plank" },
+    ],
+    desc: "Warm, soft, and safe — and unbearably small. The Twolegs are out; the garden door is open.",
+    npcs: [],
+  },
+  barn: {
+    id: "barn",
+    name: "The Farm Barn",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "hay1", x: 6, y: 6, label: "Hay bales", style: "hay" },
+      { id: "hay2", x: 18, y: 6, label: "Hay bales", style: "hay" },
+      { id: "hay3", x: 12, y: 12, label: "Warm hay pile", style: "hay" },
+      { id: "plank", x: 16, y: 11, label: "Twoleg workbench", style: "plank" },
+    ],
+    desc: "The barn breathes warm hay and cow. Mice rustle between the bales. A safe place for any cat willing to share.",
+    npcs: [],
+  },
+};
 
 // ---------------------------------------------------------------------------
-// NPC simulation
+// Prey
+// ---------------------------------------------------------------------------
+
+interface PreyState {
+  id: string;
+  kind: PreyKind;
+  x: number;
+  y: number;
+  home: { x: number; y: number };
+  tx: number;
+  ty: number;
+  facing: 1 | -1;
+  fleeing: boolean;
+  waitUntil: number;
+  seed: number;
+  alive: boolean;
+}
+
+const PREY_FLEE_DIST = 90;
+const PREY_CATCH_DIST = 16;
+const PREY_MAX = 140;
+
+// ---------------------------------------------------------------------------
+// NPC schedule resolution
 // ---------------------------------------------------------------------------
 
 interface NPCState {
@@ -396,33 +307,32 @@ interface NPCState {
   tx: number;
   ty: number;
   facing: 1 | -1;
-  moving: boolean;
+  pose: CatPose;
   waitUntil: number;
   phase: number;
+  lastScheduleHour: number;
 }
 
-function makeNpcState(def: NPCDef, time: number): NPCState {
-  return {
-    def,
-    x: def.home.x,
-    y: def.home.y,
-    tx: def.home.x,
-    ty: def.home.y,
-    facing: 1,
-    moving: false,
-    waitUntil: time,
-    phase: Math.random() * Math.PI * 2,
-  };
+function scheduleTarget(def: NPCDef, hour: number): { x: number; y: number } | null {
+  if (!def.schedule || def.schedule.length === 0) return null;
+  let slot = def.schedule[0];
+  for (const s of def.schedule) {
+    if (hour >= s.h) slot = s;
+  }
+  return { x: slot.x, y: slot.y };
 }
 
 // ---------------------------------------------------------------------------
-// The Game
+// The GameCanvas class
 // ---------------------------------------------------------------------------
 
 const PLAYER_HALF_W = 11;
 const PLAYER_HALF_H = 8;
 const WALK_SPEED = 165;
 const RUN_SPEED = 250;
+const SNEAK_SPEED = 80;
+const GAME_HOUR_START = 8; // start in the morning
+const GAME_DAY_SECONDS = 600; // 10 real minutes per in-game day
 
 export class GameCanvas {
   private canvas: HTMLCanvasElement;
@@ -436,7 +346,10 @@ export class GameCanvas {
   private px = 0;
   private py = 0;
   private pxFacing: 1 | -1 = 1;
-  private pMoving = false;
+  private pPose: CatPose = "walk";
+  private poseUntil = 0;
+  private pEmote: string | null = null;
+  private emoteUntil = 0;
 
   private camX = 0;
   private camY = 0;
@@ -446,10 +359,32 @@ export class GameCanvas {
   private paused = false;
 
   private npcStates: NPCState[] = [];
+  private prey: PreyState[] = [];
+
   private lastArea = "";
   private lastNearby: NearbyTarget | null = null;
   private lastMoveEmit = 0;
   private destroyed = false;
+
+  // clock & weather
+  private dayTime = (GAME_HOUR_START / 24) * GAME_DAY_SECONDS;
+  private lastHour = -1;
+  private weather: WeatherKind = "clear";
+  private weatherUntil = 60;
+  private raindrops: { x: number; y: number; v: number }[] = [];
+  private fogOffset = 0;
+
+  // multiplayer remotes (set by React)
+  public remotes = new Map<string, RemotePlayer>();
+  public bubbles: ChatBubble[] = [];
+
+  // interiors
+  private interiorId: string | null = null;
+  private lastInterior: string | null = null;
+  /** saved position to return to when leaving an interior */
+  private exitPos: { x: number; y: number } | null = null;
+  private huntedCount = 0;
+  private sneaking = false;
 
   constructor(canvas: HTMLCanvasElement, spawn: { x: number; y: number }, cb: GameCallbacks) {
     this.canvas = canvas;
@@ -461,7 +396,19 @@ export class GameCanvas {
     this.py = spawn.y;
     this.camX = spawn.x;
     this.camY = spawn.y;
-    this.npcStates = npcs.map((n) => makeNpcState(n, 0));
+    this.npcStates = npcs.map((n) => ({
+      def: n,
+      x: n.home.x,
+      y: n.home.y,
+      tx: n.home.x,
+      ty: n.home.y,
+      facing: 1,
+      pose: "walk",
+      waitUntil: 0,
+      phase: Math.random() * Math.PI * 2,
+      lastScheduleHour: -1,
+    }));
+    this.spawnPrey(80);
 
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
@@ -481,6 +428,51 @@ export class GameCanvas {
     this.py = y;
     this.camX = x;
     this.camY = y;
+    this.interiorId = null;
+    this.cb.onInteriorChange(null);
+  }
+
+  enterInterior(id: string) {
+    const room = interiors[id];
+    if (!room) return;
+    if (!this.interiorId) this.exitPos = { x: this.px, y: this.py };
+    this.interiorId = id;
+    this.px = (ROOM_W / 2) * 32;
+    this.py = (ROOM_H - 3) * 32;
+    this.camX = this.px;
+    this.camY = this.py;
+    this.cb.onInteriorChange(id);
+  }
+
+  exitInterior() {
+    if (!this.interiorId) return;
+    this.interiorId = null;
+    if (this.exitPos) {
+      this.px = this.exitPos.x;
+      this.py = this.exitPos.y + 40;
+      this.camX = this.px;
+      this.camY = this.py;
+    }
+    this.cb.onInteriorChange(null);
+  }
+
+  addBubble(b: ChatBubble) {
+    this.bubbles.push(b);
+    if (this.bubbles.length > 12) this.bubbles.shift();
+  }
+
+  setEmote(emote: string | null) {
+    this.pEmote = emote;
+    this.emoteUntil = this.time + 3;
+  }
+
+  setPose(pose: CatPose, seconds = 4) {
+    this.pPose = pose;
+    this.poseUntil = this.time + seconds;
+  }
+
+  get isSneaking() {
+    return this.sneaking;
   }
 
   destroy() {
@@ -500,9 +492,7 @@ export class GameCanvas {
       return;
     }
     const k = e.key.toLowerCase();
-    if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "e"].includes(k)) {
-      e.preventDefault();
-    }
+    if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "e"].includes(k)) e.preventDefault();
     if ((k === "e" || k === "enter") && !this.paused) {
       const near = this.lastNearby;
       if (near) this.cb.onInteract(near);
@@ -523,6 +513,7 @@ export class GameCanvas {
   };
 
   private canMoveTo(x: number, y: number): boolean {
+    if (this.interiorId) return true; // interiors use simple bounds
     return (
       !isSolidPoint(x - PLAYER_HALF_W, y - PLAYER_HALF_H) &&
       !isSolidPoint(x + PLAYER_HALF_W, y - PLAYER_HALF_H) &&
@@ -531,19 +522,81 @@ export class GameCanvas {
     );
   }
 
+  private spawnPrey(n: number) {
+    let created = 0;
+    let attempts = 0;
+    while (created < n && attempts < n * 40) {
+      attempts++;
+      const zone = preyZones[Math.floor(Math.random() * preyZones.length)];
+      const x = zone.rect.x + Math.random() * zone.rect.w;
+      const y = zone.rect.y + Math.random() * zone.rect.h;
+      if (isSolidPoint(x, y)) continue;
+      this.prey.push({
+        id: `prey-${created}-${Date.now()}`,
+        kind: zone.kind,
+        x,
+        y,
+        home: { x, y },
+        tx: x,
+        ty: y,
+        facing: Math.random() > 0.5 ? 1 : -1,
+        fleeing: false,
+        waitUntil: Math.random() * 3,
+        seed: Math.random() * 1000,
+        alive: true,
+      });
+      created++;
+    }
+  }
+
+  private respawnPreyTick() {
+    const alive = this.prey.filter((p) => p.alive).length;
+    if (alive < PREY_MAX * 0.6) {
+      this.spawnPrey(Math.floor(PREY_MAX * 0.3));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+
   private loop = (now: number) => {
     if (this.destroyed) return;
     const dt = Math.min(0.05, (now - this.lastTime) / 1000 || 0.016);
     this.lastTime = now;
-    this.time += dt;
-
+    if (!this.paused) {
+      this.time += dt;
+      this.dayTime = (this.dayTime + dt) % GAME_DAY_SECONDS;
+    }
     this.update(dt);
     this.render();
-
     this.raf = requestAnimationFrame(this.loop);
   };
 
+  private hour(): number {
+    return Math.floor((this.dayTime / GAME_DAY_SECONDS) * 24);
+  }
+
+  private nightAlpha(): number {
+    const h = (this.dayTime / GAME_DAY_SECONDS) * 24;
+    // dark between 20 and 5, soft transitions
+    if (h >= 21 || h < 4.5) return 0.55;
+    if (h >= 19) return ((h - 19) / 2) * 0.55;
+    if (h < 7) return ((7 - h) / 2.5) * 0.55;
+    return 0;
+  }
+
   private update(dt: number) {
+    // clock + weather callbacks
+    const hr = this.hour();
+    if (hr !== this.lastHour) {
+      this.lastHour = hr;
+      this.cb.onClock(hr);
+    }
+    if (this.time > this.weatherUntil) {
+      this.weather = pickWeather();
+      this.weatherUntil = this.time + 50 + Math.random() * 70;
+      this.cb.onWeatherChange(this.weather);
+    }
+
     // --- player movement ---
     let dx = 0;
     let dy = 0;
@@ -553,94 +606,220 @@ export class GameCanvas {
       if (this.keys.has("a") || this.keys.has("arrowleft")) dx -= 1;
       if (this.keys.has("d") || this.keys.has("arrowright")) dx += 1;
     }
+    this.sneaking = this.keys.has("control") || this.keys.has("c");
     const running = this.keys.has("shift");
-    const speed = running ? RUN_SPEED : WALK_SPEED;
-    this.pMoving = dx !== 0 || dy !== 0;
-    if (this.pMoving) {
+    const speed = this.sneaking ? SNEAK_SPEED : running ? RUN_SPEED : WALK_SPEED;
+
+    if (this.time > this.poseUntil && this.pPose !== "walk") this.pPose = "walk";
+
+    const movingNow = dx !== 0 || dy !== 0;
+    this.pPose = movingNow && this.pPose === "walk" ? "walk" : this.pPose;
+    if (movingNow && this.pPose === "walk") {
       const len = Math.hypot(dx, dy);
       dx = (dx / len) * speed * dt;
       dy = (dy / len) * speed * dt;
       if (dx !== 0) this.pxFacing = dx > 0 ? 1 : -1;
 
-      if (this.canMoveTo(this.px + dx, this.py)) this.px += dx;
-      if (this.canMoveTo(this.px, this.py + dy)) this.py += dy;
+      if (this.interiorId) {
+        const nx = Math.max(40, Math.min(ROOM_W * 32 - 40, this.px + dx));
+        const ny = Math.max(40, Math.min(ROOM_H * 32 - 30, this.py + dy));
+        // interior walls: crude grid check
+        const room = interiors[this.interiorId];
+        const cx = Math.floor(nx / 32);
+        const cy = Math.floor(ny / 32);
+        const wall = room.walls[Math.min(room.walls.length - 1, cy)]?.[cx] === "1";
+        if (!wall) {
+          this.px = nx;
+          this.py = ny;
+        }
+      } else {
+        if (this.canMoveTo(this.px + dx, this.py)) this.px += dx;
+        if (this.canMoveTo(this.px, this.py + dy)) this.py += dy;
+      }
+    } else if (!movingNow && this.time > this.poseUntil) {
+      // idle behaviors
+      if (Math.random() < 0.001) this.pPose = "sit";
     }
 
-    // camera — smooth follow, clamped to world
+    // camera
     const lerp = 1 - Math.pow(0.0001, dt);
     this.camX += (this.px - this.camX) * lerp;
     this.camY += (this.py - this.camY) * lerp;
 
-    // --- NPCs ---
+    // --- NPC schedules + movement ---
     for (const n of this.npcStates) {
+      const target = scheduleTarget(n.def, hr);
+      if (target && hr !== n.lastScheduleHour) {
+        n.tx = target.x;
+        n.ty = target.y;
+        n.lastScheduleHour = hr;
+      }
       const dist = Math.hypot(n.tx - n.x, n.ty - n.y);
-      if (n.moving && dist < 6) {
-        n.moving = false;
-        n.waitUntil = this.time + 2 + Math.random() * 4;
-      } else if (!n.moving && this.time > n.waitUntil && n.def.wander) {
+      if (n.pose !== "walk" && this.time > n.waitUntil) n.pose = "walk";
+      if (n.pose === "walk" && dist > 8) {
+        const sp = 46 * dt;
+        const ux = (n.tx - n.x) / (dist || 1);
+        const uy = (n.ty - n.y) / (dist || 1);
+        if (!isSolidPoint(n.x + ux * sp + Math.sign(ux) * 8, n.y)) n.x += ux * sp;
+        if (!isSolidPoint(n.x, n.y + uy * sp + Math.sign(uy) * 8)) n.y += uy * sp;
+        if (Math.abs(ux) > 0.2) n.facing = ux > 0 ? 1 : -1;
+      } else if (n.pose === "walk" && dist <= 8) {
+        // arrive: idle
+        n.pose = Math.random() < 0.5 ? "sit" : "groom";
+        n.waitUntil = this.time + 3 + Math.random() * 5;
+      } else if (n.pose !== "walk" && n.def.wander && this.time > n.waitUntil) {
         const ang = Math.random() * Math.PI * 2;
-        const rad = 40 + Math.random() * 90;
+        const rad = 40 + Math.random() * 80;
         const nx = n.def.home.x + Math.cos(ang) * rad;
         const ny = n.def.home.y + Math.sin(ang) * rad;
         if (!isSolidPoint(nx, ny)) {
           n.tx = nx;
           n.ty = ny;
-          n.moving = true;
-        } else {
-          n.waitUntil = this.time + 1;
+          n.pose = "walk";
         }
       }
-      if (n.moving) {
-        const sp = 42 * dt;
-        const ux = (n.tx - n.x) / (dist || 1);
-        const uy = (n.ty - n.y) / (dist || 1);
-        const stepX = ux * sp;
-        if (!isSolidPoint(n.x + stepX + Math.sign(stepX) * 8, n.y)) n.x += stepX;
-        const stepY = uy * sp;
-        if (!isSolidPoint(n.x, n.y + stepY + Math.sign(stepY) * 8)) n.y += stepY;
-        if (Math.abs(ux) > 0.2) n.facing = ux > 0 ? 1 : -1;
+    }
+
+    // --- prey AI ---
+    if (!this.paused && this.prey.length < PREY_MAX && Math.random() < 0.02) this.respawnPreyTick();
+    if (!this.interiorId) {
+      for (const p of this.prey) {
+        if (!p.alive) continue;
+        const dToPlayer = Math.hypot(this.px - p.x, this.py - p.y);
+        // flee from the player unless sneaking
+        if (dToPlayer < PREY_FLEE_DIST && !this.sneaking) {
+          p.fleeing = true;
+          const ang = Math.atan2(p.y - this.py, p.x - this.px);
+          const sp = (p.kind === "bird" || p.kind === "rabbit" ? 150 : 110) * dt;
+          const nx = p.x + Math.cos(ang) * sp;
+          const ny = p.y + Math.sin(ang) * sp;
+          if (!isSolidPoint(nx, ny)) {
+            p.x = nx;
+            p.y = ny;
+          } else {
+            p.x += Math.cos(ang + Math.PI / 2) * sp;
+            p.y += Math.sin(ang + Math.PI / 2) * sp;
+          }
+          if (ang > -Math.PI / 2 && ang < Math.PI / 2) p.facing = 1;
+          else p.facing = -1;
+        } else {
+          p.fleeing = false;
+          const d = Math.hypot(p.tx - p.x, p.ty - p.y);
+          if (d < 4) {
+            if (this.time > p.waitUntil) {
+              const ang = Math.random() * Math.PI * 2;
+              const rad = 10 + Math.random() * 40;
+              p.tx = p.home.x + Math.cos(ang) * rad;
+              p.ty = p.home.y + Math.sin(ang) * rad;
+              p.waitUntil = this.time + 1 + Math.random() * 3;
+            }
+          } else {
+            const sp = 30 * dt;
+            const ux = (p.tx - p.x) / d;
+            const uy = (p.ty - p.y) / d;
+            p.x += ux * sp;
+            p.y += uy * sp;
+            if (Math.abs(ux) > 0.2) p.facing = ux > 0 ? 1 : -1;
+          }
+        }
+        // catch!
+        if (dToPlayer < PREY_CATCH_DIST && !this.paused) {
+          p.alive = false;
+          this.huntedCount++;
+          this.cb.onPreyCaught(p.kind);
+        }
       }
+      this.prey = this.prey.filter((p) => p.alive || Math.random() > 0.98);
     }
 
     // --- area + nearby detection ---
     const area = areaAt(this.px, this.py);
-    const areaName = area?.name ?? "ThunderClan Territory";
+    const areaName = this.interiorId
+      ? interiors[this.interiorId]?.name ?? "Inside"
+      : area?.name ?? "Warrior Territories";
     if (areaName !== this.lastArea) {
       this.lastArea = areaName;
-      this.cb.onAreaChange(areaName);
+      this.cb.onAreaChange(areaName, this.interiorId ?? area?.id ?? "");
     }
 
     let near: NearbyTarget | null = null;
     let bestD = 88;
-    for (const o of allObjects) {
-      const d = Math.hypot(o.x - this.px, o.y - this.py);
-      if (d < bestD) {
-        bestD = d;
-        near = { kind: "object", label: o.label ?? o.id, interact: o.interact };
+    if (!this.interiorId) {
+      for (const o of allObjects) {
+        const d = Math.hypot(o.x - this.px, o.y - this.py);
+        if (d < bestD) {
+          bestD = d;
+          near = { kind: "object", label: o.label ?? o.id, interact: o.interact, interior: o.interior };
+        }
       }
-    }
-    for (const n of this.npcStates) {
-      const d = Math.hypot(n.x - this.px, n.y - this.py);
-      if (d < bestD) {
-        bestD = d;
-        near = { kind: "npc", label: n.def.name, npcId: n.def.id };
+      for (const n of this.npcStates) {
+        const d = Math.hypot(n.x - this.px, n.y - this.py);
+        if (d < bestD) {
+          bestD = d;
+          near = { kind: "npc", label: n.def.name, npcId: n.def.id };
+        }
+      }
+      // prey nearby (pounce!)
+      for (const p of this.prey) {
+        if (!p.alive) continue;
+        const d = Math.hypot(p.x - this.px, p.y - this.py);
+        if (d < 60 && d < bestD) {
+          bestD = d;
+          near = { kind: "prey", label: `Pounce — ${p.kind}`, preyId: p.id };
+        }
+      }
+      // remote players
+      for (const [, r] of this.remotes) {
+        const d = Math.hypot(r.x - this.px, r.y - this.py);
+        if (d < bestD) {
+          bestD = d;
+          near = { kind: "remote", label: r.catName, remoteUserId: r.userId };
+        }
+      }
+    } else {
+      const room = interiors[this.interiorId];
+      for (const prop of room.props) {
+        const px2 = prop.x * 32 + 16;
+        const py2 = prop.y * 32 + 16;
+        const d = Math.hypot(px2 - this.px, py2 - this.py);
+        if (d < bestD) {
+          bestD = d;
+          near = { kind: "object", label: prop.label };
+        }
+      }
+      // NPCs inside
+      for (const npcId of room.npcs ?? []) {
+        const n = this.npcStates.find((s) => s.def.id === npcId);
+        if (!n) continue;
+        const d = Math.hypot(n.x - this.px, n.y - this.py);
+        if (d < bestD) {
+          bestD = d;
+          near = { kind: "npc", label: n.def.name, npcId: n.def.id };
+        }
+      }
+      // exit door
+      const doorD = Math.hypot((ROOM_W / 2) * 32 - this.px, (ROOM_H - 1) * 32 - this.py);
+      if (doorD < 70 && !near) {
+        near = { kind: "object", label: "Leave the den", interact: "exit-interior" as unknown as InteractableKind };
       }
     }
     const changed =
       (near === null) !== (this.lastNearby === null) ||
-      (near && this.lastNearby && (near.label !== this.lastNearby.label || near.kind !== this.lastNearby.kind));
+      (near && this.lastNearby &&
+        (near.label !== this.lastNearby.label || near.kind !== this.lastNearby.kind || near.preyId !== this.lastNearby.preyId));
     if (changed) {
-      this.lastNearby = near;
-      this.cb.onNearby(near);
-    } else if (near && this.lastNearby && near.npcId !== this.lastNearby.npcId) {
       this.lastNearby = near;
       this.cb.onNearby(near);
     }
 
-    // throttle position emit for the minimap
     if (this.time - this.lastMoveEmit > 0.2) {
       this.lastMoveEmit = this.time;
       this.cb.onMove(this.px, this.py);
+    }
+
+    if (this.emoteUntil && this.time > this.emoteUntil) {
+      this.pEmote = null;
+      this.emoteUntil = 0;
     }
   }
 
@@ -652,9 +831,175 @@ export class GameCanvas {
     const ch = canvas.height / this.dpr;
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = "#2c4a30";
+    ctx.fillStyle = this.interiorId ? "#1d1812" : "#2c4a30";
     ctx.fillRect(0, 0, cw, ch);
 
+    if (this.interiorId) {
+      this.renderInterior(cw, ch);
+    } else {
+      this.renderWorld(cw, ch);
+    }
+
+    // weather overlays
+    this.renderWeather(cw, ch);
+
+    // night
+    const na = this.nightAlpha();
+    if (na > 0) {
+      ctx.fillStyle = `rgba(10, 14, 34, ${na})`;
+      ctx.fillRect(0, 0, cw, ch);
+    }
+
+    // vignette
+    const grad = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.42, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(1, "rgba(10,16,10,0.34)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, cw, ch);
+  }
+
+  private renderInterior(cw: number, ch: number) {
+    const ctx = this.ctx;
+    const room = interiors[this.interiorId!];
+    if (!room) return;
+
+    ctx.save();
+    ctx.translate(cw / 2, ch / 2);
+    ctx.scale(this.scale, this.scale);
+    ctx.translate(-this.camX, -this.camY);
+
+    // floor
+    ctx.fillStyle = "#5a4632";
+    ctx.fillRect(0, 0, ROOM_W * 32, ROOM_H * 32);
+    // floor texture
+    for (let y = 0; y < ROOM_H; y++) {
+      for (let x = 0; x < ROOM_W; x++) {
+        const h = hash2(x, y);
+        if (h > 0.6) {
+          ctx.fillStyle = "rgba(0,0,0,0.06)";
+          ctx.fillRect(x * 32, y * 32, 32, 32);
+        }
+      }
+    }
+    // walls
+    for (let y = 0; y < room.walls.length; y++) {
+      for (let x = 0; x < room.walls[y].length; x++) {
+        if (room.walls[y][x] === "1") {
+          ctx.fillStyle = "#4a3826";
+          ctx.fillRect(x * 32, y * 32, 32, 32);
+          ctx.fillStyle = "rgba(255,255,255,0.04)";
+          ctx.fillRect(x * 32, y * 32, 32, 4);
+        }
+      }
+    }
+    // props
+    for (const prop of room.props) {
+      const x = prop.x * 32 + 16;
+      const y = prop.y * 32 + 16;
+      ctx.fillStyle = "rgba(0,0,0,0.2)";
+      ctx.beginPath();
+      ctx.ellipse(x, y + 6, 14, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      switch (prop.style) {
+        case "nest":
+          ctx.fillStyle = "#8a7a5a";
+          ctx.beginPath();
+          ctx.ellipse(x, y, 13, 8, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#a3936c";
+          ctx.beginPath();
+          ctx.ellipse(x, y - 2, 10, 5.5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+        case "herbs":
+          drawHerbPatch(ctx, x, y, this.time);
+          break;
+        case "stone":
+          ctx.fillStyle = "#9fa1a6";
+          ctx.beginPath();
+          ctx.ellipse(x, y, 10, 7, 0, 0, Math.PI * 2);
+          ctx.fill();
+          if (prop.id === "stone") {
+            const g = ctx.createRadialGradient(x, y - 6, 2, x, y - 6, 26);
+            g.addColorStop(0, "rgba(220,235,255,0.9)");
+            g.addColorStop(1, "rgba(220,235,255,0)");
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(x, y - 6, 26, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          break;
+        case "moss":
+          ctx.fillStyle = "#5f8f4e";
+          ctx.beginPath();
+          ctx.ellipse(x, y, 12, 6, 0, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+        case "plank":
+          ctx.fillStyle = "#7a5b3a";
+          ctx.fillRect(x - 14, y - 6, 28, 12);
+          break;
+        case "hay":
+          ctx.fillStyle = "#c9a84a";
+          ctx.beginPath();
+          ctx.ellipse(x, y, 15, 10, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#a8873a";
+          ctx.lineWidth = 1;
+          for (let i = -2; i <= 2; i++) {
+            ctx.beginPath();
+            ctx.moveTo(x + i * 4, y - 8);
+            ctx.lineTo(x + i * 4, y + 8);
+            ctx.stroke();
+          }
+          break;
+        case "bowl":
+          ctx.fillStyle = "#6a7d8a";
+          ctx.beginPath();
+          ctx.ellipse(x, y, 9, 5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = prop.id === "bowl" ? "#a5714a" : "#7fa8c9";
+          ctx.beginPath();
+          ctx.ellipse(x, y - 1.5, 6.5, 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+      }
+    }
+    // NPCs assigned to this room (drawn near their home positions)
+    for (const npcId of room.npcs ?? []) {
+      const n = this.npcStates.find((s) => s.def.id === npcId);
+      if (!n) continue;
+      drawCat(ctx, n.def, n.x, n.y, n.facing, n.pose === "walk" && Math.hypot(n.tx - n.x, n.ty - n.y) > 8 ? "walk" : "sit", this.time, n.phase);
+      ctx.font = "600 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      const tw = ctx.measureText(n.def.name).width;
+      ctx.beginPath();
+      ctx.roundRect(n.x - tw / 2 - 6, n.y - 40, tw + 12, 17, 8);
+      ctx.fill();
+      ctx.fillStyle = "#f4f1e8";
+      ctx.fillText(n.def.name, n.x, n.y - 28);
+    }
+    // player
+    drawCat(ctx, this.playerSkin(), this.px, this.py, this.pxFacing, this.pPose, this.time, 0);
+    // exit door hint
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "600 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("↓ leave through the gap", (ROOM_W / 2) * 32, (ROOM_H - 0.4) * 32);
+
+    ctx.restore();
+  }
+
+  private playerSkin(): CatSkin {
+    return this.mySkin ?? { fur: "#d96b2f", furDark: "#b04f1d", eye: "#4fae6e", chest: "#f4e9d8", pattern: "solid" };
+  }
+
+  /** Set by React with the player's saved appearance. */
+  public mySkin: CatSkin | null = null;
+
+  private renderWorld(cw: number, ch: number) {
+    const { ctx } = this;
     const halfW = cw / 2 / this.scale;
     const halfH = ch / 2 / this.scale;
     this.camX = Math.max(halfW, Math.min(WORLD_W - halfW, this.camX));
@@ -670,16 +1015,15 @@ export class GameCanvas {
     const viewT = this.camY - halfH - 40;
     const viewB = this.camY + halfH + 80;
 
-    this.drawGround(viewL, viewT, viewR, viewB, cw, ch);
+    this.drawGround(viewL, viewT, viewR, viewB);
     this.drawFlora(viewL, viewT, viewR, viewB);
 
-    // depth-sorted entities
     type Entity = { y: number; draw: () => void };
     const ents: Entity[] = [];
 
     for (const tr of trees) {
       if (tr.x < viewL - 60 || tr.x > viewR + 60 || tr.y < viewT - 80 || tr.y > viewB + 60) continue;
-      ents.push({ y: tr.y, draw: () => drawTree(ctx, tr.x, tr.y, tr.r, tr.pine, tr.tint) });
+      ents.push({ y: tr.y, draw: () => this.drawTree(tr.x, tr.y, tr.r, tr.pine, tr.tint) });
     }
     for (const b of campWall) {
       if (b.x < viewL - 60 || b.x > viewR + 60 || b.y < viewT - 60 || b.y > viewB + 60) continue;
@@ -705,7 +1049,7 @@ export class GameCanvas {
       });
     }
     for (const o of allObjects) {
-      if (o.x < viewL - 80 || o.x > viewR + 80 || o.y < viewT - 80 || o.y > viewB + 80) continue;
+      if (o.x < viewL - 90 || o.x > viewR + 90 || o.y < viewT - 90 || o.y > viewB + 90) continue;
       const s = o.scale ?? 1;
       const w = o.w * s;
       const h = o.h * s;
@@ -713,24 +1057,51 @@ export class GameCanvas {
         y: o.y,
         draw: () => {
           switch (o.style) {
-            case "tree": drawTree(ctx, o.x, o.y, 42, false, 0.7); break;
-            case "bramble": drawBramble(ctx, o.x, o.y, w, h); break;
-            case "bush": drawBush(ctx, o.x, o.y, w, h); break;
-            case "log": drawLog(ctx, o.x, o.y, w, h); break;
-            case "rock": drawRock(ctx, o.x, o.y, w, h); break;
-            case "stone": drawStone(ctx, o.x, o.y, w, h); break;
-            case "fresh-kill": drawFreshKill(ctx, o.x, o.y); break;
-            case "stump": drawStump(ctx, o.x, o.y, w * 0.45); break;
+            case "tree": this.drawTree(o.x, o.y, 42, false, 0.7); break;
+            case "bramble": this.drawBramble(o.x, o.y, w, h); break;
+            case "bush": this.drawBush(o.x, o.y, w, h); break;
+            case "log": this.drawLog(o.x, o.y, w, h); break;
+            case "rock": this.drawRock(o.x, o.y, w, h); break;
+            case "stone": this.drawStone(o.x, o.y, w, h); break;
+            case "fresh-kill": drawFreshKillPile(ctx, o.x, o.y); break;
+            case "stump": this.drawStump(o.x, o.y, w * 0.45); break;
+            case "tallrock-big": drawTallRock(ctx, o.x, o.y, w, h); break;
+            case "house": drawHouse(ctx, o.x, o.y, w, h); break;
+            case "barn": drawBarn(ctx, o.x, o.y, w, h); break;
+            case "fence": drawFence(ctx, o.x, o.y, w, h); break;
+            case "cave": drawCave(ctx, o.x, o.y, w, h); break;
+            case "reeds": drawReeds(ctx, o.x, o.y, w, h, this.time); break;
+            case "flowerbed": drawFlowerBed(ctx, o.x, o.y, w, h); break;
+            case "herbs": drawHerbPatch(ctx, o.x, o.y, this.time); break;
+            case "nest": this.drawBush(o.x, o.y, w, h); break;
+            case "prey-pile": drawFreshKillPile(ctx, o.x, o.y); break;
+          }
+          // den entrance marker for enterable dens
+          if (o.interior) {
+            ctx.fillStyle = "rgba(255,235,180,0.9)";
+            ctx.beginPath();
+            ctx.arc(o.x, o.y - h * 0.75 - 8, 3, 0, Math.PI * 2);
+            ctx.fill();
           }
         },
       });
     }
+    // prey
+    for (const p of this.prey) {
+      if (!p.alive) continue;
+      if (p.x < viewL || p.x > viewR || p.y < viewT || p.y > viewB) continue;
+      ents.push({
+        y: p.y,
+        draw: () => drawPrey(ctx, p.kind as PreySprite, p.x, p.y, p.facing, p.fleeing, this.time, p.seed),
+      });
+    }
+    // NPCs
     for (const n of this.npcStates) {
       if (n.x < viewL - 60 || n.x > viewR + 60 || n.y < viewT - 60 || n.y > viewB + 60) continue;
       ents.push({
         y: n.y,
         draw: () => {
-          drawCat(ctx, n.def, n.x, n.y, n.facing, n.moving, this.time, n.phase);
+          drawCat(ctx, n.def, n.x, n.y, n.facing, n.pose, this.time, n.phase);
           const d = Math.hypot(n.x - this.px, n.y - this.py);
           if (d < 130) {
             ctx.font = "600 11px system-ui, sans-serif";
@@ -746,28 +1117,76 @@ export class GameCanvas {
         },
       });
     }
+    // remote players
+    for (const [, r] of this.remotes) {
+      if (r.x < viewL - 60 || r.x > viewR + 60 || r.y < viewT - 60 || r.y > viewB + 60) continue;
+      ents.push({
+        y: r.y,
+        draw: () => {
+          drawCat(
+            ctx,
+            { ...r.appearance },
+            r.x,
+            r.y,
+            (r.facing >= 0 ? 1 : -1) as 1 | -1,
+            r.moving ? "walk" : "sit",
+            this.time,
+            (r.userId.charCodeAt(0) % 10),
+          );
+          ctx.font = "600 11px system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "rgba(30,60,110,0.55)";
+          const label = `${r.catName}`;
+          const tw = ctx.measureText(label).width;
+          ctx.beginPath();
+          ctx.roundRect(r.x - tw / 2 - 6, r.y - 40, tw + 12, 17, 8);
+          ctx.fill();
+          ctx.fillStyle = "#dbe8ff";
+          ctx.fillText(label, r.x, r.y - 28);
+        },
+      });
+    }
+    // player
     ents.push({
       y: this.py,
-      draw: () => drawCat(ctx, playerDef, this.px, this.py, this.pxFacing, this.pMoving, this.time, 0, 1.05),
+      draw: () => {
+        drawCat(ctx, { ...this.playerSkin(), size: (this.playerSkin().size ?? 1) * 1.05 }, this.px, this.py, this.pxFacing, this.pPose, this.time, 0);
+        if (this.pEmote) {
+          ctx.font = "18px system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(this.pEmote, this.px, this.py - 46);
+        }
+      },
     });
 
     ents.sort((a, b) => a.y - b.y);
     for (const e of ents) e.draw();
 
-    // drifting leaves for atmosphere
+    // chat bubbles (world space)
+    for (const b of this.bubbles) {
+      if (this.time * 1000 > b.until) continue;
+      ctx.font = "500 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      const tw = Math.min(220, ctx.measureText(b.text).width + 14);
+      const lines = wrapText(ctx, b.text, 200);
+      const bh = 16 + lines.length * 13;
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      ctx.beginPath();
+      ctx.roundRect(b.x - tw / 2, b.y - 52 - bh, tw, bh, 9);
+      ctx.fill();
+      ctx.fillStyle = "#1a1a1a";
+      lines.forEach((ln, i) => ctx.fillText(ln, b.x, b.y - 52 - bh + 16 + i * 13));
+      ctx.fillStyle = "rgba(90,90,110,0.9)";
+      ctx.font = "600 10px system-ui, sans-serif";
+      ctx.fillText(b.name, b.x, b.y - 50);
+    }
+
     this.drawLeaves();
 
     ctx.restore();
-
-    // vignette
-    const grad = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.42, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
-    grad.addColorStop(0, "rgba(0,0,0,0)");
-    grad.addColorStop(1, "rgba(10,16,10,0.34)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, cw, ch);
   }
 
-  private drawGround(viewL: number, viewT: number, viewR: number, viewB: number, _cw: number, _ch: number) {
+  private drawGround(viewL: number, viewT: number, viewR: number, viewB: number) {
     const { ctx } = this;
     const c0 = Math.max(0, Math.floor(viewL / GROUND_CELL));
     const r0 = Math.max(0, Math.floor(viewT / GROUND_CELL));
@@ -780,27 +1199,22 @@ export class GameCanvas {
       for (let c = c0; c <= c1; c++) {
         const kind = groundMap[r * GROUND_COLS + c];
         const h = hash2(c, r);
-        const pair = GROUND_COLORS[kind];
-        ctx.fillStyle = h > 0.5 ? pair[0] : pair[1];
-        if (kind === 2) {
-          // animated water shimmer
-          const w = h + waterWave;
-          ctx.fillStyle = w > 0.5 ? pair[0] : pair[1];
-        }
+        const pair = GROUND_COLORS[kind] ?? GROUND_COLORS[0];
+        ctx.fillStyle = h > (kind === 2 ? 0.5 - waterWave : 0.5) ? pair[0] : pair[1];
         ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL, GROUND_CELL + 0.5, GROUND_CELL + 0.5);
       }
     }
 
-    // Thunderpath dashes
-    if (viewT < TILE * 7 && viewB > 0) {
+    // Thunderpath dashes (it spans the map at y = 42..46 tiles)
+    const tpY = 44 * 32;
+    if (viewT < tpY + 64 && viewB > tpY - 64) {
       ctx.fillStyle = "rgba(240,225,160,0.7)";
-      const y = TILE * 4;
       for (let x = Math.floor(Math.max(0, viewL) / 80) * 80; x < Math.min(WORLD_W, viewR); x += 80) {
-        ctx.fillRect(x, y - 2, 40, 4);
+        ctx.fillRect(x, tpY - 2, 40, 4);
       }
     }
 
-    // camp sand is slightly darker toward the wall edge — soft ring
+    // camp floor ring
     ctx.strokeStyle = "rgba(0,0,0,0.08)";
     ctx.lineWidth = 26;
     ctx.beginPath();
@@ -851,8 +1265,20 @@ export class GameCanvas {
   private leaves: { x: number; y: number; vx: number; vy: number; r: number }[] = [];
   private drawLeaves() {
     const { ctx } = this;
-    if (this.leaves.length < 14) {
-      for (let i = this.leaves.length; i < 14; i++) {
+    if (this.weather === "wind" || this.weather === "storm") {
+      if (this.leaves.length < 26) {
+        for (let i = this.leaves.length; i < 26; i++) {
+          this.leaves.push({
+            x: this.camX + (Math.random() - 0.5) * 1200,
+            y: this.camY + (Math.random() - 0.5) * 800,
+            vx: -40 - Math.random() * 40,
+            vy: 10 + Math.random() * 16,
+            r: Math.random() * Math.PI * 2,
+          });
+        }
+      }
+    } else if (this.leaves.length < 12) {
+      for (let i = this.leaves.length; i < 12; i++) {
         this.leaves.push({
           x: this.camX + (Math.random() - 0.5) * 1200,
           y: this.camY + (Math.random() - 0.5) * 800,
@@ -862,7 +1288,7 @@ export class GameCanvas {
         });
       }
     }
-    ctx.fillStyle = "rgba(214, 178, 96, 0.55)";
+    ctx.fillStyle = "rgba(214, 178, 96, 0.5)";
     for (const l of this.leaves) {
       l.x += l.vx * 0.016;
       l.y += l.vy * 0.016;
@@ -878,4 +1304,225 @@ export class GameCanvas {
       ctx.restore();
     }
   }
+
+  private renderWeather(cw: number, ch: number) {
+    const { ctx } = this;
+    if (this.weather === "rain" || this.weather === "heavy-rain" || this.weather === "storm") {
+      const heavy = this.weather !== "rain";
+      const target = heavy ? 160 : 80;
+      while (this.raindrops.length < target) {
+        this.raindrops.push({ x: Math.random() * cw, y: Math.random() * ch, v: 500 + Math.random() * 300 });
+      }
+      ctx.strokeStyle = heavy ? "rgba(180, 200, 230, 0.55)" : "rgba(180, 200, 230, 0.35)";
+      ctx.lineWidth = 1;
+      for (const d of this.raindrops) {
+        ctx.beginPath();
+        ctx.moveTo(d.x, d.y);
+        ctx.lineTo(d.x - 4, d.y + 12);
+        ctx.stroke();
+        if (!this.paused) {
+          d.y += d.v * 0.016;
+          d.x -= 60 * 0.016;
+          if (d.y > ch) {
+            d.y = -10;
+            d.x = Math.random() * cw;
+          }
+        }
+      }
+      ctx.fillStyle = this.weather === "storm" ? "rgba(20,30,50,0.28)" : "rgba(60,80,110,0.14)";
+      ctx.fillRect(0, 0, cw, ch);
+      // lightning flash
+      if (this.weather === "storm" && Math.random() < 0.004) {
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        ctx.fillRect(0, 0, cw, ch);
+      }
+    } else if (this.weather === "fog") {
+      const g = ctx.createLinearGradient(0, 0, 0, ch);
+      g.addColorStop(0, "rgba(210,220,225,0.34)");
+      g.addColorStop(1, "rgba(210,220,225,0.12)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, cw, ch);
+    } else if (this.weather === "cloudy") {
+      ctx.fillStyle = "rgba(80,90,100,0.10)";
+      ctx.fillRect(0, 0, cw, ch);
+    }
+    void this.fogOffset;
+  }
+
+  // prop draw helpers (kept local so world.ts stays data-only)
+  private drawTree(x: number, y: number, r: number, pine: boolean, tint: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x + 4, y + 4, r * 0.75, r * 0.32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#5d4a33";
+    ctx.fillRect(x - 3.5, y - r * 0.35, 7, r * 0.45);
+    if (pine) {
+      for (let i = 3; i >= 1; i--) {
+        const ly = y - r * 0.25 * (i - 1) - r * 0.15;
+        const lw = r * (0.45 + i * 0.22);
+        ctx.fillStyle = i % 2 === 0 ? "#2e5c38" : "#356840";
+        ctx.beginPath();
+        ctx.moveTo(x - lw, ly);
+        ctx.lineTo(x, ly - r * 0.75);
+        ctx.lineTo(x + lw, ly);
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else {
+      const base = tint > 0.5 ? "#4a8a4c" : "#417f45";
+      const light = tint > 0.5 ? "#5d9f58" : "#549251";
+      ctx.fillStyle = base;
+      ctx.beginPath();
+      ctx.arc(x - r * 0.35, y - r * 0.35, r * 0.6, 0, Math.PI * 2);
+      ctx.arc(x + r * 0.35, y - r * 0.4, r * 0.62, 0, Math.PI * 2);
+      ctx.arc(x, y - r * 0.75, r * 0.68, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = light;
+      ctx.beginPath();
+      ctx.arc(x - r * 0.15, y - r * 0.95, r * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  private drawBramble(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.42, w * 0.62, h * 0.28, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#5a4632";
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.55, h * 0.42, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#6e573c";
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.arc(x - w * 0.2 + i * w * 0.14, y - h * 0.08, w * 0.3, Math.PI * 0.15, Math.PI * 0.95);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#241c12";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.12, w * 0.18, h * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawBush(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.42, w * 0.6, h * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#356340";
+    ctx.beginPath();
+    ctx.arc(x - w * 0.22, y - h * 0.05, w * 0.34, 0, Math.PI * 2);
+    ctx.arc(x + w * 0.22, y - h * 0.05, w * 0.34, 0, Math.PI * 2);
+    ctx.arc(x, y - h * 0.28, w * 0.38, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#41764a";
+    ctx.beginPath();
+    ctx.arc(x - w * 0.08, y - h * 0.34, w * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#1e2b1c";
+    ctx.beginPath();
+    ctx.ellipse(x + w * 0.16, y + h * 0.1, w * 0.14, h * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawLog(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.45, w * 0.58, h * 0.24, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#6a5138";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.5, y - h * 0.32, w, h * 0.64, h * 0.32);
+    ctx.fill();
+    ctx.fillStyle = "#7d6144";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.5, y - h * 0.32, w, h * 0.28, h * 0.28);
+    ctx.fill();
+    ctx.fillStyle = "#4f7a43";
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(x - w * 0.3 + i * w * 0.3, y + h * 0.05, h * 0.16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  private drawRock(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.45, w * 0.55, h * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#8b8d92";
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.5, y + h * 0.35);
+    ctx.lineTo(x - w * 0.32, y - h * 0.35);
+    ctx.lineTo(x + w * 0.08, y - h * 0.5);
+    ctx.lineTo(x + w * 0.45, y - h * 0.1);
+    ctx.lineTo(x + w * 0.5, y + h * 0.35);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#9fa1a6";
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.32, y - h * 0.35);
+    ctx.lineTo(x + w * 0.08, y - h * 0.5);
+    ctx.lineTo(x + w * 0.12, y - h * 0.05);
+    ctx.lineTo(x - w * 0.2, y + h * 0.02);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  private drawStone(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#84868b";
+    ctx.beginPath();
+    ctx.ellipse(x, y, w * 0.5, h * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#a3a5aa";
+    ctx.beginPath();
+    ctx.ellipse(x - w * 0.1, y - h * 0.14, w * 0.26, h * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawStump(x: number, y: number, r: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x + 3, y + 4, r * 0.9, r * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#6a5138";
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#57422d";
+    ctx.lineWidth = 1.5;
+    for (let i = 1; i <= 3; i++) {
+      ctx.beginPath();
+      ctx.arc(x, y, r * (i / 4), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+}
+
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const test = cur ? `${cur} ${w}` : w;
+    if (ctx.measureText(test).width > maxW && cur) {
+      lines.push(cur);
+      cur = w;
+    } else {
+      cur = test;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.slice(0, 4);
 }

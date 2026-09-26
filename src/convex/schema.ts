@@ -16,33 +16,89 @@ export const roleValidator = v.union(
 );
 export type Role = Infer<typeof roleValidator>;
 
+export const CLANS = ["thunderclan", "riverclan", "windclan", "shadowclan", "kittypet", "loner"] as const;
+
+const appearanceValidator = v.object({
+  fur: v.string(),
+  furDark: v.string(),
+  eye: v.string(),
+  chest: v.optional(v.string()),
+  pattern: v.union(v.literal("solid"), v.literal("tabby"), v.literal("tortie"), v.literal("bicolor")),
+  furLength: v.number(),
+  tail: v.union(v.literal("normal"), v.literal("short"), v.literal("fluffy"), v.literal("bob")),
+  ears: v.union(v.literal("normal"), v.literal("tall"), v.literal("fold")),
+  size: v.number(), // 0.9 - 1.15
+  scar: v.boolean(),
+});
+
+export type CatAppearance = Infer<typeof appearanceValidator>;
+
 const schema = defineSchema(
   {
-    // default auth tables using convex auth.
     ...authTables, // do not remove or modify
 
-    // the users table is the default users table that is brought in by the authTables
     users: defineTable({
-      name: v.optional(v.string()), // name of the user. do not remove
-      image: v.optional(v.string()), // image of the user. do not remove
-      email: v.optional(v.string()), // email of the user. do not remove
-      emailVerificationTime: v.optional(v.number()), // email verification time. do not remove
-      isAnonymous: v.optional(v.boolean()), // is the user anonymous. do not remove
+      name: v.optional(v.string()),
+      image: v.optional(v.string()),
+      email: v.optional(v.string()),
+      emailVerificationTime: v.optional(v.number()),
+      isAnonymous: v.optional(v.boolean()),
+      role: v.optional(roleValidator),
+    }).index("email", ["email"]),
 
-      role: v.optional(roleValidator), // role of the user. do not remove
-    }).index("email", ["email"]), // index for the email. do not remove or modify
-
-    // WarriorCatsRPG — one save per signed-in player.
+    // One cat per signed-in player.
     players: defineTable({
       userId: v.id("users"),
+      mode: v.union(v.literal("story"), v.literal("open")),
       catName: v.string(),
+      clan: v.optional(v.string()),
+      rank: v.optional(v.string()),
+      xp: v.optional(v.number()),
+      inventory: v.optional(v.array(v.string())),
+      achievements: v.optional(v.array(v.string())),
+      appearance: appearanceValidator,
       x: v.number(),
       y: v.number(),
-      discovered: v.array(v.string()), // area ids
-      questsDone: v.array(v.string()), // quest ids
+      discovered: v.optional(v.array(v.string())),
+      storyStep: v.optional(v.number()),
+      questsDone: v.optional(v.array(v.string())),
+      skills: v.optional(v.object({
+        hunt: v.number(),
+        fight: v.number(),
+        herb: v.number(),
+      })),
       createdAt: v.number(),
       updatedAt: v.number(),
     }).index("by_user", ["userId"]),
+
+    // Multiplayer presence: one row per player, heartbeat-updated.
+    presence: defineTable({
+      userId: v.id("users"),
+      catName: v.string(),
+      clan: v.optional(v.string()),
+      rank: v.optional(v.string()),
+      appearance: appearanceValidator,
+      x: v.number(),
+      y: v.number(),
+      facing: v.number(),
+      moving: v.boolean(),
+      emote: v.optional(v.string()),
+      mode: v.union(v.literal("story"), v.literal("open")),
+      updatedAt: v.number(),
+    }).index("by_user", ["userId"])
+      .index("by_updated", ["updatedAt"]),
+
+    // Chat: global / clan / local (local rendered client-side by distance).
+    messages: defineTable({
+      fromUserId: v.id("users"),
+      fromName: v.string(),
+      channel: v.union(v.literal("global"), v.literal("clan"), v.literal("local")),
+      clan: v.optional(v.string()),
+      x: v.number(),
+      y: v.number(),
+      text: v.string(),
+      createdAt: v.number(),
+    }).index("by_created", ["createdAt"]),
   },
   {
     schemaValidation: false,
