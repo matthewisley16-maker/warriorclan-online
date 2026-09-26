@@ -195,5 +195,23 @@ for (const id of Object.keys(interiors)) {
 }
 check(allOk, "all interiors cycle enter/exit without exceptions");
 
+// ---------- TEST 5: exiting NEVER leaves the player stuck in a wall ----------
+const { isSolidPoint: solidCheck } = await import("../src/game/world");
+const eng5 = g as unknown as { px: number; py: number; enterInterior: (id: string, from?: unknown) => void; exitInterior: () => void };
+let stuckCount = 0;
+for (const id of Object.keys(interiors)) {
+  // enter from a plausible spot, then exit, and verify walkable ground
+  const obj = allObjects.find((o) => o.interior === id && (o as { doorAt?: unknown }).doorAt);
+  const sx = obj ? obj.x : eng5.px;
+  const sy = obj ? obj.y + obj.h / 2 + 30 : eng5.py;
+  eng5.enterInterior(id, obj ? { x: obj.x, y: obj.y, w: obj.w, h: obj.h } : undefined);
+  eng5.exitInterior();
+  if (solidCheck(eng5.px, eng5.py)) {
+    stuckCount++;
+    console.log(`   ✗ stuck after leaving ${id} at tile (${(eng5.px / 32).toFixed(1)}, ${(eng5.py / 32).toFixed(1)})`);
+  }
+}
+check(stuckCount === 0, `exiting any interior never lands inside collision (${Object.keys(interiors).length} rooms checked)`);
+
 console.log(failures === 0 ? "\nALL BEHAVIOR TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

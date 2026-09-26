@@ -4,6 +4,9 @@
 // changing anything about the game world, engine, or saves.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { useAuthActions } from "@convex-dev/auth/react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
@@ -794,6 +797,67 @@ export interface MainMenuPlayer {
   skills: { hunt: number; fight: number; herb: number };
 }
 
+function SignOutControl() {
+  const { signOut } = useAuthActions();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const savePosition = useMutation(api.players.savePosition);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+
+  const doSignOut = async () => {
+    setBusy(true);
+    // 1-2: flush a final position save and CONFIRM it completed before
+    // touching the session (the cat row itself is already autosaved).
+    try {
+      setSaveState("saving");
+      const raw = localStorage.getItem("wcrpg-last-pos");
+      const pos = raw ? (JSON.parse(raw) as { x: number; y: number }) : null;
+      if (pos) await savePosition({ x: pos.x, y: pos.y });
+      setSaveState("saved");
+      // 3-5: safe disconnect → the auth session is cleared; saved cats stay.
+      await signOut();
+      window.location.hash = "";
+      window.location.reload(); // guarantees zero in-memory carryover
+    } catch {
+      // 6: never sign out while an important save is pending
+      setSaveState("failed");
+      setBusy(false);
+      return;
+    }
+  };
+
+  if (!confirming) {
+    return (
+      <button
+        onClick={() => setConfirming(true)}
+        className="rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-[11px] font-bold uppercase tracking-widest text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      >
+        Sign out
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      {saveState === "saving" && <span className="text-[11px] text-amber-300">SAVING…</span>}
+      {saveState === "saved" && <span className="text-[11px] text-green-400">SAVED!</span>}
+      {saveState === "failed" && <span className="text-[11px] text-red-400">SAVE FAILED — TRY AGAIN</span>}
+      <button
+        onClick={() => setConfirming(false)}
+        className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest text-white/70 hover:bg-white/10"
+      >
+        Cancel
+      </button>
+      <button
+        onClick={doSignOut}
+        disabled={busy}
+        className="rounded-full bg-red-500/80 px-4 py-1.5 text-[11px] font-bold uppercase tracking-widest text-white hover:bg-red-500 disabled:opacity-50"
+      >
+        {busy ? "Signing out…" : "Sign out"}
+      </button>
+    </div>
+  );
+}
+
 export default function MainMenu({
   player,
   onPlay,
@@ -985,6 +1049,20 @@ export default function MainMenu({
               label="Continue"
               onClick={() => onPlay(player && (player.storyStep ?? 0) > 0 && (player.storyStep ?? 0) < 16 ? "story" : "open", "")}
             />
+          </motion.div>
+
+          {/* Account: signed-in identity + SIGN OUT with save-first confirm */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.65 }}
+            className="mt-2 flex flex-col items-center gap-1.5"
+          >
+            <p className="text-[9px] font-bold uppercase tracking-[0.25em] text-white/35">
+              Signed in as
+            </p>
+            <p className="text-[11px] font-semibold text-white/75">{player?.name ?? "Guest"}</p>
+            <SignOutControl />
           </motion.div>
           <p className="mt-2.5 pb-1 text-center text-[10px] text-white/40">
             One cat, every adventure — your cat, progress and discoveries are saved automatically.

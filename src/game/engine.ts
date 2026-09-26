@@ -997,10 +997,11 @@ export class GameCanvas {
     this.cb.onInteriorChange(null);
   }
 
-  enterInterior(id: string) {
+  enterInterior(id: string, fromObj?: { x: number; y: number; w: number; h: number }) {
     const room = interiors[id];
     if (!room) return;
     if (!this.interiorId) this.exitPos = { x: this.px, y: this.py };
+    if (fromObj) this.enteredFrom = fromObj;
     this.interiorId = id;
     const geo = ROOM_GEO[id];
     this.px = ((geo?.w ?? ROOM_W) / 2) * 32;
@@ -1011,18 +1012,88 @@ export class GameCanvas {
     this.cb.onInteriorChange(id);
   }
 
+  /** the world object whose interior we're inside (for safe exit placement) */
+  private enteredFrom: { x: number; y: number; w: number; h: number } | null = null;
+
   exitInterior() {
     if (!this.interiorId) return;
     this.interiorId = null;
+    // Place the player at the nearest WALKABLE point outside the entrance
+    // object's collision — never inside a wall (the old fixed +40px offset
+    // could land inside solid dens, permanently trapping the player).
     if (this.exitPos) {
-      this.px = this.exitPos.x;
-      this.py = this.exitPos.y + 40;
+      let placed = false;
+      if (this.enteredFrom) {
+        const spot = this.findWalkableExitSpot(this.enteredFrom);
+        if (spot) {
+          this.px = spot.x;
+          this.py = spot.y;
+          placed = true;
+        }
+      }
+      if (!placed) {
+        // fallback: below the entry point, verified walkable
+        let y = this.exitPos.y + 24;
+        for (let i = 0; i < 10 && !placed; i++) {
+          if (!this.solidAt(this.exitPos.x, y)) {
+            this.px = this.exitPos.x;
+            this.py = y;
+            placed = true;
+          }
+          y += 16;
+        }
+      }
+      if (!placed) {
+        // last resort: keep old position (never trap the player)
+        this.px = this.exitPos.x;
+        this.py = this.exitPos.y + 40;
+      }
       this.camX = this.px;
       this.camY = this.py;
     }
+    this.enteredFrom = null;
     this.doorArmed = false; // must step away before walking back in
     this.doorCooldownUntil = this.time + 1.2;
     this.cb.onInteriorChange(null);
+  }
+
+  /** First free point on a ring just outside the entrance's collision box. */
+  private findWalkableExitSpot(box: { x: number; y: number; w: number; h: number }): { x: number; y: number } | null {
+    const candidates: { x: number; y: number }[] = [];
+    // south (in front of the door), then east, west, north — in steps outward
+    for (const [dx, dy] of [
+      [0, 1], [1, 0], [-1, 0], [0, -1],
+    ] as const) {
+      for (let d = 1; d <= 4; d++) {
+        candidates.push({
+          x: box.x + dx * (box.w / 2 + d * 14),
+          y: box.y + dy * (box.h / 2 + d * 14),
+        });
+      }
+    }
+    for (const c of candidates) {
+      if (this.solidAt(c.x, c.y)) continue;
+      // never place the player inside ANOTHER entrance's trigger radius —
+      // that would instantly re-enter a room after leaving one
+      let nearAnyDoor = false;
+      for (const o of allObjects) {
+        if (!o.interior || !o.doorAt) continue;
+        const dxp = o.x + o.doorAt.dx * 32;
+        const dyp = o.y + o.h / 2 + o.doorAt.dy * 32;
+        const th = o.solid ? Math.max(30, o.w * 0.28) : Math.max(20, o.w * 0.16);
+        if (Math.hypot(dxp - c.x, dyp - c.y) < th + 12) {
+          nearAnyDoor = true;
+          break;
+        }
+      }
+      if (!nearAnyDoor) return c;
+    }
+    return null;
+  }
+
+  private solidAt(x: number, y: number): boolean {
+    // reuse the collision check used for movement
+    return !this.canMoveTo(x, y);
   }
 
   /**
@@ -1523,7 +1594,13 @@ export class GameCanvas {
       if (!nearDoor) {
         this.doorArmed = true;
       } else if (this.doorArmed && !this.paused && this.time > this.doorCooldownUntil) {
-        this.enterInterior(nearDoor);
+        const doorObj = allObjects.find(
+          (o) => o.interior === nearDoor && o.doorAt,
+        );
+        this.enterInterior(
+          nearDoor,
+          doorObj ? { x: doorObj.x, y: doorObj.y, w: doorObj.w, h: doorObj.h } : undefined,
+        );
       } else if (!this.doorArmed && this.time > this.doorCooldownUntil + 1.4) {
         // standing at a doorway for a moment re-arms it — predictable re-entry
         // without ever bouncing straight back after an exit

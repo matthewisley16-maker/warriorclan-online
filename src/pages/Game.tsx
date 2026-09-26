@@ -471,6 +471,12 @@ export default function Game() {
 
   const posRef = useRef(pos);
   posRef.current = pos;
+  // persisted for the sign-out flush (save-before-sign-out guarantee)
+  useEffect(() => {
+    try {
+      localStorage.setItem("wcrpg-last-pos", JSON.stringify({ x: pos.x, y: pos.y }));
+    } catch { /* storage unavailable */ }
+  }, [pos.x, pos.y]);
   const discRef = useRef(discovered);
   discRef.current = discovered;
 
