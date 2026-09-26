@@ -254,6 +254,9 @@ function EmoteBar({ onEmote }: { onEmote: (e: (typeof EMOTES)[number]) => void }
         <button
           key={e.label}
           title={e.label}
+          // Don't steal keyboard focus on click, so Space/Enter keep
+          // driving the game instead of re-triggering the emote.
+          onMouseDown={(ev) => ev.preventDefault()}
           onClick={() => onEmote(e)}
           className="flex size-9 flex-col items-center justify-center rounded-xl text-base transition-colors hover:bg-muted"
         >

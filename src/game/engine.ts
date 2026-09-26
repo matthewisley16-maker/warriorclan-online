@@ -613,6 +613,12 @@ export class GameCanvas {
     if (this.time > this.poseUntil && this.pPose !== "walk") this.pPose = "walk";
 
     const movingNow = dx !== 0 || dy !== 0;
+    // Any movement input immediately breaks out of an emote pose so the
+    // player can never get stuck sitting/sleeping/grooming.
+    if (movingNow && this.pPose !== "walk") {
+      this.pPose = "walk";
+      this.poseUntil = 0;
+    }
     this.pPose = movingNow && this.pPose === "walk" ? "walk" : this.pPose;
     if (movingNow && this.pPose === "walk") {
       const len = Math.hypot(dx, dy);
