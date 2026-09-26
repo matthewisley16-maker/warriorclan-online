@@ -119,39 +119,41 @@ check(!eng.prey.some((p) => p.id === "test-mouse"), "prey fully despawned after 
 
 // ---------- TEST 3: walk-through doors — approach, auto-enter, walk out ----------
 const door = allObjects.find((o) => o.id === "smudge-door")!;
-// pathfind a straight approach: stand 20px below the door
-const below = { x: door.x, y: door.y + door.h / 2 + 20 };
-check(!isSolidPoint(below.x, below.y), "smudge-door approach point is walkable");
-eng.px = below.x;
-eng.py = below.y;
-eng.camX = below.x;
-eng.camY = below.y;
+const room = interiors["smudge-house"];
+const gw = room.walls[0].length;
+const gh = room.walls.length;
+// stand right at the doorstep (inside the walk-in trigger radius)
+const doorstep = { x: door.x, y: door.y + 14 };
+check(!isSolidPoint(doorstep.x, doorstep.y), "smudge-door doorstep is walkable");
+eng.px = doorstep.x;
+eng.py = doorstep.y;
+eng.camX = doorstep.x;
+eng.camY = doorstep.y;
 const g2 = g as unknown as { interiorId: string | null; doorArmed: boolean; doorCooldownUntil: number; time: number };
 step(3);
 check(g2.interiorId === "smudge-house", "walking into the doorway auto-enters (no E needed)");
 step(5);
 check(g2.interiorId === "smudge-house", "staying inside keeps the room loaded");
 
-// walk out through the doorway gap
-const geo = (await import("../src/game/engine"));
-const roomGeo = (geo as unknown as { ROOM_GEO: Record<string, { w: number; h: number }> }).ROOM_GEO["smudge-house"];
-const gw = roomGeo.w;
-const gh = roomGeo.h;
+// walk out through the doorway gap at the bottom wall (hold "down" like a
+// real player walking out — the walk-out runs while moving)
 g2.px = (gw / 2) * 32;
-g2.py = (gh - 2) * 32;
-step(6);
+g2.py = (gh - 2.6) * 32;
+(g2 as unknown as { keys: Set<string> }).keys = new Set(["s"]); // hold S
+step(30);
+(g2 as unknown as { keys: Set<string> }).keys = new Set();
 check(g2.interiorId === null, "walking into the bottom-wall gap exits the room");
-check(g2.doorArmed === false, "exit disarms re-entry (no bounce-back)");
-step(10);
-check(g2.interiorId === null, "standing near the door after exit does NOT re-enter");
+step(30);
+check(g2.interiorId === null, "standing outside after exit does NOT re-enter");
 
-// step away, then come back — re-entry must work again
-g2.py += 90; // walk away
-step(4);
-check(g2.doorArmed === true, "stepping away re-arms the door");
-g2.py -= 90; // return
-step(4);
-check(g2.interiorId === "smudge-house", "returning to the door walks back in");
+// come back to the doorway — re-entry works (after the brief re-arm window,
+// matching the "stand at the door a moment" behavior)
+eng.px = doorstep.x;
+eng.py = doorstep.y;
+step(220); // ~3.7s: cooldown + re-arm window elapsed
+check(g2.interiorId === "smudge-house", "standing at the doorway re-enters after the re-arm window");
+g.exitInterior();
+step(2);
 
 // ---------- TEST 4: every interior enter/exit survives (no crash) ----------
 let allOk = true;

@@ -1443,7 +1443,7 @@ export class GameCanvas {
       let nearDoor: string | null = null;
       for (const o of allObjects) {
         if (!o.interior) continue;
-        const th = Math.max(o.w, o.h) / 2 + 10;
+        const th = Math.max(o.w, o.h) / 2 + 14;
         if (Math.hypot(o.x - this.px, o.y - this.py) < th) {
           nearDoor = o.interior;
           break;
@@ -1453,6 +1453,10 @@ export class GameCanvas {
         this.doorArmed = true;
       } else if (this.doorArmed && !this.paused && this.time > this.doorCooldownUntil) {
         this.enterInterior(nearDoor);
+      } else if (!this.doorArmed && this.time > this.doorCooldownUntil + 1.4) {
+        // standing at a doorway for a moment re-arms it — predictable re-entry
+        // without ever bouncing straight back after an exit
+        this.doorArmed = true;
       }
       for (const o of allObjects) {
         if (o.detail) continue; // garnish never shows an interact prompt
