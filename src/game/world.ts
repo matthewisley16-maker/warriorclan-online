@@ -43,6 +43,8 @@ export interface WorldObject {
   scale?: number;
   /** visual garnish only — never shows an interact prompt */
   detail?: boolean;
+  /** Pokemon-style doorway: door tile offset from object center (tiles). */
+  doorAt?: { dx: number; dy: number };
 }
 
 export interface NPCScheduleSlot {
@@ -494,17 +496,16 @@ const otherClanObjects: WorldObject[] = [
   {
     id: "rusty-house", x: t(78), y: t(140), w: t(5), h: t(3.6),
     label: "Rusty's Twoleg nest", interact: "twolegplace", interior: "rusty-house",
-    style: "house", solid: true, scale: 1.2,
-  },
-  { id: "house-2", x: t(63.6), y: t(138), w: t(3.8), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1.1 },
-  { id: "house-3", x: t(92.4), y: t(138), w: t(3.8), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 0.95 },
-  { id: "house-4", x: t(70), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1 },
-  { id: "house-5", x: t(85), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1.05 },
+    style: "house", solid: true, scale: 1.2, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-2", x: t(63.6), y: t(138), w: t(3.8), h: t(3.2), label: "Twoleg nest", interior: "house-a", style: "house", solid: true, scale: 1.1, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-3", x: t(92.4), y: t(138), w: t(3.8), h: t(3.2), label: "Twoleg nest", interior: "house-c", style: "house", solid: true, scale: 0.95, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-4", x: t(70), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", interior: "house-b", style: "house", solid: true, scale: 1, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-5", x: t(85), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", interior: "house-e", style: "house", solid: true, scale: 1.05, doorAt: { dx: 0, dy: 0 }},
   // Southern street row (across the main street)
-  { id: "house-6", x: t(58), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1 },
-  { id: "house-7", x: t(70), y: t(160), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1.1 },
-  { id: "house-8", x: t(84), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 0.9 },
-  { id: "house-9", x: t(96), y: t(160), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1.05 },
+  { id: "house-6", x: t(58), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-a", style: "house", solid: true, scale: 1, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-7", x: t(70), y: t(160), w: t(4), h: t(3), label: "Twoleg nest", interior: "house-d", style: "house", solid: true, scale: 1.1, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-8", x: t(84), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-b", style: "house", solid: true, scale: 0.9, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-9", x: t(96), y: t(160), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-e", style: "house", solid: true, scale: 1.05, doorAt: { dx: 0, dy: 0 }},
   // Porches — front doors of a few nests (rendered as small wooden slabs)
   { id: "porch-1", x: t(78), y: t(142.4), w: t(1.6), h: t(1), label: "Rusty's porch", style: "log" },
   { id: "porch-2", x: t(92), y: t(140.2), w: t(1.6), h: t(1), label: "Nest porch", style: "log" },
@@ -550,23 +551,9 @@ const otherClanObjects: WorldObject[] = [
   // Front doors sit just south of each house, clear of the solid footprint.
   // The five kittypet doors were previously unreachable (embedded inside
   // another house's collision) — relocated to their own doorsteps.
-  { id: "house-2-door", x: t(64), y: t(139.4), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-a", style: "door" },
-  { id: "house-3-door", x: t(92), y: t(139.4), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-c", style: "door" },
-  { id: "house-4-door", x: t(70), y: t(135.3), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-b", style: "door" },
-  { id: "house-5-door", x: t(85), y: t(135.3), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-e", style: "door" },
-  { id: "house-6-door", x: t(58), y: t(159.4), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-a", style: "door" },
-  { id: "house-7-door", x: t(70), y: t(161.3), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-d", style: "door" },
-  { id: "house-8-door", x: t(84), y: t(159.4), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-b", style: "door" },
-  { id: "house-9-door", x: t(96), y: t(161.3), w: t(1.2), h: t(0.9), label: "Twoleg nest door", interact: "twolegplace", interior: "house-e", style: "door" },
   // Rusty's own front door (the nest itself was already enterable)
-  { id: "rusty-front-door", x: t(78), y: t(141.6), w: t(1.2), h: t(0.9), label: "Rusty's front door", interact: "twolegplace", interior: "rusty-house", style: "door" },
   // Kittypet doorstep doors — relocated OUT of neighboring collision so the
   // doorway is actually reachable from the street.
-  { id: "smudge-door", x: t(74.5), y: t(142.2), w: t(1.2), h: t(0.9), label: "Smudge's front door", interact: "twolegplace", interior: "smudge-house", style: "door" },
-  { id: "henry-door", x: t(61.2), y: t(142.2), w: t(1.2), h: t(0.9), label: "Henry's front door", interact: "twolegplace", interior: "henry-house", style: "door" },
-  { id: "princess-door", x: t(69.5), y: t(138.2), w: t(1.2), h: t(0.9), label: "Princess's front door", interact: "twolegplace", interior: "princess-house", style: "door" },
-  { id: "marmalade-door", x: t(94.6), y: t(142.2), w: t(1.2), h: t(0.9), label: "Marmalade's front door", interact: "twolegplace", interior: "marmalade-house", style: "door" },
-  { id: "ginger-door", x: t(83.5), y: t(162.2), w: t(1.2), h: t(0.9), label: "Ginger's front door", interact: "twolegplace", interior: "ginger-house", style: "door" },
   // Front paths so each doorway reads as an entrance, not a random door
   { id: "path-2", x: t(64), y: t(141.6), w: t(1.2), h: t(2.2), style: "mudpatch", detail: true },
   { id: "path-3", x: t(92), y: t(141.6), w: t(1.2), h: t(2.2), style: "mudpatch", detail: true },
@@ -591,12 +578,38 @@ const otherClanObjects: WorldObject[] = [
   { id: "tp-stones-2", x: t(97), y: t(149.8), w: t(1.1), h: t(0.8), style: "stone", detail: true },
   { id: "tp-log-1", x: t(63), y: t(163), w: t(2), h: t(0.9), style: "log", detail: true },
 
+  // ---- kittypet houses: standalone enterable buildings with their own
+  //      black doorways (walk up to the gap to step inside) ----
+  {
+    id: "smudge-house", x: t(73.6), y: t(142.2), w: t(2.2), h: t(1.7),
+    label: "Smudge's cozy home", interact: "twolegplace", interior: "smudge-house",
+    style: "house", solid: true, scale: 0.8, doorAt: { dx: 0, dy: 0 },
+  },
+  {
+    id: "henry-house", x: t(59.8), y: t(142.2), w: t(2.2), h: t(1.7),
+    label: "Henry's house", interact: "twolegplace", interior: "henry-house",
+    style: "house", solid: true, scale: 0.8, doorAt: { dx: 0, dy: 0 },
+  },
+  {
+    id: "princess-house", x: t(69.5), y: t(136.5), w: t(2.2), h: t(1.7),
+    label: "Princess's sunny house", interact: "twolegplace", interior: "princess-house",
+    style: "house", solid: true, scale: 0.8, doorAt: { dx: 0, dy: 0 },
+  },
+  {
+    id: "marmalade-house", x: t(94.6), y: t(142.2), w: t(2.2), h: t(1.7),
+    label: "Marmalade's house", interact: "twolegplace", interior: "marmalade-house",
+    style: "house", solid: true, scale: 0.8, doorAt: { dx: 0, dy: 0 },
+  },
+  {
+    id: "ginger-house", x: t(83.5), y: t(160.9), w: t(2.2), h: t(1.7),
+    label: "Ginger's house", interact: "twolegplace", interior: "ginger-house",
+    style: "house", solid: true, scale: 0.8, doorAt: { dx: 0, dy: 0 },
+  },
   // Farm
   {
     id: "barn", x: t(124), y: t(156), w: t(6), h: t(4),
     label: "The farm barn", interact: "farm", interior: "barn",
-    style: "barn", solid: true, scale: 1.2,
-  },
+    style: "barn", solid: true, scale: 1.2, doorAt: { dx: 0, dy: 0 }},
   { id: "fence-farm-1", x: t(112), y: t(148), w: t(14), h: t(0.8), label: "Farm fence", style: "fence" },
   { id: "fence-farm-2", x: t(132), y: t(164), w: t(12), h: t(0.8), label: "Farm fence", style: "fence" },
   // Border markers for patrols

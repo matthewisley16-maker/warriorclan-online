@@ -118,12 +118,15 @@ step(45); // death pose elapses
 check(!eng.prey.some((p) => p.id === "test-mouse"), "prey fully despawned after the death pose");
 
 // ---------- TEST 3: walk-through doors — approach, auto-enter, walk out ----------
-const door = allObjects.find((o) => o.id === "smudge-door")!;
+const house = allObjects.find((o) => o.id === "smudge-house")!;
 const room = interiors["smudge-house"];
 const gw = room.walls[0].length;
 const gh = room.walls.length;
+// door point: the doorway gap on the house's south face
+const doorX = house.x + (house.doorAt?.dx ?? 0) * 32;
+const doorY = house.y + house.h / 2 + (house.doorAt?.dy ?? 0) * 32;
 // stand right at the doorstep (inside the walk-in trigger radius)
-const doorstep = { x: door.x, y: door.y + 14 };
+const doorstep = { x: doorX, y: doorY + 14 };
 check(!isSolidPoint(doorstep.x, doorstep.y), "smudge-door doorstep is walkable");
 eng.px = doorstep.x;
 eng.py = doorstep.y;

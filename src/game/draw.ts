@@ -410,7 +410,7 @@ export function drawPrey(
 // Props
 // ---------------------------------------------------------------------------
 
-export function drawHouse(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+export function drawHouse(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, opts?: { doorway?: boolean }) {
   ctx.fillStyle = "rgba(0,0,0,0.2)";
   ctx.beginPath();
   ctx.ellipse(x, y + h * 0.42, w * 0.55, h * 0.22, 0, 0, Math.PI * 2);
@@ -426,12 +426,34 @@ export function drawHouse(ctx: CanvasRenderingContext2D, x: number, y: number, w
   ctx.lineTo(x + w * 0.5, y - h * 0.35);
   ctx.closePath();
   ctx.fill();
-  // door + windows
-  ctx.fillStyle = "#6a4a34";
-  ctx.fillRect(x - w * 0.07, y - h * 0.12, w * 0.14, h * 0.5);
+  // windows
   ctx.fillStyle = "#7fa8c9";
-  ctx.fillRect(x - w * 0.3, y - h * 0.28, w * 0.14, h * 0.16);
-  ctx.fillRect(x + w * 0.16, y - h * 0.28, w * 0.14, h * 0.16);
+  ctx.fillRect(x - w * 0.32, y - h * 0.28, w * 0.14, h * 0.16);
+  ctx.fillRect(x + w * 0.18, y - h * 0.28, w * 0.14, h * 0.16);
+  if (opts?.doorway) {
+    // Pokemon-style open doorway: a black rounded-top gap set into the facade
+    const dw = Math.max(14, w * 0.17);
+    ctx.fillStyle = "#0a0a0c";
+    ctx.beginPath();
+    ctx.moveTo(x - dw / 2, y + h * 0.38);
+    ctx.lineTo(x - dw / 2, y - h * 0.02);
+    ctx.quadraticCurveTo(x, y - h * 0.2, x + dw / 2, y - h * 0.02);
+    ctx.lineTo(x + dw / 2, y + h * 0.38);
+    ctx.closePath();
+    ctx.fill();
+    // warm light spilling out of the open door
+    const g = ctx.createRadialGradient(x, y + h * 0.3, 2, x, y + h * 0.3, dw * 1.5);
+    g.addColorStop(0, "rgba(255, 214, 140, 0.35)");
+    g.addColorStop(1, "rgba(255, 214, 140, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.38, dw * 1.2, h * 0.13, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // closed door (non-enterable nests)
+    ctx.fillStyle = "#6a4a34";
+    ctx.fillRect(x - w * 0.07, y - h * 0.12, w * 0.14, h * 0.5);
+  }
 }
 
 export function drawBarn(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
@@ -448,11 +470,12 @@ export function drawBarn(ctx: CanvasRenderingContext2D, x: number, y: number, w:
   ctx.lineTo(x + w * 0.5, y - h * 0.4);
   ctx.closePath();
   ctx.fill();
-  ctx.fillStyle = "#e8dcc8";
-  ctx.fillRect(x - w * 0.1, y - h * 0.18, w * 0.2, h * 0.55);
-  ctx.strokeStyle = "#7a3322";
+  // big open barn doorway — black gap (barn is enterable)
+  ctx.fillStyle = "#0a0a0c";
+  ctx.fillRect(x - w * 0.12, y - h * 0.08, w * 0.24, h * 0.5);
+  ctx.strokeStyle = "#5a2418";
   ctx.lineWidth = 2;
-  ctx.strokeRect(x - w * 0.1, y - h * 0.18, w * 0.2, h * 0.55);
+  ctx.strokeRect(x - w * 0.12, y - h * 0.08, w * 0.24, h * 0.5);
 }
 
 export function drawFence(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {

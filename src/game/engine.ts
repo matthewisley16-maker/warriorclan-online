@@ -84,7 +84,9 @@ export interface GameCallbacks {
   onWeatherChange: (w: WeatherKind) => void;
   onInteriorChange: (id: string | null) => void;
   /** Rare ambient NPC chatter when a cat is idling near the player. */
-  onNpcIdle?: (npcName: string, line: string) => void;
+  onNpcIdle?: (name: string, line: string) => void;
+  /** waypoint distance update: meters + tiles (1 tile = 6 m) + arrived flag */
+  onWaypoint?: (info: { meters: number; tiles: number; arrived: boolean }) => void;
 }
 
 export type WeatherKind =
@@ -900,6 +902,7 @@ export class GameCanvas {
 
   private lastArea = "";
   private lastNearby: NearbyTarget | null = null;
+  private lastWaypointEmit = 0;
   private lastMoveEmit = 0;
   private destroyed = false;
 
@@ -929,6 +932,9 @@ export class GameCanvas {
   private doorCooldownUntil = 0;
   /** re-armed once the player steps away from every doorway */
   private doorArmed = true;
+  /** active waypoint in world px (set from the map's real tile coordinates) */
+  private waypoint: { x: number; y: number } | null = null;
+  private waypointArrived = false;
   private sneaking = false;
 
   constructor(canvas: HTMLCanvasElement, spawn: { x: number; y: number }, cb: GameCallbacks) {
@@ -1034,6 +1040,22 @@ export class GameCanvas {
     this.huntedCount++;
     this.cb.onPreyCaught(target.kind);
     return target.kind;
+  }
+
+  /** Set a waypoint from world tile coordinates (map spot * 32). */
+  setWaypoint(tx: number, ty: number) {
+    this.waypoint = { x: tx * 32, y: ty * 32 };
+    this.waypointArrived = false;
+  }
+
+  clearWaypoint() {
+    this.waypoint = null;
+    this.waypointArrived = false;
+    this.cb.onWaypoint?.({ meters: 0, tiles: 0, arrived: false });
+  }
+
+  get hasWaypoint() {
+    return this.waypoint !== null;
   }
 
   addBubble(b: ChatBubble) {
@@ -1424,6 +1446,26 @@ export class GameCanvas {
       this.prey = this.prey.filter((p) => p.phase === "alive" || this.time < p.deadUntil);
     }
 
+    // --- waypoint: distance + arrival (outside AND inside buildings) ---
+    if (this.waypoint) {
+      const dTiles = Math.hypot(this.waypoint.x - this.px, this.waypoint.y - this.py) / 32;
+      const meters = Math.round(dTiles * 6);
+      const arrived = !this.waypointArrived && dTiles <= 1.5; // ~9 m arrival radius
+      if (arrived) this.waypointArrived = true;
+      if (this.time - this.lastWaypointEmit > 0.25) {
+        this.lastWaypointEmit = this.time;
+        this.cb.onWaypoint?.({
+          meters,
+          tiles: Math.round(dTiles),
+          arrived,
+        });
+      }
+      if (arrived) {
+        this.waypoint = null;
+        this.cb.onWaypoint?.({ meters: 0, tiles: 0, arrived: true });
+      }
+    }
+
     // --- area + nearby detection ---
     const area = areaAt(this.px, this.py);
     const areaName = this.interiorId
@@ -1442,9 +1484,12 @@ export class GameCanvas {
       // after stepping away, so exiting never bounces you back inside.
       let nearDoor: string | null = null;
       for (const o of allObjects) {
-        if (!o.interior) continue;
-        const th = Math.max(o.w, o.h) / 2 + 14;
-        if (Math.hypot(o.x - this.px, o.y - this.py) < th) {
+        if (!o.interior || !o.doorAt) continue;
+        // door point: the doorway gap on the object's south face
+        const doorX = o.x + o.doorAt.dx * 32;
+        const doorY = o.y + o.h / 2 + o.doorAt.dy * 32;
+        const th = Math.max(20, o.w * 0.16);
+        if (Math.hypot(doorX - this.px, doorY - this.py) < th) {
           nearDoor = o.interior;
           break;
         }
@@ -1968,7 +2013,7 @@ export class GameCanvas {
             case "fresh-kill": drawFreshKillPile(ctx, o.x, o.y); break;
             case "stump": this.drawStump(o.x, o.y, w * 0.45); break;
             case "tallrock-big": drawTallRock(ctx, o.x, o.y, w, h); break;
-            case "house": drawHouse(ctx, o.x, o.y, w, h); break;
+            case "house": drawHouse(ctx, o.x, o.y, w, h, { doorway: !!o.interior }); break;
             case "barn": drawBarn(ctx, o.x, o.y, w, h); break;
             case "fence": drawFence(ctx, o.x, o.y, w, h); break;
             case "cave": drawCave(ctx, o.x, o.y, w, h); break;
@@ -2099,6 +2144,51 @@ export class GameCanvas {
 
     ents.sort((a, b) => a.y - b.y);
     for (const e of ents) e.draw();
+
+    // waypoint beacon + directional arrow (world space, floats over the cat)
+    if (this.waypoint) {
+      const ang = Math.atan2(this.waypoint.y - this.py, this.waypoint.x - this.px);
+      const t = this.time;
+      const bob = Math.sin(t * 2.2) * 4;
+      // floating beacon over the cat: ring + arrow pointing along `ang`
+      const ax = this.px;
+      const ay = this.py - 62 + bob;
+      // soft glow disc
+      const glow = ctx.createRadialGradient(ax, ay, 2, ax, ay, 26);
+      glow.addColorStop(0, "rgba(255, 200, 80, 0.35)");
+      glow.addColorStop(1, "rgba(255, 200, 80, 0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(ax, ay, 26, 0, Math.PI * 2);
+      ctx.fill();
+      // rotating arrow — world direction, smooth, points behind the player too
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(ang);
+      const wob = Math.sin(t * 6) * 0.06;
+      ctx.rotate(wob);
+      ctx.fillStyle = "#ffc653";
+      ctx.strokeStyle = "rgba(90, 55, 10, 0.85)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(16, 0);
+      ctx.lineTo(-9, -9);
+      ctx.lineTo(-4, 0);
+      ctx.lineTo(-9, 9);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      // dotted guide line toward the target (first 90 px)
+      ctx.strokeStyle = "rgba(255, 198, 83, 0.4)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.moveTo(this.px + Math.cos(ang) * 22, this.py - 8 + Math.sin(ang) * 22);
+      ctx.lineTo(this.px + Math.cos(ang) * 110, this.py - 8 + Math.sin(ang) * 110);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     // chat bubbles (world space, anchored to the cat they belong to)
     for (const b of this.bubbles) {

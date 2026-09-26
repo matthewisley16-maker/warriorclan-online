@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
   Clock,
+  Mail,
   MessageCircle,
   PawPrint,
   ScrollText,
@@ -21,7 +22,7 @@ import { lore, npcs, areaAt, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
 import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } from "./MainMenu";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
-import { WorldMapCanvas, MapLegend, WorldMapOverlay } from "./WorldMapData";
+import { WorldMapCanvas, MapLegend, WorldMapOverlay, MAP_SPOTS } from "./WorldMapData";
 import {
   ChatPanel,
   CodexPanel,
@@ -34,6 +35,8 @@ import {
   type ChatBubbleKeyed,
   type ChatChannel,
 } from "./gameUi";
+import { FriendsDMsPanel, type SocialScreen } from "./FriendsDMs";
+import { useNavigate } from "react-router";
 import type { CatSkin } from "@/game/draw";
 
 // ---------------------------------------------------------------------------
@@ -41,6 +44,7 @@ import type { CatSkin } from "@/game/draw";
 // ---------------------------------------------------------------------------
 
 export default function Game() {
+  const navigate = useNavigate();
   // --- routing-level state: which step of entry are we on? ---
   const [phase, setPhase] = useState<"menu" | "loading" | "playing">("menu");
   const [mode, setMode] = useState<GameMode>("open");
@@ -55,6 +59,8 @@ export default function Game() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<GameCanvas | null>(null);
+  const navRef = useRef(navigate);
+  navRef.current = navigate;
 
   const player = useQuery(api.players.getPlayer);
   const ensurePlayer = useMutation(api.players.ensurePlayer);
@@ -93,6 +99,18 @@ export default function Game() {
   const [myCat, setMyCat] = useState<{ name: string; clan?: string; appearance: CatSkin } | null>(null);
   const [storyStep, setStoryStepLocal] = useState(0);
   const [chatFeed, setChatFeed] = useState<{ id: string; fromName: string; text: string; mine?: boolean; channel: string; x?: number; y?: number }[]>([]);
+  // --- social / waypoint / network state ---
+  const [socialScreen, setSocialScreen] = useState<SocialScreen>("CLOSED");
+  const [friendsOpen, setFriendsOpen] = useState(false);
+  const [waypointLabel, setWaypointLabel] = useState<string | null>(null);
+  const [currentWaypointId, setCurrentWaypointId] = useState<string | null>(null);
+  const [waypointInfo, setWaypointInfo] = useState<{ meters: number; tiles: number; arrived: boolean } | null>(null);
+  const [ping, setPing] = useState<number | null>(null);
+  const [connQuality, setConnQuality] = useState<"excellent" | "good" | "fair" | "poor" | "offline">("good");
+  const [dmToast, setDmToast] = useState<{ from: string; count: number } | null>(null);
+  const lastUnreadRef = useRef(0);
+  const unreadRequests = useQuery(api.social.unreadRequestCount, phase === "playing" ? {} : "skip");
+  const unreadDms = useQuery(api.social.unreadDmCounts, phase === "playing" ? {} : "skip");
 
   const chatFeedRef = useRef(chatFeed);
   chatFeedRef.current = chatFeed;
@@ -107,6 +125,21 @@ export default function Game() {
   useEffect(() => {
     if (chatQuery) setChatFeed(chatQuery as typeof chatFeed);
   }, [chatQuery]);
+
+  // New-DM notification: one combined toast when the social panel is closed.
+  useEffect(() => {
+    const total = unreadDms?.total ?? 0;
+    const prev = lastUnreadRef.current;
+    lastUnreadRef.current = total;
+    if (total > prev && !friendsOpen && total > 0) {
+      const convs = unreadDms?.byUser ?? {};
+      const topUser = Object.entries(convs).sort((a, b) => b[1] - a[1])[0]?.[0];
+      setDmToast({ from: topUser ? "a friend" : "a friend", count: total });
+      const t = window.setTimeout(() => setDmToast(null), 6000);
+      return () => window.clearTimeout(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unreadDms?.total, friendsOpen]);
 
   // Load an existing save into the HUD.
   useEffect(() => {
@@ -216,6 +249,10 @@ export default function Game() {
         setDialogue({ name, text: line });
         window.setTimeout(() => setDialogue((d) => (d && d.name === name && d.text === line ? null : d)), 6000);
       },
+      onWaypoint: (info) => {
+        setWaypointInfo(info);
+        if (info.arrived) setWaypointLabel(null); // arrival clears guidance
+      },
     });
     gameRef.current = game;
     if (myCat?.appearance) game.mySkin = { ...myCat.appearance, furDark: myCat.appearance.furDark || "#5a3a20" };
@@ -304,10 +341,48 @@ export default function Game() {
     for (const k of [...map.keys()]) if (!seen.has(k)) map.delete(k);
   }, [remotesRaw]);
 
+  // --- ping measurement: real round-trip time of a Convex mutation, sampled
+  // every 8s. Falls back to the Network Information API when mutations fail.
+  useEffect(() => {
+    if (phase !== "playing") return;
+    let alive = true;
+    const sample = async () => {
+      const t0 = performance.now();
+      try {
+        await heartbeat({
+          x: posRef.current.x,
+          y: posRef.current.y,
+          facing: 1,
+          moving: false,
+          mode: mode === "story" ? "story" : "open",
+          catName: myCat?.name ?? "Cat",
+          clan: myCat?.clan,
+          rank: "apprentice",
+          appearance: fullSkin(myCat?.appearance),
+        });
+        const rtt = Math.round(performance.now() - t0);
+        if (!alive) return;
+        setPing(rtt);
+        const q = rtt < 90 ? "excellent" : rtt < 180 ? "good" : rtt < 350 ? "fair" : "poor";
+        setConnQuality(q);
+      } catch {
+        if (!alive) return;
+        setConnQuality((navigator as unknown as { onLine?: boolean }).onLine ? "poor" : "offline");
+      }
+    };
+    sample();
+    const t = window.setInterval(sample, 8000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, mode, myCat?.name]);
+
   // Pause while panels are open.
   useEffect(() => {
-    gameRef.current?.setPaused(dialogue !== null || codexOpen || mapOpen || chatOpen || pauseOpen || catClanOpen);
-  }, [dialogue, codexOpen, mapOpen, chatOpen, pauseOpen, catClanOpen]);
+    gameRef.current?.setPaused(dialogue !== null || codexOpen || mapOpen || chatOpen || pauseOpen || catClanOpen || friendsOpen);
+  }, [dialogue, codexOpen, mapOpen, chatOpen, pauseOpen, catClanOpen, friendsOpen]);
 
   // Camera distance from Settings.
   useEffect(() => {
@@ -324,18 +399,24 @@ export default function Game() {
     return () => window.clearInterval(t);
   }, [phase]);
 
-  // Esc toggles the in-game pause menu (unless typing in chat).
+  // Esc closes the social panel first, then toggles the pause menu
+  // (unless typing in an input — engine ignores those too).
   useEffect(() => {
     if (phase !== "playing") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (friendsOpen) {
+        setFriendsOpen(false);
+        setSocialScreen("CLOSED");
+        return;
+      }
       setPauseOpen((p) => !p);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [phase]);
+  }, [phase, friendsOpen]);
 
   const posRef = useRef(pos);
   posRef.current = pos;
@@ -603,11 +684,51 @@ export default function Game() {
         </div>
 
         <div className="pointer-events-auto flex items-center gap-2">
+          {/* Ping + connection quality (real measured RTT) */}
+          <div className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/90 px-3 py-1.5 shadow-lg backdrop-blur-sm">
+            <span className={cnConnDot(connQuality)} />
+            <span className="text-[10px] font-semibold uppercase tracking-wide">
+              {ping !== null ? `${ping} ms` : connQuality === "offline" ? "OFFLINE" : "…"}
+            </span>
+            <span className="hidden text-[9px] font-bold uppercase text-muted-foreground sm:inline">{connQuality}</span>
+          </div>
           <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setChatOpen((o) => !o)}>
             <MessageCircle className="size-3.5" /> Chat
           </Button>
           <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setMapOpen(true)}>
             Map
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="relative gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm"
+            onClick={() => {
+              setSocialScreen("FRIENDS_HOME");
+              setFriendsOpen(true);
+            }}
+          >
+            <Users className="size-3.5" /> Friends
+            {(unreadRequests ?? 0) > 0 && (
+              <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white">
+                {unreadRequests}
+              </span>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="relative gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm"
+            onClick={() => {
+              setSocialScreen("MESSAGES_HOME");
+              setFriendsOpen(true);
+            }}
+          >
+            <Mail className="size-3.5" /> Messages
+            {(unreadDms?.total ?? 0) > 0 && (
+              <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white">
+                {unreadDms!.total}
+              </span>
+            )}
           </Button>
           <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setCodexOpen((o) => !o)}>
             <BookOpen className="size-3.5" /> Codex
@@ -644,6 +765,7 @@ export default function Game() {
             facing={facing}
             playerClan={myCat?.clan}
             discovered={discovered}
+            waypoint={currentWaypointId}
             size={116}
           />
           <div className="mt-1 px-0.5 pb-0.5">
@@ -652,12 +774,47 @@ export default function Game() {
         </div>
       </div>
 
-      {/* Online players chip */}
+      {/* Waypoint HUD — real distance from world coordinates */}
+      <AnimatePresence>
+        {waypointLabel && waypointInfo && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="pointer-events-auto absolute left-1/2 top-14 z-20 -translate-x-1/2"
+          >
+            <div className="rounded-2xl border border-amber-400/40 bg-[#1a1408]/90 px-4 py-2 text-center shadow-xl backdrop-blur-sm">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300">{waypointLabel}</p>
+              {waypointInfo.arrived ? (
+                <p className="text-sm font-extrabold text-amber-200">ARRIVED</p>
+              ) : (
+                <>
+                  <p className="text-sm font-extrabold text-white">{waypointInfo.meters} m</p>
+                  <p className="text-[10px] text-white/60">≈{waypointInfo.tiles} tiles</p>
+                </>
+              )}
+              <button
+                className="mt-1 rounded-full border border-amber-400/40 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-amber-300 hover:bg-amber-400/10"
+                onClick={() => {
+                  gameRef.current?.clearWaypoint();
+                  setWaypointLabel(null);
+                  setWaypointInfo(null);
+                }}
+              >
+                Clear waypoint
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Online players chip — SERVER count from real presence */}
       {mode === "open" && (remotesRaw?.length ?? 0) > 0 && (
         <div className="pointer-events-none absolute right-3 top-[11.5rem] z-20">
           <div className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/90 px-3 py-1.5 shadow-lg backdrop-blur-sm">
             <Users className="size-3.5 text-primary" />
-            <span className="text-xs font-medium">{remotesRaw!.length} cat{remotesRaw!.length === 1 ? "" : "s"} online</span>
+            <span className="text-xs font-medium">SERVER: {(remotesRaw!.length ?? 0) + 1}/{(remotesRaw!.length ?? 0) + 1}</span>
+            <span className="text-xs text-muted-foreground">· ONLINE: {(remotesRaw!.length ?? 0) + 1}</span>
           </div>
         </div>
       )}
@@ -743,7 +900,7 @@ export default function Game() {
         )}
       </AnimatePresence>
 
-      {/* World map */}
+      {/* World map with waypoint setting */}
       <AnimatePresence>
         {mapOpen && (
           <WorldMapOverlay
@@ -754,9 +911,70 @@ export default function Game() {
             playerClan={myCat?.clan}
             discovered={discovered}
             remotePlayers={(gameRef.current?.remoteList ?? []).map((r) => ({ x: r.x, y: r.y }))}
+            waypoint={waypointLabel ? currentWaypointId : undefined}
+            onSetWaypoint={(id) => {
+              if (!id) {
+                gameRef.current?.clearWaypoint();
+                setWaypointLabel(null);
+                setWaypointInfo(null);
+              }
+              // id === spot id when set — label applied below via MAP_SPOTS lookup
+              const spot = MAP_SPOTS.find((s) => s.id === id);
+              if (spot) {
+                gameRef.current?.setWaypoint(spot.x, spot.y);
+                setWaypointLabel(spot.label.toUpperCase());
+                setCurrentWaypointId(spot.id);
+              }
+              setMapOpen(false);
+            }}
           />
         )}
       </AnimatePresence>
+
+      {/* New message toast */}
+      <AnimatePresence>
+        {dmToast && !friendsOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="pointer-events-auto absolute bottom-24 right-3 z-40"
+          >
+            <div className="flex items-center gap-3 rounded-2xl border border-border/60 bg-card/95 px-4 py-3 shadow-2xl backdrop-blur-md">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-primary">New message</p>
+                <p className="text-xs text-foreground/85">
+                  You have {dmToast.count} unread message{dmToast.count === 1 ? "" : "s"}.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                className="h-7 rounded-lg text-[11px]"
+                onClick={() => {
+                  setSocialScreen("MESSAGES_HOME");
+                  setFriendsOpen(true);
+                  setDmToast(null);
+                }}
+              >
+                Open
+              </Button>
+              <Button variant="ghost" size="icon" className="size-7 rounded-full" onClick={() => setDmToast(null)}>
+                <X className="size-3.5" />
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Friends & DMs */}
+      <FriendsDMsPanel
+        screen={socialScreen}
+        setScreen={setSocialScreen}
+        onClose={() => {
+          setFriendsOpen(false);
+          setSocialScreen("CLOSED");
+        }}
+      />
 
       {/* Cat & Clan settings */}
       <AnimatePresence>
@@ -848,4 +1066,13 @@ export default function Game() {
       </AnimatePresence>
     </main>
   );
+}
+
+function cnConnDot(q: string): string {
+  const color =
+    q === "excellent" ? "bg-green-500" :
+    q === "good" ? "bg-green-400" :
+    q === "fair" ? "bg-yellow-400" :
+    q === "poor" ? "bg-orange-500" : "bg-red-500";
+  return `inline-block size-2 rounded-full ${color}`;
 }

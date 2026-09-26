@@ -99,6 +99,36 @@ const schema = defineSchema(
       text: v.string(),
       createdAt: v.number(),
     }).index("by_created", ["createdAt"]),
+
+    // Friendships (mutual — one row per pair, stored with sorted ids).
+    friendships: defineTable({
+      aUserId: v.id("users"), // lexicographically smaller id
+      bUserId: v.id("users"), // lexicographically larger id
+      createdAt: v.number(),
+    })
+      .index("by_a", ["aUserId"])
+      .index("by_b", ["bUserId"]),
+
+    // Friend requests (pending until accepted/declined/cancelled).
+    friendRequests: defineTable({
+      fromUserId: v.id("users"),
+      toUserId: v.id("users"),
+      createdAt: v.number(),
+    })
+      .index("by_to", ["toUserId"])
+      .index("by_from", ["fromUserId"]),
+
+    // Direct messages — visible ONLY to the two participants.
+    dmMessages: defineTable({
+      fromUserId: v.id("users"),
+      toUserId: v.id("users"),
+      fromName: v.string(),
+      text: v.string(),
+      readAt: v.optional(v.number()),
+      createdAt: v.number(),
+    })
+      .index("by_pair", ["fromUserId", "toUserId"])
+      .index("by_to", ["toUserId"]),
   },
   {
     schemaValidation: false,
