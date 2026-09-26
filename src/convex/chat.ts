@@ -24,6 +24,7 @@ export const send = mutation({
   args: {
     channel: v.union(v.literal("global"), v.literal("clan"), v.literal("local")),
     clan: v.optional(v.string()),
+    catName: v.optional(v.string()),
     x: v.number(),
     y: v.number(),
     text: v.string(),
@@ -34,7 +35,9 @@ export const send = mutation({
     const user = await ctx.db.get(userId);
     const text = clean(args.text);
     if (!text) return false;
-    const name = user?.name ?? user?.email?.split("@")[0] ?? "A cat";
+    // Use the player's cat name — that is the identity other players see.
+    const catName = (args.catName ?? "").trim().slice(0, 24);
+    const name = catName || (user?.name ?? user?.email?.split("@")[0] ?? "A cat");
     await ctx.db.insert("messages", {
       fromUserId: userId,
       fromName: name,
@@ -59,7 +62,7 @@ export const list = query({
     const userId = await getAuthUserId(ctx);
     if (userId === null) return [];
     const all = await ctx.db.query("messages").collect();
-    const cutoff = Date.now() - 10 * 60 * 1000; // 10 minutes
+    const cutoff = Date.now() - 30 * 60 * 1000; // 30 minutes of history
     return all
       .filter((m) => {
         if (m.createdAt < cutoff) return false;

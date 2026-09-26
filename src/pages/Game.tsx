@@ -32,6 +32,7 @@ import { storySteps } from "@/game/story";
 import { quests } from "@/game/quests";
 import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } from "./MainMenu";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
+import { WorldMapCanvas, MapLegend, WorldMapOverlay } from "./WorldMapData";
 import type { CatSkin } from "@/game/draw";
 
 /** Fill any missing appearance fields with defaults (matches the save validator). */
@@ -106,36 +107,6 @@ const CLANS = [
   },
 ];
 import { cn } from "@/lib/utils";
-
-// ---------------------------------------------------------------------------
-// Minimap (right side)
-// ---------------------------------------------------------------------------
-
-function Minimap({ px, py }: { px: number; py: number }) {
-  const w = 116;
-  const sx = w / (192 * 32);
-  const sy = (w * (176 * 32)) / (192 * 32) / (176 * 32);
-  return (
-    <svg
-      width={w}
-      height={w * (176 / 192)}
-      viewBox="0 0 192 176"
-      className="rounded-lg bg-[#3f7d43]"
-    >
-      <rect x={0} y={42} width={192} height={4} fill="#3a3d42" />
-      <rect x={0} y={68} width={4} height={108} fill="#3d6f9e" />
-      <rect x={144} y={48} width={8} height={128} fill="#3d6f9e" />
-      <rect x={0} y={40} width={48} height={136} fill="#7fa854" />
-      <rect x={46} y={0} width={100} height={40} fill="#2e5c38" />
-      <rect x={152} y={40} width={40} height={136} fill="#5c7d4a" />
-      <circle cx={89} cy={86} r={12.5} fill="#cbb27e" />
-      <circle cx={20} cy={84} r={8} fill="#cbb27e" opacity={0.9} />
-      <circle cx={170} cy={96} r={8} fill="#cbb27e" opacity={0.9} />
-      <circle cx={96} cy={20} r={8} fill="#cbb27e" opacity={0.9} />
-      <circle cx={px * sx * (192 / 116) / 6} cy={py * sy} r={3} fill="#e05d2a" stroke="#fff" strokeWidth={1} />
-    </svg>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Chat panel
@@ -223,84 +194,6 @@ function ChatPanel({
           <Send className="size-3.5" />
         </Button>
       </form>
-    </motion.div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// World map overlay
-// ---------------------------------------------------------------------------
-
-function WorldMap({
-  onClose,
-  discovered,
-  px,
-  py,
-}: {
-  onClose: () => void;
-  discovered: string[];
-  px: number;
-  py: number;
-}) {
-  const spots = [
-    { id: "camp", x: 89, y: 86, label: "ThunderClan Camp" },
-    { id: "windclan-camp", x: 20, y: 84, label: "WindClan Camp" },
-    { id: "riverclan-camp", x: 170, y: 96, label: "RiverClan Camp" },
-    { id: "shadowclan-camp", x: 96, y: 20, label: "ShadowClan Camp" },
-    { id: "fourtrees", x: 67, y: 129, label: "Fourtrees" },
-    { id: "sunningrocks", x: 55, y: 78, label: "Sunningrocks" },
-    { id: "sandy", x: 79, y: 118, label: "Sandy Hollow" },
-    { id: "snakerocks", x: 114, y: 52, label: "Snakerocks" },
-    { id: "highstones", x: 26, y: 43, label: "Highstones" },
-    { id: "twolegplace", x: 75, y: 144, label: "Twolegplace" },
-    { id: "farm", x: 124, y: 154, label: "The Farm" },
-    { id: "moor", x: 10, y: 110, label: "The Moor" },
-    { id: "marsh", x: 125, y: 20, label: "The Marshes" },
-  ];
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="absolute inset-0 z-40 flex items-center justify-center bg-background/80 p-6 backdrop-blur-sm"
-    >
-      <div className="w-full max-w-2xl rounded-2xl border border-border/60 bg-card p-4 shadow-2xl">
-        <div className="flex items-center justify-between pb-3">
-          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-            <Compass className="size-4 text-primary" /> Territory Map
-          </h2>
-          <Button variant="ghost" size="icon" onClick={onClose} className="size-7 rounded-full">
-            <X className="size-4" />
-          </Button>
-        </div>
-        <svg viewBox="0 0 192 176" className="w-full rounded-xl bg-[#334f2e]">
-          <rect x={0} y={42} width={192} height={4} fill="#2a2d33" />
-          <rect x={0} y={68} width={4} height={108} fill="#3d6f9e" />
-          <rect x={144} y={48} width={8} height={128} fill="#3d6f9e" />
-          <rect x={0} y={40} width={48} height={136} fill="#5c7d42" opacity={0.9} />
-          <rect x={46} y={0} width={100} height={40} fill="#2e4a30" opacity={0.95} />
-          <rect x={152} y={40} width={40} height={136} fill="#4d6b45" opacity={0.9} />
-          <rect x={46} y={40} width={98} height={88} fill="#3c6d3f" opacity={0.9} />
-          <rect x={46} y={128} width={98} height={48} fill="#33593a" opacity={0.95} />
-          {[...spots].map((s) => {
-            const found = discovered.includes(s.id);
-            return (
-              <g key={s.id}>
-                <circle cx={s.x} cy={s.y} r={3.4} fill={found ? "#e8c04a" : "rgba(255,255,255,0.16)"} />
-                {found && (
-                  <text x={s.x + 6} y={s.y + 3} fontSize={5.5} fill="rgba(255,255,255,0.85)" fontWeight={600}>
-                    {s.label}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-          <circle cx={px / 32} cy={py / 32} r={3.6} fill="#e05d2a" stroke="#fff" strokeWidth={1.2} />
-        </svg>
-        <p className="mt-3 text-center text-xs text-muted-foreground">
-          {discovered.length} of {spots.length} places discovered — walk to a marker to find it
-        </p>
-      </div>
     </motion.div>
   );
 }
@@ -396,7 +289,14 @@ export default function Game() {
   // --- HUD state ---
   const [areaName, setAreaName] = useState("Warrior Territories");
   const [nearby, setNearby] = useState<NearbyTarget | null>(null);
-  const [dialogue, setDialogue] = useState<{ name: string; role?: string; text: string } | null>(null);
+  const [dialogue, setDialogue] = useState<{
+    name: string;
+    role?: string;
+    text: string;
+    /** which NPC this line belongs to (for E-to-continue) */
+    npcId?: string;
+    lineIdx?: number;
+  } | null>(null);
   const [codexOpen, setCodexOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -414,9 +314,11 @@ export default function Game() {
   const chatFeedRef = useRef(chatFeed);
   chatFeedRef.current = chatFeed;
 
+  // Chat runs in every mode (story, open, free). Clan channel filters by Clan;
+  // "local" is a display-only channel (messages actually go out as global).
   const chatQuery = useQuery(
     api.chat.list,
-    phase === "playing" && mode === "open" && chatChannel !== "local" ? { channel: chatChannel, clan: myCat?.clan } : "skip",
+    phase === "playing" && chatChannel !== "local" ? { channel: chatChannel, clan: myCat?.clan } : "skip",
   );
 
   useEffect(() => {
@@ -520,21 +422,34 @@ export default function Game() {
       savePosition({ x: posRef.current.x, y: posRef.current.y, discovered: discRef.current }).catch(() => undefined);
     }, 6000);
 
-    // chat bubble pump (local + clan + global appear above cats in open world)
+    // remote-player speech bubbles: create from recent messages, track the
+    // sender's LIVE position every frame (never a stale world coordinate).
     const bubbleInterval = window.setInterval(() => {
       const g = gameRef.current;
       if (!g) return;
       const feed = chatFeedRef.current;
-      for (const m of feed.slice(-6)) {
-        if (m.x === undefined || m.y === undefined) continue;
+      for (const m of feed.slice(-8)) {
+        if (m.mine) continue; // my own bubbles are added instantly on send
         const key = m.id;
         if (g.bubbles.some((b) => (b as unknown as ChatBubbleKeyed).key === key)) continue;
-        g.addBubble(Object.assign(
-          { name: m.fromName, text: m.text, x: m.x, y: m.y - 10, until: Date.now() + 8000 },
-          { key },
-        ));
+        // find the remote cat this message belongs to by display name
+        let userId: string | undefined;
+        for (const [uid, r] of g.remotes) {
+          if (r.catName === m.fromName) {
+            userId = uid;
+            break;
+          }
+        }
+        const r = userId ? g.remotes.get(userId) : undefined;
+        if (!r) continue; // only bubble messages from cats we can actually see
+        g.addBubble(
+          Object.assign(
+            { name: m.fromName, text: m.text, x: r.x, y: r.y, until: Date.now() + 8000, track: userId },
+            { key },
+          ),
+        );
       }
-    }, 1500);
+    }, 1200);
 
     const onUnload = () => leavePresence().catch(() => undefined);
     window.addEventListener("beforeunload", onUnload);
@@ -595,21 +510,25 @@ export default function Game() {
   // --- interactions ---
   const handleInteract = useCallback(
     (target: NearbyTarget) => {
-      if (dialogueRef.current) {
-        setDialogue(null);
-        return;
-      }
-      if (target.kind === "prey") {
-        // pounce handled by proximity; give a small flourish
-        setDialogue({ name: "Hunt", text: "You pounce! The prey never knew what hit it. (+4 XP)" });
-        return;
-      }
+      const cur = dialogueRef.current;
+
+      // NPC conversations: E opens, then E continues to the next line, and
+      // closes when the lines run out.
       if (target.kind === "npc") {
         const npc = npcs.find((n) => n.id === target.npcId);
         if (!npc) return;
-        setDialogue({ name: npc.name, role: npc.role, text: npc.lines[Math.floor(Math.random() * npc.lines.length)] });
-        // story completion via talk
-        if (mode === "story") {
+        if (cur && cur.npcId === npc.id) {
+          const nextIdx = (cur.lineIdx ?? 0) + 1;
+          if (nextIdx >= npc.lines.length) {
+            setDialogue(null);
+          } else {
+            setDialogue({ name: npc.name, role: npc.role, text: npc.lines[nextIdx], npcId: npc.id, lineIdx: nextIdx });
+          }
+        } else {
+          setDialogue({ name: npc.name, role: npc.role, text: npc.lines[0], npcId: npc.id, lineIdx: 0 });
+        }
+        // story completion counts the first line of the conversation
+        if (mode === "story" && !(cur && cur.npcId === npc.id)) {
           const step = storySteps[storyStepRef.current];
           if (step && step.objective.kind === "talk" && step.objective.targetNpc === npc.id) {
             advanceStory();
@@ -617,11 +536,24 @@ export default function Game() {
         }
         return;
       }
+
+      // any other interaction while a dialogue is open: E closes it
+      if (cur) {
+        setDialogue(null);
+        return;
+      }
+
+      if (target.kind === "prey") {
+        // pounce handled by proximity; give a small flourish
+        setDialogue({ name: "Hunt", text: "You pounce! The prey never knew what hit it. (+4 XP)" });
+        return;
+      }
       if (target.kind === "object") {
         if (target.interior) {
+          setDialogue(null); // close any NPC conversation before stepping inside
           gameRef.current?.enterInterior(target.interior);
           const room = interiors[target.interior];
-          if (room) setDialogue({ name: room.name, text: room.desc });
+          if (room) setDialogue({ name: room.name, text: room.desc, lineIdx: 0 });
           return;
         }
         if ((target.interact as string) === "exit-interior") {
@@ -674,6 +606,8 @@ export default function Game() {
   questsDoneRef.current = questsDone;
   const dialogueRef = useRef(dialogue);
   dialogueRef.current = dialogue;
+  /** guards against double-sends when Enter is pressed repeatedly */
+  const lastSendAt = useRef(0);
 
   const advanceStory = useCallback(() => {
     const step = storySteps[storyStepRef.current];
@@ -714,21 +648,43 @@ export default function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pos, storyStep, mode, phase]);
 
-  // --- chat send ---
+  // --- chat send: instant local echo + speech bubble, server broadcast for others ---
   const handleSend = useCallback(
     (text: string) => {
-      if (!myCat) return;
+      const trimmed = text.trim();
+      if (!myCat || !trimmed) return; // ignore empty / whitespace-only messages
+      // debounce duplicate sends (rapid Enter / repeated Send clicks)
+      const now = Date.now();
+      if (now - lastSendAt.current < 700) return;
+      lastSendAt.current = now;
+
       const channel = chatChannel === "local" ? "global" : chatChannel;
-      sendChat({ channel, clan: myCat.clan, x: posRef.current.x, y: posRef.current.y, text })
-        .then(() => {
-          if (chatChannel === "local") {
-            setChatFeed((f) => [
-              ...f,
-              { id: `local-${Date.now()}`, fromName: myCat.name, text, mine: true, channel: "local", x: posRef.current.x, y: posRef.current.y },
-            ]);
-          }
-        })
-        .catch(() => undefined);
+      // 1) speech bubble above MY cat immediately, following it as it moves
+      const g = gameRef.current;
+      if (g) {
+        g.addBubble({
+          name: myCat.name,
+          text: trimmed,
+          x: posRef.current.x,
+          y: posRef.current.y,
+          until: Date.now() + 8000,
+          track: "player",
+        });
+      }
+      // 2) echo into my own chat window at once (server list also confirms later)
+      setChatFeed((f) => [
+        ...f.slice(-59),
+        { id: `echo-${now}`, fromName: myCat.name, text: trimmed, mine: true, channel, x: posRef.current.x, y: posRef.current.y },
+      ]);
+      // 3) broadcast through Convex so other players receive it
+      sendChat({
+        channel,
+        clan: myCat.clan,
+        catName: myCat.name,
+        x: posRef.current.x,
+        y: posRef.current.y,
+        text: trimmed,
+      }).catch(() => undefined);
     },
     [chatChannel, myCat, sendChat],
   );
@@ -839,10 +795,20 @@ export default function Game() {
         </div>
       )}
 
-      {/* Minimap */}
-      <div className="pointer-events-none absolute right-3 top-14 z-20">
+      {/* Minimap — synced to the real world, with legend and waypoint line */}
+      <div className="absolute right-3 top-14 z-20">
         <div className="rounded-xl border border-border/60 bg-card/90 p-1.5 shadow-lg backdrop-blur-sm">
-          <Minimap px={pos.x} py={pos.y} />
+          <WorldMapCanvas
+            px={pos.x}
+            py={pos.y}
+            facing={gameRef.current?.facing ?? 1}
+            playerClan={myCat?.clan}
+            discovered={discovered}
+            size={116}
+          />
+          <div className="mt-1 px-0.5 pb-0.5">
+            <MapLegend compact />
+          </div>
         </div>
       </div>
 
@@ -940,7 +906,15 @@ export default function Game() {
       {/* World map */}
       <AnimatePresence>
         {mapOpen && (
-          <WorldMap onClose={() => setMapOpen(false)} discovered={discovered} px={pos.x} py={pos.y} />
+          <WorldMapOverlay
+            onClose={() => setMapOpen(false)}
+            px={pos.x}
+            py={pos.y}
+            facing={gameRef.current?.facing ?? 1}
+            playerClan={myCat?.clan}
+            discovered={discovered}
+            remotePlayers={(gameRef.current?.remoteList ?? []).map((r) => ({ x: r.x, y: r.y }))}
+          />
         )}
       </AnimatePresence>
 

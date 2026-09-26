@@ -30,6 +30,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ClanSelect } from "./ClanSelect";
+import { RefreshCw } from "lucide-react";
 import { drawCat, type CatSkin } from "@/game/draw";
 import { MenuScene } from "@/game/menuScene";
 import { cn } from "@/lib/utils";
@@ -283,6 +284,33 @@ export const FUR_COLORS = [
   "#6b4a2f", "#d9a441", "#e8e6e0", "#8a7a66",
 ];
 export const EYE_COLORS = ["#4fae6e", "#5b8fd6", "#d9c04a", "#c98a1e", "#7fae4e", "#2c2c30", "#d9973a"];
+export const CHEST_COLORS = ["#f4e9d8", "#ffffff", "#e3c088"];
+
+/** Roll a fully random appearance. */
+export function randomSkin(): CatSkin {
+  const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+  return {
+    fur: pick(FUR_COLORS),
+    furDark: "",
+    eye: pick(EYE_COLORS),
+    chest: Math.random() < 0.3 ? pick(CHEST_COLORS) : undefined,
+    pattern: pick(["solid", "tabby", "tortie", "bicolor"] as const),
+    furLength: 1,
+    tail: pick(["normal", "short", "fluffy", "bob"] as const),
+    ears: pick(["normal", "tall", "fold"] as const),
+    size: Math.round((0.85 + Math.random() * 0.3) * 100) / 100,
+    scar: Math.random() < 0.18,
+  };
+}
+
+/** Roll a random Warriors-style name (Firepaw, Graystripe, Sandwhisker…). */
+export function randomCatName(): string {
+  const A = ["Fire", "Gray", "Sand", "Dust", "Raven", "Silver", "Bramble", "Bracken", "Yellow", "Speckle", "Running", "Willow", "Bright", "Snow", "Oak", "Maple", "Fern", "Squirrel", "Cinder", "Golden", "Ash", "Holly", "Ivy", "Moss", "Petal", "Thorn", "Briar", "Sorrel"];
+  const B = ["paw", "heart", "tail", "fur", "stripe", "pelt", "claw", "whisker", "storm", "leaf", "stream", "pool", "fang", "spots", "wing", "flight", "breeze", "shade", "berry", "nose"];
+  const a = A[Math.floor(Math.random() * A.length)];
+  const b = Math.random() < 0.25 ? "paw" : B[Math.floor(Math.random() * B.length)];
+  return `${a}${b}`;
+}
 const CLANS = [
   { id: "thunderclan", name: "ThunderClan", desc: "Brave and loyal. Warriors of the deep forest.", color: "#4a8a4c" },
   { id: "riverclan", name: "RiverClan", desc: "Sleek and strong swimmers. Fishers of the river.", color: "#3d6f9e" },
@@ -381,12 +409,29 @@ function CharacterScreen({
           <div className="flex flex-col items-center gap-3">
             <div className="flex w-full flex-col items-center rounded-2xl border border-white/15 bg-black/40 p-4">
               <CatPortrait skin={skin} size={200} showRotate />
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2 w-full gap-1.5 rounded-full border-white/20 bg-black/40 text-xs text-white hover:bg-white/10"
+                onClick={() => {
+                  setSkin(randomSkin());
+                  setName(randomCatName());
+                }}
+              >
+                <RefreshCw className="size-3.5" /> Randomize cat
+              </Button>
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value.slice(0, 20))}
                 className="mt-3 border-white/20 bg-black/40 text-center text-sm font-semibold text-white"
                 aria-label="Cat name"
               />
+              <button
+                className="mt-1.5 text-[11px] text-amber-300/90 hover:text-amber-200"
+                onClick={() => setName(randomCatName())}
+              >
+                Random name
+              </button>
               <p className="mt-1.5 text-[11px] text-white/50">
                 {CLANS.find((c) => c.id === clan)?.name} · {rankOf(player.xp, player.rank)}
               </p>
@@ -499,6 +544,44 @@ function CharacterScreen({
                   {(["normal", "tall", "fold"] as const).map((e) => (
                     <Chip key={e} label={`${e} ears`} active={skin.ears === e} onClick={() => setSkin((s) => ({ ...s, ears: e }))} />
                   ))}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {CHEST_COLORS.map((c) => (
+                    <Chip
+                      key={c}
+                      label={skin.chest === c ? "chest ✓" : "chest"}
+                      active={skin.chest === c}
+                      onClick={() => setSkin((s) => ({ ...s, chest: s.chest === c ? undefined : c }))}
+                    />
+                  ))}
+                </div>
+                <div>
+                  <div className="flex justify-between text-[10px] uppercase tracking-wider text-white/50">
+                    <span>Size</span>
+                    <span>{Math.round((skin.size ?? 1) * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.85}
+                    max={1.15}
+                    step={0.01}
+                    value={skin.size ?? 1}
+                    onChange={(e) => setSkin((s) => ({ ...s, size: Number(e.target.value) }))}
+                    className="mt-1 w-full accent-[var(--primary)]"
+                  />
+                </div>
+                <div className="flex items-center gap-2 text-xs text-white/60">
+                  <span>Battle scar</span>
+                  <button
+                    onClick={() => setSkin((s) => ({ ...s, scar: !s.scar }))}
+                    className={cn(
+                      "relative h-5 w-9 rounded-full transition-colors",
+                      skin.scar ? "bg-primary" : "bg-white/15",
+                    )}
+                    aria-label="Toggle battle scar"
+                  >
+                    <span className={cn("absolute top-0.5 size-4 rounded-full bg-white transition-all", skin.scar ? "left-[1.15rem]" : "left-0.5")} />
+                  </button>
                 </div>
               </div>
             </InfoRow>

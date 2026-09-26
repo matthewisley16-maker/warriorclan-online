@@ -7,8 +7,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Heart, Palette, Shield, User, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { RefreshCw } from "lucide-react";
 import type { CatSkin } from "@/game/draw";
-import { CatPortrait, Chip, EYE_COLORS, FUR_COLORS, Swatches } from "./MainMenu";
+import { CatPortrait, CHEST_COLORS, Chip, EYE_COLORS, FUR_COLORS, randomCatName, randomSkin, Swatches } from "./MainMenu";
 import { ClanSelect, CLAN_OPTIONS } from "./ClanSelect";
 import { cn } from "@/lib/utils";
 
@@ -95,6 +96,23 @@ export function CatClanMenu({
               {/* identity + live preview */}
               <div className="flex flex-col items-center rounded-2xl border border-white/15 bg-black/40 p-4">
                 <CatPortrait skin={skin} size={190} showRotate />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 w-full gap-1.5 rounded-full border-white/20 bg-black/40 text-xs text-white hover:bg-white/10"
+                  onClick={() => {
+                    setSkin(randomSkin());
+                    setName(randomCatName());
+                  }}
+                >
+                  <RefreshCw className="size-3.5" /> Randomize cat
+                </Button>
+                <button
+                  className="mt-1.5 text-[11px] text-amber-300/90 hover:text-amber-200"
+                  onClick={() => setName(randomCatName())}
+                >
+                  Random name
+                </button>
                 <div className="mt-3 w-full">
                   <label className="text-[10px] font-bold uppercase tracking-widest text-white/50">Cat name</label>
                   <Input
@@ -158,6 +176,31 @@ export function CatClanMenu({
                     {(["normal", "tall", "fold"] as const).map((e) => (
                       <Chip key={e} label={`${e} ears`} active={skin.ears === e} onClick={() => setSkin((s) => ({ ...s, ears: e }))} />
                     ))}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CHEST_COLORS.map((c) => (
+                      <Chip
+                        key={c}
+                        label={skin.chest === c ? "chest ✓" : "chest"}
+                        active={skin.chest === c}
+                        onClick={() => setSkin((s) => ({ ...s, chest: s.chest === c ? undefined : c }))}
+                      />
+                    ))}
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-[10px] uppercase tracking-wider text-white/50">
+                      <span>Size</span>
+                      <span>{Math.round((skin.size ?? 1) * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.85}
+                      max={1.15}
+                      step={0.01}
+                      value={skin.size ?? 1}
+                      onChange={(e) => setSkin((s) => ({ ...s, size: Number(e.target.value) }))}
+                      className="mt-1 w-full accent-[var(--primary)]"
+                    />
                   </div>
                   <div className="flex items-center gap-2 text-xs text-white/60">
                     <User className="size-3.5 text-amber-300" />

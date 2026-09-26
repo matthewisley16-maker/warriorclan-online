@@ -70,6 +70,8 @@ export interface ChatBubble {
   until: number;
   x: number;
   y: number;
+  /** Which cat this bubble is attached to: "player" or a remote userId. */
+  track?: string;
 }
 
 export interface GameCallbacks {
@@ -311,6 +313,8 @@ interface PreyState {
   waitUntil: number;
   seed: number;
   alive: boolean;
+  /** engine time until which a killed prey lingers briefly before despawning */
+  deadUntil?: number;
 }
 
 const PREY_FLEE_DIST = 90;
@@ -506,6 +510,16 @@ export class GameCanvas {
 
   get isSneaking() {
     return this.sneaking;
+  }
+
+  /** Facing for HUD/minimap (1 = right, -1 = left). */
+  get facing(): 1 | -1 {
+    return this.pxFacing;
+  }
+
+  /** Remote players currently known (for the minimap). */
+  get remoteList(): RemotePlayer[] {
+    return [...this.remotes.values()];
   }
 
   destroy() {
@@ -798,6 +812,12 @@ export class GameCanvas {
       }
     }
 
+    // --- chat bubbles: prune expired so they never linger or duplicate ---
+    if (this.bubbles.length > 0) {
+      const now = Date.now();
+      this.bubbles = this.bubbles.filter((b) => b.until > now);
+    }
+
     // --- prey AI ---
     if (!this.paused && this.prey.length < PREY_MAX && Math.random() < 0.02) this.respawnPreyTick();
     if (!this.interiorId) {
@@ -840,14 +860,16 @@ export class GameCanvas {
             if (Math.abs(ux) > 0.2) p.facing = ux > 0 ? 1 : -1;
           }
         }
-        // catch!
+        // catch! Prey dies: stops fleeing, shows a brief death effect, then despawns.
         if (dToPlayer < PREY_CATCH_DIST && !this.paused) {
           p.alive = false;
+          p.deadUntil = this.time + 0.55;
           this.huntedCount++;
           this.cb.onPreyCaught(p.kind);
         }
       }
-      this.prey = this.prey.filter((p) => p.alive || Math.random() > 0.98);
+      // remove fully-despawned prey so nothing invisible lingers
+      this.prey = this.prey.filter((p) => p.alive || this.time < (p.deadUntil ?? 0));
     }
 
     // --- area + nearby detection ---
@@ -958,20 +980,21 @@ export class GameCanvas {
       this.renderWorld(cw, ch);
     }
 
-    // --- cinematic lighting stack ---
+    // --- cinematic lighting stack (outdoors only — interiors are sheltered) ---
     const na = this.nightAlpha();
     const gold = this.goldenHour();
     const dark = this.env.dark;
-    // wet/rain darkening
-    if (dark > 0.01) {
-      ctx.fillStyle = `rgba(28, 36, 54, ${dark})`;
-      ctx.fillRect(0, 0, cw, ch);
-    }
-    // golden hour wash (sunrise 5–7, sunset 18.5–20)
-    if (gold > 0.02 && na < 0.5) {
-      ctx.fillStyle = `rgba(255, 166, 66, ${0.16 * gold * (1 - na)})`;
-      ctx.fillRect(0, 0, cw, ch);
-    }
+    if (!this.interiorId) {
+      // wet/rain darkening
+      if (dark > 0.01) {
+        ctx.fillStyle = `rgba(28, 36, 54, ${dark})`;
+        ctx.fillRect(0, 0, cw, ch);
+      }
+      // golden hour wash (sunrise 5–7, sunset 18.5–20)
+      if (gold > 0.02 && na < 0.5) {
+        ctx.fillStyle = `rgba(255, 166, 66, ${0.16 * gold * (1 - na)})`;
+        ctx.fillRect(0, 0, cw, ch);
+      }
     // night: moonlight blue (never a flat black screen)
     if (na > 0) {
       const moon = this.moonPhase();
@@ -1002,9 +1025,12 @@ export class GameCanvas {
         ctx.globalAlpha = 1;
       }
     }
-    // weather overlays (rain, fog, cloud cover) + ambient particles
-    this.renderWeather(cw, ch);
-    this.drawMotes(cw, ch);
+    }
+    // weather overlays (rain, fog, cloud cover) + ambient particles — outside only
+    if (!this.interiorId) {
+      this.renderWeather(cw, ch);
+      this.drawMotes(cw, ch);
+    }
 
     // vignette
     const grad = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.42, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
@@ -1138,6 +1164,24 @@ export class GameCanvas {
     }
     // player
     drawCat(ctx, this.playerSkin(), this.px, this.py, this.pxFacing, this.pPose, this.time, 0);
+    // bubbles anchored to the player are drawn indoors too
+    for (const b of this.bubbles) {
+      if (b.track !== "player" || Date.now() > b.until) continue;
+      ctx.font = "500 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      const tw = Math.min(220, ctx.measureText(b.text).width + 14);
+      const lines = wrapText(ctx, b.text, 200);
+      const bh = 16 + lines.length * 13;
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      ctx.beginPath();
+      ctx.roundRect(this.px - tw / 2, this.py - 52 - bh, tw, bh, 9);
+      ctx.fill();
+      ctx.fillStyle = "#1a1a1a";
+      lines.forEach((ln, i) => ctx.fillText(ln, this.px, this.py - 52 - bh + 16 + i * 13));
+      ctx.fillStyle = "rgba(90,90,110,0.9)";
+      ctx.font = "600 10px system-ui, sans-serif";
+      ctx.fillText(b.name, this.px, this.py - 50);
+    }
     // exit door hint
     ctx.fillStyle = "rgba(255,255,255,0.35)";
     ctx.font = "600 12px system-ui, sans-serif";
@@ -1145,6 +1189,13 @@ export class GameCanvas {
     ctx.fillText("↓ leave through the gap", (ROOM_W / 2) * 32, (ROOM_H - 0.4) * 32);
 
     ctx.restore();
+
+    // warm interior lamp glow — sheltered from outside weather and night
+    const glow = ctx.createRadialGradient(cw / 2, ch / 2, 60, cw / 2, ch / 2, Math.max(cw, ch) * 0.7);
+    glow.addColorStop(0, "rgba(255, 224, 160, 0.06)");
+    glow.addColorStop(1, "rgba(60, 40, 20, 0.16)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, cw, ch);
   }
 
   private playerSkin(): CatSkin {
@@ -1243,13 +1294,24 @@ export class GameCanvas {
         },
       });
     }
-    // prey
+    // prey (killed prey renders briefly in a death pose, then despawns)
     for (const p of this.prey) {
-      if (!p.alive) continue;
+      if (!p.alive && this.time > (p.deadUntil ?? 0)) continue;
       if (p.x < viewL || p.x > viewR || p.y < viewT || p.y > viewB) continue;
       ents.push({
         y: p.y,
-        draw: () => drawPrey(ctx, p.kind as PreySprite, p.x, p.y, p.facing, p.fleeing, this.time, p.seed),
+        draw: () =>
+          drawPrey(
+            ctx,
+            p.kind as PreySprite,
+            p.x,
+            p.y,
+            p.facing,
+            false,
+            this.time,
+            p.seed,
+            !p.alive,
+          ),
       });
     }
     // NPCs
@@ -1325,9 +1387,22 @@ export class GameCanvas {
     ents.sort((a, b) => a.y - b.y);
     for (const e of ents) e.draw();
 
-    // chat bubbles (world space)
+    // chat bubbles (world space, anchored to the cat they belong to)
     for (const b of this.bubbles) {
-      if (this.time * 1000 > b.until) continue;
+      if (Date.now() > b.until) continue;
+      let bx = b.x;
+      let by = b.y;
+      if (b.track === "player") {
+        // follow MY cat every frame
+        bx = this.px;
+        by = this.py;
+      } else if (b.track) {
+        // follow the remote cat; drop the bubble if that player left
+        const r = this.remotes.get(b.track);
+        if (!r) continue;
+        bx = r.x;
+        by = r.y;
+      }
       ctx.font = "500 11px system-ui, sans-serif";
       ctx.textAlign = "center";
       const tw = Math.min(220, ctx.measureText(b.text).width + 14);
@@ -1335,13 +1410,13 @@ export class GameCanvas {
       const bh = 16 + lines.length * 13;
       ctx.fillStyle = "rgba(255,255,255,0.94)";
       ctx.beginPath();
-      ctx.roundRect(b.x - tw / 2, b.y - 52 - bh, tw, bh, 9);
+      ctx.roundRect(bx - tw / 2, by - 52 - bh, tw, bh, 9);
       ctx.fill();
       ctx.fillStyle = "#1a1a1a";
-      lines.forEach((ln, i) => ctx.fillText(ln, b.x, b.y - 52 - bh + 16 + i * 13));
+      lines.forEach((ln, i) => ctx.fillText(ln, bx, by - 52 - bh + 16 + i * 13));
       ctx.fillStyle = "rgba(90,90,110,0.9)";
       ctx.font = "600 10px system-ui, sans-serif";
-      ctx.fillText(b.name, b.x, b.y - 50);
+      ctx.fillText(b.name, bx, by - 50);
     }
 
     this.drawLeaves();
@@ -1478,37 +1553,117 @@ export class GameCanvas {
     for (const f of flora) {
       if (f.x < viewL || f.x > viewR || f.y < viewT || f.y > viewB) continue;
       const sway = Math.sin(this.time * 1.8 + f.x * 0.05) * 1.2 * gust;
-      if (f.kind === "tuft") {
-        ctx.strokeStyle = f.tint > 0.5 ? "#57964f" : "#4c8a47";
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.moveTo(f.x - 3, f.y);
-        ctx.quadraticCurveTo(f.x - 4 + sway, f.y - 6, f.x - 5 + sway, f.y - 9);
-        ctx.moveTo(f.x, f.y);
-        ctx.lineTo(f.x + sway * 0.5, f.y - 10);
-        ctx.moveTo(f.x + 3, f.y);
-        ctx.quadraticCurveTo(f.x + 4 + sway, f.y - 6, f.x + 5 + sway, f.y - 8);
-        ctx.stroke();
-      } else if (f.kind === "fern") {
-        ctx.strokeStyle = "#3e7a41";
-        ctx.lineWidth = 1.2;
-        for (let i = -2; i <= 2; i++) {
+      const s = (f as { s?: number }).s ?? 1;
+      switch (f.kind) {
+        case "tuft": {
+          ctx.strokeStyle = f.tint > 0.5 ? "#57964f" : "#4c8a47";
+          ctx.lineWidth = 1.4;
+          const h = 8 + f.tint * 6;
+          ctx.beginPath();
+          ctx.moveTo(f.x - 3 * s, f.y);
+          ctx.quadraticCurveTo(f.x - 4 * s + sway, f.y - h * 0.6, f.x - 5 * s + sway, f.y - h);
+          ctx.moveTo(f.x, f.y);
+          ctx.lineTo(f.x + sway * 0.5, f.y - h - 2);
+          ctx.moveTo(f.x + 3 * s, f.y);
+          ctx.quadraticCurveTo(f.x + 4 * s + sway, f.y - h * 0.6, f.x + 5 * s + sway, f.y - h * 0.8);
+          ctx.stroke();
+          break;
+        }
+        case "fern": {
+          ctx.strokeStyle = f.tint > 0.5 ? "#3e7a41" : "#356d38";
+          ctx.lineWidth = 1.2;
+          for (let i = -2; i <= 2; i++) {
+            ctx.beginPath();
+            ctx.moveTo(f.x, f.y);
+            ctx.quadraticCurveTo(f.x + i * 4 * s + sway, f.y - 8 * s, f.x + i * 7 * s + sway, f.y - 13 * s);
+            ctx.stroke();
+          }
+          break;
+        }
+        case "flower": {
+          ctx.strokeStyle = "#4c8a47";
+          ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(f.x, f.y);
-          ctx.quadraticCurveTo(f.x + i * 4 + sway, f.y - 8, f.x + i * 7 + sway, f.y - 13);
+          ctx.lineTo(f.x + sway, f.y - 8);
           ctx.stroke();
+          ctx.fillStyle = f.tint > 0.5 ? "#e5c95c" : f.tint > 0.25 ? "#d977a0" : "#c96a5a";
+          ctx.beginPath();
+          ctx.arc(f.x + sway, f.y - 10, 2.4, 0, Math.PI * 2);
+          ctx.fill();
+          break;
         }
-      } else {
-        ctx.strokeStyle = "#4c8a47";
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.moveTo(f.x, f.y);
-        ctx.lineTo(f.x + sway, f.y - 8);
-        ctx.stroke();
-        ctx.fillStyle = f.tint > 0.5 ? "#e5c95c" : "#d977a0";
-        ctx.beginPath();
-        ctx.arc(f.x + sway, f.y - 10, 2.4, 0, Math.PI * 2);
-        ctx.fill();
+        case "mushroom": {
+          // tiny mushrooms on the damp forest floor
+          ctx.fillStyle = "#e8e0d0";
+          ctx.fillRect(f.x - 1 * s, f.y - 4 * s, 2 * s, 4 * s);
+          ctx.fillStyle = f.tint > 0.5 ? "#b5654a" : "#c98a5a";
+          ctx.beginPath();
+          ctx.ellipse(f.x, f.y - 4.5 * s, 2.6 * s, 1.7 * s, 0, Math.PI, 0);
+          ctx.fill();
+          break;
+        }
+        case "leaves": {
+          // scattered fallen leaves
+          ctx.fillStyle = f.tint > 0.5 ? "rgba(160,130,60,0.55)" : "rgba(130,110,50,0.5)";
+          for (let i = 0; i < 3; i++) {
+            const lx = f.x + (i - 1) * 5 * s;
+            ctx.beginPath();
+            ctx.ellipse(lx, f.y + i * 2 - 2, 3 * s, 1.5 * s, f.tint * 3 + i, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          break;
+        }
+        case "roots": {
+          // tree root flare
+          ctx.strokeStyle = "rgba(90,70,48,0.85)";
+          ctx.lineWidth = 2.2 * s;
+          ctx.beginPath();
+          ctx.moveTo(f.x - 6 * s, f.y + 2);
+          ctx.quadraticCurveTo(f.x - 2 * s, f.y - 3 * s, f.x, f.y);
+          ctx.quadraticCurveTo(f.x + 3 * s, f.y - 2 * s, f.x + 6 * s, f.y + 2);
+          ctx.stroke();
+          break;
+        }
+        case "stones": {
+          // small stone cluster with moss
+          ctx.fillStyle = "#83857f";
+          ctx.beginPath();
+          ctx.ellipse(f.x - 3 * s, f.y, 3.4 * s, 2.2 * s, 0, 0, Math.PI * 2);
+          ctx.ellipse(f.x + 3.4 * s, f.y + 1, 2.6 * s, 1.8 * s, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#95978d";
+          ctx.beginPath();
+          ctx.ellipse(f.x - 3.6 * s, f.y - 1.4 * s, 1.8 * s, 1.1 * s, 0, 0, Math.PI * 2);
+          ctx.fill();
+          if (f.tint > 0.55) {
+            ctx.fillStyle = "rgba(95,143,78,0.7)";
+            ctx.beginPath();
+            ctx.ellipse(f.x + 3 * s, f.y - 0.6, 1.8 * s, 0.9 * s, 0.3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          break;
+        }
+        case "log": {
+          // small fallen log, mossy side up
+          ctx.fillStyle = "rgba(0,0,0,0.16)";
+          ctx.beginPath();
+          ctx.ellipse(f.x, f.y + 2.4, 11 * s, 3.4 * s, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#66503a";
+          ctx.beginPath();
+          ctx.roundRect(f.x - 10 * s, f.y - 3.6 * s, 20 * s, 6 * s, 3 * s);
+          ctx.fill();
+          ctx.fillStyle = "#7a6248";
+          ctx.beginPath();
+          ctx.ellipse(f.x + 10 * s, f.y - 0.6 * s, 1.8 * s, 3 * s, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "rgba(95,143,78,0.75)";
+          ctx.beginPath();
+          ctx.ellipse(f.x - 3 * s, f.y - 3.6 * s, 4.4 * s, 1.2 * s, 0, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+        }
       }
     }
   }

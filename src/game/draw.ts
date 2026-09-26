@@ -261,6 +261,8 @@ export function drawPrey(
   hopping: boolean,
   time: number,
   seed: number,
+  /** true while the freshly-killed prey is still visible before despawning */
+  dead = false,
 ) {
   const bob = hopping ? Math.abs(Math.sin(time * 12 + seed)) * 3 : 0;
   ctx.fillStyle = "rgba(0,0,0,0.18)";
@@ -269,8 +271,15 @@ export function drawPrey(
   ctx.fill();
 
   ctx.save();
-  ctx.translate(x, y - bob);
-  ctx.scale(facing, 1);
+  if (dead) {
+    // killed prey: knocked over; the engine despawns it shortly after
+    ctx.translate(x, y);
+    ctx.scale(facing, 1);
+    ctx.rotate(Math.PI / 2.4);
+  } else {
+    ctx.translate(x, y - bob);
+    ctx.scale(facing, 1);
+  }
 
   switch (kind) {
     case "mouse": {

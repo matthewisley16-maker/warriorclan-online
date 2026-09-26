@@ -447,11 +447,11 @@ const otherClanObjects: WorldObject[] = [
   { id: "house-7", x: t(70), y: t(160), w: t(4), h: t(3), label: "Twoleg nest", style: "house", solid: true, scale: 1.1 },
   { id: "house-8", x: t(84), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 0.9 },
   { id: "house-9", x: t(96), y: t(160), w: t(4.4), h: t(3.2), label: "Twoleg nest", style: "house", solid: true, scale: 1.05 },
-  // Porches — front doors of a few nests
-  { id: "porch-1", x: t(78), y: t(142.4), w: t(1.6), h: t(1), label: "Rusty's porch", style: "plank" as Style },
-  { id: "porch-2", x: t(92), y: t(140.2), w: t(1.6), h: t(1), label: "Nest porch", style: "plank" as Style },
-  { id: "porch-3", x: t(58), y: t(160.2), w: t(1.6), h: t(1), label: "Nest porch", style: "plank" as Style },
-  { id: "porch-4", x: t(84), y: t(160.2), w: t(1.6), h: t(1), label: "Nest porch", style: "plank" as Style },
+  // Porches — front doors of a few nests (rendered as small wooden slabs)
+  { id: "porch-1", x: t(78), y: t(142.4), w: t(1.6), h: t(1), label: "Rusty's porch", style: "log" },
+  { id: "porch-2", x: t(92), y: t(140.2), w: t(1.6), h: t(1), label: "Nest porch", style: "log" },
+  { id: "porch-3", x: t(58), y: t(160.2), w: t(1.6), h: t(1), label: "Nest porch", style: "log" },
+  { id: "porch-4", x: t(84), y: t(160.2), w: t(1.6), h: t(1), label: "Nest porch", style: "log" },
   // Yards: flowerbeds, gardens, hedges, trees
   { id: "garden-bed-1", x: t(70), y: t(144), w: t(2), h: t(1.6), label: "Flowerbed", style: "flowerbed" },
   { id: "garden-bed-2", x: t(88), y: t(144), w: t(2), h: t(1.6), label: "Flowerbed", style: "flowerbed" },
@@ -535,7 +535,13 @@ export interface Tree {
 }
 
 export const trees: Tree[] = [];
-export const flora: { x: number; y: number; kind: "fern" | "tuft" | "flower"; tint: number }[] = [];
+export const flora: {
+  x: number;
+  y: number;
+  kind: "fern" | "tuft" | "flower" | "mushroom" | "leaves" | "roots" | "log" | "stones";
+  tint: number;
+  s: number;
+}[] = [];
 export const campWall: { x: number; y: number; r: number; tint: number }[] = [];
 
 const rand = lcg(20260926);
@@ -613,16 +619,21 @@ function seedScatter() {
     count++;
   }
 
-  // Flora everywhere
+  // Flora everywhere — forest floor ecosystem: ferns, tufts, flowers,
+  // mushrooms, leaf litter, root flares, fallen logs, stone clusters.
   attempts = 0; count = 0;
-  while (count < 900 && attempts < 16000) {
+  while (count < 1250 && attempts < 20000) {
     attempts++;
     const x = rand() * WORLD_W;
     const y = rand() * WORLD_H;
     if (waterAndRoad(x, y)) continue;
     if (inAnyRect(x, y, trailRects)) continue;
     if (Math.hypot(x - CAMP_CENTER.x, y - CAMP_CENTER.y) < CAMP_RADIUS + 20) continue;
-    flora.push({ x, y, kind: rand() < 0.14 ? "flower" : rand() < 0.5 ? "fern" : "tuft", tint: rand() });
+    const r = rand();
+    const kind = r < 0.1 ? "flower" : r < 0.34 ? "fern" : r < 0.58 ? "tuft"
+      : r < 0.68 ? "leaves" : r < 0.76 ? "mushroom" : r < 0.85 ? "stones"
+      : r < 0.93 ? "roots" : "log";
+    flora.push({ x, y, kind, tint: rand(), s: 0.7 + rand() * 0.7 });
     count++;
   }
 
