@@ -354,18 +354,34 @@ export default function Game() {
     setPhase("loading");
   }, [player, updateCat]);
 
-  // Finish the hand-off once the save is confirmed (creates it on first play).
+  // Finish the hand-off once the save is confirmed. Waits for the player
+  // query but with a timeout escape hatch so a stalled Convex connection
+  // (e.g. inside the embedded editor preview) can never hang the loading
+  // screen forever.
   useEffect(() => {
-    if (phase !== "loading" || !player) return;
+    if (phase !== "loading") return;
+    let cancelled = false;
+    const fallback = window.setTimeout(() => {
+      if (!cancelled) setPhase("menu");
+    }, 10000);
+    if (!player) return () => { cancelled = true; window.clearTimeout(fallback); };
     const m = pendingMode ?? "open";
     setMode(m);
     ensurePlayer({
-      mode: m === "open" ? "open" : "story",
+      mode: m === "story" ? "story" : "open",
       catName: player.catName,
       appearance: fullSkin(player.appearance),
     })
-      .then(() => setPhase("playing"))
-      .catch(() => setPhase("menu"));
+      .then(() => {
+        if (!cancelled) setPhase("playing");
+      })
+      .catch(() => {
+        if (!cancelled) setPhase("menu");
+      });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(fallback);
+    };
   }, [phase, player, pendingMode, ensurePlayer]);
 
   // Boot the engine.
