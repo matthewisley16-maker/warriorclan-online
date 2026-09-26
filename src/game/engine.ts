@@ -149,7 +149,9 @@ function pickWeather(): WeatherKind {
 /** Prop styles available inside interior rooms. */
 type InteriorPropStyle =
   | "nest" | "herbs" | "stone" | "moss" | "plank" | "hay" | "bowl"
-  | "vines" | "toy" | "carpet" | "lamp";
+  | "vines" | "toy" | "carpet" | "lamp"
+  | "sofa" | "chair" | "table" | "bed" | "cabinet" | "shelf" | "books"
+  | "box" | "window" | "plant" | "post" | "blanket";
 
 interface InteriorDef {
   id: string;
@@ -308,6 +310,150 @@ export const interiors: Record<string, InteriorDef> = {
     desc: "A fallen log draped in ivy. The elders swap stories of battles and prophecies, and complain about the damp.",
     npcs: ["halftail"],
   },
+  // ---------------------------------------------------------------------------
+  // Other Clan dens — each reflects its Clan's environment and the first book.
+  // ---------------------------------------------------------------------------
+  // WindClan: open moor — gorse, heather, wide sky. Airy, wind-swept dens.
+  "wc-warriors-den": {
+    id: "wc-warriors-den",
+    name: "WindClan Warriors' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 6, label: "Tallstar's nest, wind-dried moss", style: "nest" },
+      { id: "nest2", x: 13, y: 6, label: "Mudclaw's tight-packed nest", style: "nest" },
+      { id: "nest3", x: 18, y: 6, label: "Deadfoot's nest, heather-lined", style: "nest" },
+      { id: "nest4", x: 8, y: 11, label: "Runningwind's nest, never slept in", style: "nest" },
+      { id: "wcd-heather", x: 18, y: 11, label: "Heather sprigs for bedding", style: "moss" },
+      { id: "wcd-moss", x: 5, y: 14, label: "Spare moor-moss", style: "moss" },
+      { id: "wcd-stone", x: 20, y: 4, label: "Flat stone for pelts", style: "stone" },
+      { id: "wcd-leaf", x: 4, y: 4, label: "Wind-blown leaves in the corner", style: "moss" },
+    ],
+    desc: "A shallow scoop ringed by gorse. Wind combs through the heather-lined nests day and night.",
+    npcs: ["tallstar"],
+  },
+  "wc-nursery-room": {
+    id: "wc-nursery-room",
+    name: "WindClan Nursery",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 7, label: "A WindClan queen's heather nest", style: "nest" },
+      { id: "nest2", x: 16, y: 7, label: "Second nest, wool-soft lining", style: "nest" },
+      { id: "wcn-moss", x: 12, y: 12, label: "Dried grass for lining", style: "moss" },
+      { id: "wcn-flower", x: 6, y: 12, label: "Chamomile for strength", style: "herbs" },
+      { id: "wcn-stone", x: 19, y: 12, label: "Sun-warmed stone", style: "stone" },
+      { id: "wcn-leaf", x: 5, y: 4, label: "Moor grass in the walls", style: "vines" },
+    ],
+    desc: "An open heather-shaded hollow, warm with sun and the milk-scent of nursing kits.",
+    npcs: [],
+  },
+  "wc-elders-room": {
+    id: "wc-elders-room",
+    name: "WindClan Elders' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 8, label: "A WindClan elder's shallow nest", style: "nest" },
+      { id: "nest2", x: 16, y: 9, label: "Worn nest, repaired many times", style: "nest" },
+      { id: "wce-moss", x: 12, y: 12, label: "Fresh moss from the moor", style: "moss" },
+      { id: "wce-tick", x: 6, y: 5, label: "Mouse-bile for ticks", style: "herbs" },
+      { id: "wce-stone", x: 19, y: 5, label: "Warm stone for stiff joints", style: "stone" },
+    ],
+    desc: "A low gorse chamber where old runners trade stories of borders and battles.",
+    npcs: ["barkface"],
+  },
+  // RiverClan: cool, damp, green-lit dens with reed screens and shell-littered floors
+  "rc-warriors-den": {
+    id: "rc-warriors-den",
+    name: "RiverClan Warriors' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 6, label: "Crookedstar's nest, dry reeds", style: "nest" },
+      { id: "nest2", x: 13, y: 6, label: "Blackclaw's nest, shells pressed in", style: "nest" },
+      { id: "nest3", x: 18, y: 6, label: "Leopardfur's nest, braided rushes", style: "nest" },
+      { id: "nest4", x: 8, y: 11, label: "Heavystep's nest by the reed wall", style: "nest" },
+      { id: "rcd-reed", x: 18, y: 11, label: "Woven reed screen", style: "vines" },
+      { id: "rcd-shell", x: 5, y: 14, label: "Dried shells and river pebbles", style: "stone" },
+      { id: "rcd-drift", x: 20, y: 4, label: "Smooth driftwood perch", style: "plank" },
+      { id: "rcd-moss", x: 4, y: 4, label: "Riverbank moss", style: "moss" },
+    ],
+    desc: "A dry chamber behind the reed beds. The floor is scattered with shells; the river murmurs beyond the wall.",
+    npcs: ["crookedstar"],
+  },
+  "rc-nursery-room": {
+    id: "rc-nursery-room",
+    name: "RiverClan Nursery",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 7, label: "A queen's nest lined with willow fluff", style: "nest" },
+      { id: "nest2", x: 16, y: 7, label: "Second nest, feather-soft", style: "nest" },
+      { id: "rcn-reed", x: 12, y: 12, label: "Reed lining, freshly woven", style: "vines" },
+      { id: "rcn-stone", x: 6, y: 12, label: "Warm river stone", style: "stone" },
+      { id: "rcn-bowl", x: 19, y: 12, label: "Splash-pool for kits", style: "bowl" },
+      { id: "rcn-leaf", x: 5, y: 4, label: "Draped reeds at the entrance", style: "vines" },
+    ],
+    desc: "A sheltered den among the reeds, always faintly damp and cool, safe from the river's floods.",
+    npcs: [],
+  },
+  "rc-elders-room": {
+    id: "rc-elders-room",
+    name: "RiverClan Elders' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 8, label: "An elder's reed-woven nest", style: "nest" },
+      { id: "nest2", x: 16, y: 8, label: "Deep nest, patched with sedge", style: "nest" },
+      { id: "rce-shell", x: 12, y: 12, label: "Shells collected over seasons", style: "stone" },
+      { id: "rce-tick", x: 6, y: 5, label: "Mouse-bile store", style: "herbs" },
+      { id: "rce-stone", x: 19, y: 5, label: "Sun-baked stone", style: "stone" },
+    ],
+    desc: "A quiet reed hall where old fisher-cats gossip about the river's moods.",
+    npcs: [],
+  },
+  // ShadowClan: cold pine hollow — needle beds, pine-root walls, marsh damp
+  "sc-warriors-den": {
+    id: "sc-warriors-den",
+    name: "ShadowClan Warriors' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 6, label: "Brokenstar's nest, bracken and pine", style: "nest" },
+      { id: "nest2", x: 13, y: 6, label: "Blackfoot's nest, packed hard", style: "nest" },
+      { id: "nest3", x: 18, y: 6, label: "A warrior's nest in pine needles", style: "nest" },
+      { id: "nest4", x: 8, y: 11, label: "Nest under the root shelf", style: "nest" },
+      { id: "scd-root", x: 18, y: 11, label: "Pine roots arching the roof", style: "vines" },
+      { id: "scd-needle", x: 5, y: 14, label: "Pine-needle bedding store", style: "moss" },
+      { id: "scd-stone", x: 20, y: 4, label: "Cold standing stone", style: "stone" },
+      { id: "scd-branch", x: 4, y: 4, label: "Fallen pine branch", style: "plank" },
+    ],
+    desc: "A hollow beneath gnarled pine roots. Pine needles rustle; the dark gives ShadowClan cats comfort.",
+    npcs: ["brokenstar"],
+  },
+  "sc-nursery-room": {
+    id: "sc-nursery-room",
+    name: "ShadowClan Nursery",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 7, label: "A queen's nest in dried bracken", style: "nest" },
+      { id: "nest2", x: 16, y: 7, label: "Second nest, deep and dark", style: "nest" },
+      { id: "scn-needle", x: 12, y: 12, label: "Pine-needle lining", style: "moss" },
+      { id: "scn-leaf", x: 6, y: 12, label: "Draped brambles for privacy", style: "vines" },
+      { id: "scn-stone", x: 19, y: 12, label: "Flat stone for kits to play on", style: "stone" },
+      { id: "scn-herb", x: 5, y: 4, label: "Marigold sprigs, a gift from the medicine den", style: "herbs" },
+    ],
+    desc: "A bramble-hid den in the pine hollow, warm in its darkness and fiercely guarded.",
+    npcs: [],
+  },
+  "sc-elders-room": {
+    id: "sc-elders-room",
+    name: "ShadowClan Elders' Den",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "nest1", x: 8, y: 8, label: "An elder's nest, generations old", style: "nest" },
+      { id: "nest2", x: 16, y: 8, label: "Nest lined with marsh moss", style: "nest" },
+      { id: "sce-root", x: 12, y: 12, label: "Roots of the old pine above", style: "vines" },
+      { id: "sce-tick", x: 6, y: 5, label: "Mouse-bile for ticks", style: "herbs" },
+      { id: "sce-stone", x: 19, y: 5, label: "Moss-cushioned stone", style: "stone" },
+    ],
+    desc: "A dim shelter beneath a leaning pine. Old ShadowClan cats mutter of marshes and old feuds.",
+    npcs: [],
+  },
   "moonstone-cave": {
     id: "moonstone-cave",
     name: "Mothermouth",
@@ -327,18 +473,18 @@ export const interiors: Record<string, InteriorDef> = {
     props: [
       // living room + kitchen + hallway in one small nest
       { id: "rh-carpet", x: 12, y: 9, label: "Worn rug by the fire", style: "carpet" },
-      { id: "rh-sofa", x: 17, y: 7, label: "Twoleg sleeping-soft (sofa)", style: "plank" },
-      { id: "rh-chair", x: 7, y: 5, label: "Twoleg perch (chair)", style: "plank" },
-      { id: "rh-table", x: 12, y: 5, label: "Twoleg eating-table", style: "plank" },
+      { id: "rh-sofa", x: 17, y: 7, label: "Twoleg sleeping-soft (sofa)", style: "sofa" },
+      { id: "rh-chair", x: 7, y: 5, label: "Twoleg perch (chair)", style: "chair" },
+      { id: "rh-table", x: 12, y: 5, label: "Twoleg eating-table", style: "table" },
       { id: "rh-lamp", x: 19, y: 12, label: "Glowing lamp", style: "lamp" },
-      { id: "rh-counter", x: 5, y: 10, label: "Kitchen counter", style: "plank" },
+      { id: "rh-counter", x: 5, y: 10, label: "Kitchen counter", style: "cabinet" },
       { id: "bowl", x: 6, y: 8, label: "Your food bowl", style: "bowl" },
       { id: "bowl2", x: 8, y: 8, label: "Water bowl", style: "bowl" },
       { id: "rh-toy", x: 14, y: 12, label: "A woolly mouse toy", style: "toy" },
       { id: "rh-toy2", x: 10, y: 13, label: "Rolling twoleg ball", style: "toy" },
-      { id: "rh-cushion", x: 15, y: 10, label: "Soft cushion", style: "plank" },
-      { id: "rh-books", x: 19, y: 4, label: "Twoleg leaf-clusters (books)", style: "plank" },
-      { id: "rh-window", x: 4, y: 13, label: "Sunny window ledge", style: "plank" },
+      { id: "rh-cushion", x: 15, y: 10, label: "Soft cushion", style: "blanket" },
+      { id: "rh-books", x: 19, y: 4, label: "Twoleg leaf-clusters (books)", style: "books" },
+      { id: "rh-window", x: 4, y: 13, label: "Sunny window ledge", style: "window" },
     ],
     desc: "Warm, soft, and safe — and unbearably small. The Twolegs are out; the garden door is open.",
     npcs: [],
@@ -355,9 +501,9 @@ export const interiors: Record<string, InteriorDef> = {
       { id: "sh-toy", x: 15, y: 9, label: "Feather wand toy", style: "toy" },
       { id: "sh-toy2", x: 16, y: 11, label: "Catnip mouse", style: "toy" },
       { id: "sh-toy3", x: 9, y: 12, label: "Jingly ball", style: "toy" },
-      { id: "sh-sofa", x: 18, y: 6, label: "Twoleg sofa", style: "plank" },
+      { id: "sh-sofa", x: 18, y: 6, label: "Twoleg sofa", style: "sofa" },
       { id: "sh-lamp", x: 5, y: 12, label: "Warm reading lamp", style: "lamp" },
-      { id: "sh-window", x: 19, y: 13, label: "Window over the garden", style: "plank" },
+      { id: "sh-window", x: 19, y: 13, label: "Window over the garden", style: "window" },
     ],
     desc: "Smudge's Twolegs dote on him. Toys everywhere, a plush bed, and the best view of the garden.",
     npcs: [],
@@ -368,14 +514,14 @@ export const interiors: Record<string, InteriorDef> = {
     walls: roomWithDoor("bottom", 12),
     props: [
       { id: "hh-bed", x: 8, y: 5, label: "Henry's large cat bed", style: "nest" },
-      { id: "hh-post", x: 16, y: 6, label: "Tall scratching post", style: "plank" },
+      { id: "hh-post", x: 16, y: 6, label: "Tall scratching post", style: "post" },
       { id: "hh-bowl", x: 7, y: 9, label: "Food bowl", style: "bowl" },
       { id: "hh-bowl2", x: 9, y: 9, label: "Water bowl", style: "bowl" },
       { id: "hh-toy", x: 13, y: 11, label: "Springy toy", style: "toy" },
       { id: "hh-toy2", x: 15, y: 12, label: "Crinkle ball", style: "toy" },
       { id: "hh-carpet", x: 11, y: 8, label: "Hearth rug", style: "carpet" },
-      { id: "hh-shelf", x: 19, y: 5, label: "Twoleg shelf of curious objects", style: "plank" },
-      { id: "hh-table", x: 6, y: 13, label: "Kitchen table", style: "plank" },
+      { id: "hh-shelf", x: 19, y: 5, label: "Twoleg shelf of curious objects", style: "shelf" },
+      { id: "hh-table", x: 6, y: 13, label: "Kitchen table", style: "table" },
       { id: "hh-lamp", x: 20, y: 12, label: "Corner lamp", style: "lamp" },
     ],
     desc: "Henry's Twolegs keep a tidy house with a scratching post he is too dignified to use.",
@@ -386,16 +532,16 @@ export const interiors: Record<string, InteriorDef> = {
     name: "Princess's Sunny House",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "ph-window", x: 12, y: 4, label: "Wide sunny windowsill", style: "plank" },
+      { id: "ph-window", x: 12, y: 4, label: "Wide sunny windowsill", style: "window" },
       { id: "ph-bed", x: 12, y: 6, label: "Princess's cushioned bed", style: "nest" },
       { id: "ph-plant", x: 6, y: 5, label: "Houseplants (not for eating)", style: "moss" },
       { id: "ph-plant2", x: 18, y: 5, label: "Fern on a stand", style: "moss" },
       { id: "ph-bowl", x: 8, y: 10, label: "Porcelain food bowl", style: "bowl" },
       { id: "ph-bowl2", x: 10, y: 10, label: "Porcelain water bowl", style: "bowl" },
       { id: "ph-carpet", x: 13, y: 10, label: "Pale delicate carpet", style: "carpet" },
-      { id: "ph-shelf", x: 19, y: 9, label: "Shelves of twoleg ornaments", style: "plank" },
+      { id: "ph-shelf", x: 19, y: 9, label: "Shelves of twoleg ornaments", style: "shelf" },
       { id: "ph-toy", x: 16, y: 12, label: "A single dignified toy", style: "toy" },
-      { id: "ph-chair", x: 6, y: 12, label: "Upholstered chair", style: "plank" },
+      { id: "ph-chair", x: 6, y: 12, label: "Upholstered chair", style: "chair" },
     ],
     desc: "Bright, quiet, and full of sun. Princess's Twolegs keep an immaculate, gentle home.",
     npcs: [],
@@ -406,15 +552,15 @@ export const interiors: Record<string, InteriorDef> = {
     walls: roomWithDoor("bottom", 12),
     props: [
       { id: "mh-bed", x: 10, y: 6, label: "Marmalade's worn barn-style bed", style: "nest" },
-      { id: "mh-blanket", x: 14, y: 6, label: "Piled blankets", style: "plank" },
-      { id: "mh-box", x: 17, y: 8, label: "A twoleg box (his favorite)", style: "plank" },
-      { id: "mh-box2", x: 19, y: 10, label: "Another box (also his)", style: "plank" },
+      { id: "mh-blanket", x: 14, y: 6, label: "Piled blankets", style: "blanket" },
+      { id: "mh-box", x: 17, y: 8, label: "A twoleg box (his favorite)", style: "box" },
+      { id: "mh-box2", x: 19, y: 10, label: "Another box (also his)", style: "box" },
       { id: "mh-bowl", x: 6, y: 8, label: "Food bowl, licked clean", style: "bowl" },
       { id: "mh-bowl2", x: 8, y: 8, label: "Water bowl", style: "bowl" },
       { id: "mh-toy", x: 12, y: 11, label: "Chewed toy mouse", style: "toy" },
       { id: "mh-toy2", x: 9, y: 13, label: "Ball under the table", style: "toy" },
-      { id: "mh-table", x: 12, y: 9, label: "Heavy wooden table", style: "plank" },
-      { id: "mh-counter", x: 5, y: 12, label: "Kitchen counter to spy from", style: "plank" },
+      { id: "mh-table", x: 12, y: 9, label: "Heavy wooden table", style: "table" },
+      { id: "mh-counter", x: 5, y: 12, label: "Kitchen counter to spy from", style: "cabinet" },
       { id: "mh-lamp", x: 19, y: 13, label: "Kitchen lamp", style: "lamp" },
     ],
     desc: "A big, busy kitchen-house. Marmalade rules it from the top of the table and naps in boxes.",
@@ -431,12 +577,135 @@ export const interiors: Record<string, InteriorDef> = {
       { id: "gh-bowl2", x: 9, y: 10, label: "Water bowl", style: "bowl" },
       { id: "gh-toy", x: 14, y: 7, label: "Dangling feather toy", style: "toy" },
       { id: "gh-toy2", x: 16, y: 12, label: "Stuffed fish", style: "toy" },
-      { id: "gh-books", x: 19, y: 5, label: "Stacked twoleg scrolls (books)", style: "plank" },
-      { id: "gh-sofa", x: 17, y: 8, label: "Long sofa", style: "plank" },
+      { id: "gh-books", x: 19, y: 5, label: "Stacked twoleg scrolls (books)", style: "books" },
+      { id: "gh-sofa", x: 17, y: 8, label: "Long sofa", style: "sofa" },
       { id: "gh-lamp", x: 5, y: 5, label: "Hallway lamp", style: "lamp" },
-      { id: "gh-window", x: 4, y: 12, label: "Front-window perch", style: "plank" },
+      { id: "gh-window", x: 4, y: 12, label: "Front-window perch", style: "window" },
     ],
     desc: "A well-walked house with a view of the whole street — Ginger patrols it twice a day.",
+    npcs: [],
+  },
+  // ---------------------------------------------------------------------------
+  // Twoleg house archetypes A-E. Genuinely different floor plans and
+  // furnishings — House A: snug living room + kitchen nook; B: large lounge,
+  // separate bedrooms; C: cluttered old house, storage; D: kittypet-focused;
+  // E: hallway + two bedrooms + sunroom. No two layouts match.
+  // ---------------------------------------------------------------------------
+  "house-a": {
+    id: "house-a",
+    name: "A Snug Twoleg Nest",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // small living room (west) with a hearth
+      { id: "ha-rug", x: 7, y: 8, label: "Round braided rug", style: "carpet" },
+      { id: "ha-armchair", x: 4, y: 5, label: "Worn armchair", style: "chair" },
+      { id: "ha-lamp", x: 4, y: 10, label: "Floor lamp", style: "lamp" },
+      { id: "ha-books", x: 20, y: 4, label: "Twoleg leaf-clusters (books)", style: "books" },
+      // tiny kitchen nook (northeast)
+      { id: "ha-counter", x: 18, y: 5, label: "Kitchen counter", style: "cabinet" },
+      { id: "ha-counter2", x: 20, y: 7, label: "Cupboard with clinking dishes", style: "cabinet" },
+      { id: "ha-bowl", x: 16, y: 6, label: "Kittypet food bowl", style: "bowl" },
+      { id: "ha-bowl2", x: 17, y: 7, label: "Water bowl", style: "bowl" },
+      // kittypet corner
+      { id: "ha-bed", x: 12, y: 6, label: "Cushioned cat bed by the warmth", style: "nest" },
+      { id: "ha-toy", x: 10, y: 11, label: "Lost ball under the table", style: "toy" },
+      { id: "ha-table", x: 12, y: 11, label: "Small eating-table", style: "table" },
+      { id: "ha-window", x: 8, y: 13, label: "Window over the yard", style: "window" },
+    ],
+    desc: "A small, warm nest. Twoleg scents of toast and laundry; a kettle ticks on the counter.",
+    npcs: [],
+  },
+  "house-b": {
+    id: "house-b",
+    name: "A Grand Twoleg Nest",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // large lounge (center-south)
+      { id: "hb-sofa", x: 7, y: 10, label: "Long velvet sofa", style: "sofa" },
+      { id: "hb-sofa2", x: 17, y: 12, label: "Matching loveseat", style: "sofa" },
+      { id: "hb-table", x: 12, y: 10, label: "Low table with a twoleg picture-box (TV)", style: "table" },
+      { id: "hb-rug", x: 12, y: 11, label: "Huge soft rug", style: "carpet" },
+      { id: "hb-lamp", x: 5, y: 13, label: "Standing lamp", style: "lamp" },
+      { id: "hb-shelf", x: 20, y: 4, label: "Shelves of ornaments", style: "shelf" },
+      // bedroom corner (northwest)
+      { id: "hb-bed", x: 4, y: 4, label: "Twoleg sleeping-nest (bed)", style: "bed" },
+      { id: "hb-blanket", x: 6, y: 5, label: "Heaped blankets", style: "blanket" },
+      { id: "hb-drawer", x: 8, y: 4, label: "Wooden drawers", style: "cabinet" },
+      // kitchen strip (northeast)
+      { id: "hb-counter", x: 16, y: 4, label: "Polished counter", style: "cabinet" },
+      { id: "hb-cabinet", x: 20, y: 7, label: "Tall cabinet", style: "cabinet" },
+      { id: "hb-bowl", x: 14, y: 6, label: "Food bowl", style: "bowl" },
+      { id: "hb-bowl2", x: 15, y: 7, label: "Water bowl", style: "bowl" },
+      { id: "hb-toy", x: 10, y: 8, label: "Cat tunnel of crinkly paper", style: "toy" },
+    ],
+    desc: "A big family nest — two sofas, a picture-box, and endless warm smells from the kitchen.",
+    npcs: [],
+  },
+  "house-c": {
+    id: "house-c",
+    name: "An Old Twoleg Nest",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // cluttered storage feel: boxes everywhere, old furniture
+      { id: "hc-box", x: 5, y: 5, label: "Stacked cardboard boxes", style: "box" },
+      { id: "hc-box2", x: 6, y: 7, label: "Box with a cat-sized hole", style: "box" },
+      { id: "hc-box3", x: 19, y: 5, label: "More boxes, dust on top", style: "box" },
+      { id: "hc-chair", x: 12, y: 5, label: "Broken-backed chair", style: "chair" },
+      { id: "hc-dresser", x: 4, y: 11, label: "Scuffed old dresser", style: "cabinet" },
+      { id: "hc-rug", x: 12, y: 9, label: "Faded threadbare rug", style: "carpet" },
+      { id: "hc-cabinet", x: 20, y: 9, label: "Paint-peeling cabinet", style: "cabinet" },
+      { id: "hc-bowl", x: 8, y: 12, label: "Chipped food bowl", style: "bowl" },
+      { id: "hc-bowl2", x: 9, y: 13, label: "Stained water bowl", style: "bowl" },
+      { id: "hc-lamp", x: 18, y: 12, label: "Flickering corner lamp", style: "lamp" },
+      { id: "hc-plant", x: 16, y: 6, label: "Leggy houseplant, half-wild", style: "moss" },
+    ],
+    desc: "A quiet old nest full of boxes and dust-shapes. Something small rustles behind the dresser.",
+    npcs: [],
+  },
+  "house-d": {
+    id: "house-d",
+    name: "A Kittypet's Paradise",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // completely cat-focused home
+      { id: "hd-tower", x: 6, y: 5, label: "Floor-to-ceiling cat tree", style: "post" },
+      { id: "hd-post", x: 9, y: 4, label: "Second scratching post (well used)", style: "post" },
+      { id: "hd-bed", x: 12, y: 5, label: "Round quilted cat bed", style: "nest" },
+      { id: "hd-bed2", x: 18, y: 6, label: "Window-hammock bed", style: "nest" },
+      { id: "hd-toy", x: 8, y: 8, label: "Pompoms in a basket", style: "toy" },
+      { id: "hd-toy2", x: 15, y: 8, label: "Feather teaser on a stick", style: "toy" },
+      { id: "hd-toy3", x: 17, y: 11, label: "Wind-up mouse", style: "toy" },
+      { id: "hd-bowl", x: 5, y: 11, label: "Raised food bowl stand", style: "bowl" },
+      { id: "hd-bowl2", x: 7, y: 12, label: "Water fountain, always running", style: "bowl" },
+      { id: "hd-blanket", x: 12, y: 12, label: "Pile of fleece blankets", style: "blanket" },
+      { id: "hd-sofa", x: 18, y: 13, label: "Sofa with a cat-shaped dent", style: "sofa" },
+      { id: "hd-lamp", x: 4, y: 8, label: "Sunset-colored lamp", style: "lamp" },
+    ],
+    desc: "Every corner belongs to the cats here — towers, hammocks, a running water fountain, toys underfoot.",
+    npcs: [],
+  },
+  "house-e": {
+    id: "house-e",
+    name: "A Sunny Twoleg Nest",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // hallway + two bedrooms + sunroom layout
+      { id: "he-runner", x: 12, y: 9, label: "Long hallway runner rug", style: "carpet" },
+      { id: "he-bed", x: 5, y: 4, label: "First bedroom's bed", style: "bed" },
+      { id: "he-nightstand", x: 8, y: 5, label: "Nightstand with a ticking clock", style: "cabinet" },
+      { id: "he-bed2", x: 5, y: 12, label: "Second bedroom's bed", style: "bed" },
+      { id: "he-drawer", x: 8, y: 13, label: "Drawers of folded twoleg pelts", style: "cabinet" },
+      // sunroom (east)
+      { id: "he-window", x: 19, y: 4, label: "Sunroom glass, warm with light", style: "window" },
+      { id: "he-window2", x: 20, y: 7, label: "Another wide pane", style: "window" },
+      { id: "he-plant", x: 17, y: 5, label: "Potted fern", style: "moss" },
+      { id: "he-plant2", x: 19, y: 10, label: "Tall palm in a clay pot", style: "moss" },
+      { id: "he-chair", x: 16, y: 8, label: "Wicker sun chair", style: "chair" },
+      { id: "he-bowl", x: 11, y: 6, label: "Food bowl by the hallway", style: "bowl" },
+      { id: "he-bowl2", x: 13, y: 7, label: "Water bowl", style: "bowl" },
+      { id: "he-lamp", x: 10, y: 11, label: "Hall lamp", style: "lamp" },
+    ],
+    desc: "A bright nest with a glass sunroom. Dust motes drift over two bedrooms and a warm hallway.",
     npcs: [],
   },
   barn: {
@@ -448,8 +717,8 @@ export const interiors: Record<string, InteriorDef> = {
       { id: "hay2", x: 18, y: 6, label: "Hay bales, cow-warm", style: "hay" },
       { id: "hay3", x: 12, y: 12, label: "Warm hay pile for sleeping", style: "hay" },
       { id: "hay4", x: 9, y: 10, label: "Loose straw scatter", style: "hay" },
-      { id: "plank", x: 16, y: 11, label: "Twoleg workbench", style: "plank" },
-      { id: "bn-box", x: 5, y: 12, label: "Feed sacks", style: "plank" },
+      { id: "plank", x: 16, y: 11, label: "Twoleg workbench", style: "table" },
+      { id: "bn-box", x: 5, y: 12, label: "Feed sacks", style: "box" },
       { id: "bn-bowl", x: 15, y: 5, label: "The farm cat's water bowl", style: "bowl" },
       { id: "bn-rider", x: 8, y: 4, label: "Barn rafters with pigeon nests", style: "vines" },
     ],
@@ -1096,11 +1365,13 @@ export class GameCanvas {
           near = { kind: "object", label: prop.label };
         }
       }
-      // NPCs inside
+      // NPCs inside (same stable in-room positions as the renderer)
       for (const npcId of room.npcs ?? []) {
         const n = this.npcStates.find((s) => s.def.id === npcId);
         if (!n) continue;
-        const d = Math.hypot(n.x - this.px, n.y - this.py);
+        const hx = 6 + (hash2(npcId.length * 7 + 3, npcId.charCodeAt(0)) * (ROOM_W - 13));
+        const hy = 6 + (hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (ROOM_H - 13));
+        const d = Math.hypot(hx * 32 + 16 - this.px, hy * 32 + 16 - this.py);
         if (d < bestD) {
           bestD = d;
           near = { kind: "npc", label: n.def.name, npcId: n.def.id };
@@ -1252,6 +1523,18 @@ export class GameCanvas {
       ctx.ellipse(x, y + 6, 14, 5, 0, 0, Math.PI * 2);
       ctx.fill();
       switch (prop.style) {
+        case "sofa": this.drawSofa(x, y, 46, 24); break;
+        case "chair": this.drawChair(x, y, 22, 20); break;
+        case "table": this.drawTable(x, y, 40, 24); break;
+        case "bed": this.drawBed(x, y, 44, 30); break;
+        case "cabinet": this.drawCabinet(x, y, 34, 26); break;
+        case "shelf": this.drawShelf(x, y, 40, 14); break;
+        case "books": this.drawBooks(x, y, 26, 14); break;
+        case "box": this.drawBox(x, y, 26, 18); break;
+        case "window": this.drawWindow(x, y, 0, 0); break;
+        case "plant": this.drawPlant(x, y, 0, 0); break;
+        case "post": this.drawPost(x, y, 24, 34); break;
+        case "blanket": this.drawBlanket(x, y, 30, 14); break;
         case "nest":
           ctx.fillStyle = "#8a7a5a";
           ctx.beginPath();
@@ -1329,20 +1612,34 @@ export class GameCanvas {
           ctx.ellipse(x, y, 3, 2, 0.4, 0, Math.PI * 2);
           ctx.fill();
           break;
-        case "toy":
-          // yarn ball with a loose thread
-          ctx.fillStyle = "#d977a0";
+        case "toy": {
+          // a proper yarn ball: wound threads, highlight, trailing string
+          const ballR = 6.5;
+          const ballC = prop.id;
+          const hueShift = (ballC.charCodeAt(3) % 4) * 25;
+          ctx.fillStyle = ["#c9607f", "#6f86c9", "#b0a13c", "#5aa07a"][Math.min(3, Math.floor(hueShift / 25))] ?? "#d977a0";
           ctx.beginPath();
-          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.arc(x, y - 3, ballR, 0, Math.PI * 2);
           ctx.fill();
-          ctx.strokeStyle = "rgba(255,255,255,0.55)";
-          ctx.lineWidth = 0.9;
+          ctx.strokeStyle = "rgba(40, 25, 35, 0.45)";
+          ctx.lineWidth = 1;
+          for (let k = 0; k < 3; k++) {
+            ctx.beginPath();
+            ctx.ellipse(x, y - 3, ballR * (0.9 - k * 0.22), ballR * 0.38, (k * 55 + hueShift) * (Math.PI / 180), 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.fillStyle = "rgba(255,255,255,0.35)";
           ctx.beginPath();
-          ctx.arc(x, y, 5, 0.6, 2.6);
-          ctx.moveTo(x + 5, y);
-          ctx.quadraticCurveTo(x + 10, y + 2, x + 13, y - 1);
+          ctx.arc(x - ballR * 0.35, y - 3 - ballR * 0.4, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = ctx.fillStyle = "rgba(220,180,200,0.8)";
+          ctx.beginPath();
+          ctx.moveTo(x + ballR * 0.9, y - 1);
+          ctx.quadraticCurveTo(x + ballR + 6, y + 4, x + ballR + 10, y - 2 + Math.sin(this.time * 2) * 1.5);
+          ctx.lineWidth = 1.2;
           ctx.stroke();
           break;
+        }
         case "carpet":
           // household rug
           ctx.fillStyle = "rgba(150, 70, 60, 0.9)";
@@ -1375,20 +1672,26 @@ export class GameCanvas {
           break;
       }
     }
-    // NPCs assigned to this room (drawn near their home positions)
+    // NPCs assigned to this room (drawn at a stable in-room spot; a stable
+    // hash keeps each cat in its own corner instead of at world coords that
+    // may sit outside the room)
     for (const npcId of room.npcs ?? []) {
       const n = this.npcStates.find((s) => s.def.id === npcId);
       if (!n) continue;
-      drawCat(ctx, n.def, n.x, n.y, n.facing, n.pose === "walk" && Math.hypot(n.tx - n.x, n.ty - n.y) > 8 ? "walk" : "sit", this.time, n.phase);
+      const hx = 6 + (hash2(npcId.length * 7 + 3, npcId.charCodeAt(0)) * (ROOM_W - 13));
+      const hy = 6 + (hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (ROOM_H - 13));
+      const nxp = hx * 32 + 16;
+      const nyp = hy * 32 + 16;
+      drawCat(ctx, n.def, nxp, nyp, n.facing, n.pose === "walk" ? "sit" : n.pose, this.time, n.phase);
       ctx.font = "600 11px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.fillStyle = "rgba(0,0,0,0.45)";
       const tw = ctx.measureText(n.def.name).width;
       ctx.beginPath();
-      ctx.roundRect(n.x - tw / 2 - 6, n.y - 40, tw + 12, 17, 8);
+      ctx.roundRect(nxp - tw / 2 - 6, nyp - 40, tw + 12, 17, 8);
       ctx.fill();
       ctx.fillStyle = "#f4f1e8";
-      ctx.fillText(n.def.name, n.x, n.y - 28);
+      ctx.fillText(n.def.name, nxp, nyp - 28);
     }
     // player
     drawCat(ctx, this.playerSkin(), this.px, this.py, this.pxFacing, this.pPose, this.time, 0);
@@ -1525,11 +1828,12 @@ export class GameCanvas {
             case "plank": this.drawPlank(o.x, o.y, w, h); break;
             case "haybale": this.drawHaybale(o.x, o.y, w, h); break;
             case "fishing-spot": this.drawFishingSpot(o.x, o.y, w, h); break;
+            case "door": this.drawDoor(o.x, o.y, w, h); break;
           }
-          // detail objects are pure garnish — no interaction marker
-          if (o.detail) {
-            ctx.restore?.call(ctx);
-          }
+          // detail objects are pure garnish — nothing extra to draw.
+          // Never touch the ctx.save/restore stack here: an unbalanced restore
+          // pops the camera transform and vanishes the world.
+          void o.detail;
           // den entrance marker for enterable dens
           if (o.interior && !o.detail) {
             ctx.fillStyle = "rgba(255,235,180,0.9)";
@@ -2336,10 +2640,283 @@ export class GameCanvas {
 
   private drawPlank(x: number, y: number, w: number, h: number) {
     const ctx = this.ctx;
+    // bench-style: seat slab with visible legs
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.3, w * 0.5, h * 0.14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#5a4028";
+    ctx.lineWidth = 2.5;
+    for (const sx of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(x + sx * w * 0.36, y - h * 0.2);
+      ctx.lineTo(x + sx * w * 0.36, y + h * 0.26);
+      ctx.stroke();
+    }
     ctx.fillStyle = "#7a5b3a";
     ctx.beginPath();
-    ctx.roundRect(x - w * 0.5, y - h * 0.3, w, h * 0.6, 2);
+    ctx.roundRect(x - w * 0.5, y - h * 0.3, w, h * 0.42, 2);
     ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x - w * 0.5, y - h * 0.3, w, 2);
+  }
+
+  // ---- real furniture renderers (recognizable silhouettes + materials) ----
+  /** Fabric sofa: seat cushions, backrest, rolled arms, wooden feet. */
+  private drawSofa(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.28, w * 0.55, h * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // backrest
+    ctx.fillStyle = "#8a5a4a";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.5, y - h * 0.55, w, h * 0.5, 5);
+    ctx.fill();
+    // arms
+    ctx.fillStyle = "#9c6a56";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.54, y - h * 0.4, w * 0.16, h * 0.55, 4);
+    ctx.roundRect(x + w * 0.38, y - h * 0.4, w * 0.16, h * 0.55, 4);
+    ctx.fill();
+    // seat cushions
+    ctx.fillStyle = "#a8765f";
+    for (let i = 0; i < 2; i++) {
+      ctx.beginPath();
+      ctx.roundRect(x - w * 0.4 + i * w * 0.42, y - h * 0.16, w * 0.38, h * 0.34, 4);
+      ctx.fill();
+    }
+    // seams + feet
+    ctx.strokeStyle = "rgba(60,30,20,0.4)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.02, y - h * 0.16);
+    ctx.lineTo(x - w * 0.02, y + h * 0.18);
+    ctx.stroke();
+    ctx.fillStyle = "#5a4028";
+    ctx.fillRect(x - w * 0.45, y + h * 0.18, 4, 4);
+    ctx.fillRect(x + w * 0.41, y + h * 0.18, 4, 4);
+  }
+  /** Upholstered chair with a visible back. */
+  private drawChair(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.3, w * 0.5, h * 0.15, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#7d5a40";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.34, y - h * 0.6, w * 0.68, h * 0.42, 3); // back
+    ctx.fill();
+    ctx.fillStyle = "#937050";
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.4, y - h * 0.2, w * 0.8, h * 0.42, 3); // seat
+    ctx.fill();
+    ctx.strokeStyle = "#4f3822";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.3, y + h * 0.22); ctx.lineTo(x - w * 0.3, y + h * 0.45);
+    ctx.moveTo(x + w * 0.3, y + h * 0.22); ctx.lineTo(x + w * 0.3, y + h * 0.45);
+    ctx.stroke();
+  }
+  /** Wooden table: top grain + four legs. */
+  private drawTable(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.34, w * 0.55, h * 0.15, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#8a6844";
+    ctx.beginPath();
+    ctx.ellipse(x, y - h * 0.1, w * 0.52, h * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#a07d52";
+    ctx.beginPath();
+    ctx.ellipse(x, y - h * 0.16, w * 0.48, h * 0.17, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(80,55,30,0.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(x, y - h * 0.14, w * 0.3, h * 0.09, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#5f452c";
+    ctx.lineWidth = 2.5;
+    for (const sx of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(x + sx * w * 0.34, y - h * 0.06);
+      ctx.lineTo(x + sx * w * 0.3, y + h * 0.4);
+      ctx.stroke();
+    }
+  }
+  /** Human bed: headboard, mattress, pillow, folded blanket. */
+  private drawBed(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.3, w * 0.55, h * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#6d4a30"; // headboard
+    ctx.fillRect(x - w * 0.5, y - h * 0.55, w, h * 0.28);
+    ctx.fillStyle = "#d9cfc0"; // mattress
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.46, y - h * 0.3, w * 0.92, h * 0.62, 5);
+    ctx.fill();
+    ctx.fillStyle = "#f2ece0"; // pillow
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.36, y - h * 0.26, w * 0.32, h * 0.2, 4);
+    ctx.fill();
+    ctx.fillStyle = "#a8524a"; // folded blanket
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.46, y + h * 0.02, w * 0.92, h * 0.3, 4);
+    ctx.fill();
+  }
+  /** Kitchen cabinet: doors, handles, counter top. */
+  private drawCabinet(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.3, w * 0.5, h * 0.13, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#7c5a3a";
+    ctx.fillRect(x - w * 0.45, y - h * 0.6, w * 0.9, h * 0.95);
+    ctx.fillStyle = "#8f6a45";
+    ctx.fillRect(x - w * 0.38, y - h * 0.5, w * 0.32, h * 0.7);
+    ctx.fillRect(x + w * 0.06, y - h * 0.5, w * 0.32, h * 0.7);
+    ctx.fillStyle = "#d8c26a"; // handles
+    ctx.fillRect(x - w * 0.09, y - h * 0.24, 2.5, 7);
+    ctx.fillRect(x + w * 0.055, y - h * 0.24, 2.5, 7);
+    ctx.fillStyle = "#b8b0a2"; // counter top
+    ctx.fillRect(x - w * 0.5, y - h * 0.66, w, 5);
+  }
+  /** Wall shelf with small objects. */
+  private drawShelf(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#6d5138";
+    ctx.fillRect(x - w * 0.5, y - 2, w, 5);
+    ctx.fillStyle = "#8a6844";
+    ctx.fillRect(x - w * 0.5, y - 2, w, 2);
+    // little curiosities on the shelf
+    const colors = ["#b5533c", "#3f6b8a", "#c9a84a", "#5a7d4a"];
+    for (let i = 0; i < 4; i++) {
+      const ox = x - w * 0.36 + i * w * 0.24;
+      ctx.fillStyle = colors[i % colors.length];
+      if (i % 2 === 0) ctx.fillRect(ox, y - 11, 5, 9);
+      else { ctx.beginPath(); ctx.arc(ox + 2.5, y - 6, 3.5, 0, Math.PI * 2); ctx.fill(); }
+    }
+  }
+  /** A small stack of books with spines. */
+  private drawBooks(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    const cols = ["#8a4a3a", "#3a5a7a", "#4a7a4a", "#7a6a3a", "#6a4a7a"];
+    for (let i = 0; i < 4; i++) {
+      ctx.fillStyle = cols[i % cols.length];
+      const bh = 11 - (i % 2);
+      ctx.fillRect(x - w * 0.4 + i * 5.5, y - bh, 4.5, bh);
+      ctx.fillStyle = "rgba(255,255,255,0.28)";
+      ctx.fillRect(x - w * 0.4 + i * 5.5 + 1, y - bh + 2, 2.4, bh - 4);
+    }
+    ctx.fillStyle = "#5f452c";
+    ctx.fillRect(x - w * 0.45, y, w * 0.9, 3);
+  }
+  /** Cardboard box with open flaps. */
+  private drawBox(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.24, w * 0.5, h * 0.13, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#b09062";
+    ctx.fillRect(x - w * 0.4, y - h * 0.42, w * 0.8, h * 0.7);
+    ctx.fillStyle = "#9c7c50";
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.4, y - h * 0.42);
+    ctx.lineTo(x - w * 0.52, y - h * 0.62);
+    ctx.lineTo(x - w * 0.1, y - h * 0.52);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + w * 0.4, y - h * 0.42);
+    ctx.lineTo(x + w * 0.52, y - h * 0.62);
+    ctx.lineTo(x + w * 0.1, y - h * 0.52);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "rgba(90,60,30,0.5)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x - w * 0.4, y - h * 0.42, w * 0.8, h * 0.7);
+  }
+  /** Window with panes and light. */
+  private drawWindow(x: number, y: number, _w: number, _h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#7d6248";
+    ctx.fillRect(x - 16, y - 13, 32, 24);
+    ctx.fillStyle = "rgba(185, 220, 245, 0.95)";
+    ctx.fillRect(x - 13, y - 10, 26, 18);
+    ctx.strokeStyle = "#7d6248";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 10); ctx.lineTo(x, y + 8);
+    ctx.moveTo(x - 13, y - 1); ctx.lineTo(x + 13, y - 1);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,220,0.4)";
+    ctx.fillRect(x - 13, y - 10, 8, 18);
+  }
+  /** Potted plant with leaves. */
+  private drawPlant(x: number, y: number, _w: number, _h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#a5643c";
+    ctx.beginPath();
+    ctx.moveTo(x - 8, y + 6); ctx.lineTo(x + 8, y + 6);
+    ctx.lineTo(x + 5.5, y - 4); ctx.lineTo(x - 5.5, y - 4);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "#4a7a42";
+    ctx.lineWidth = 2;
+    for (const [dx, dy] of [[-6, -10], [0, -14], [6, -10], [-3, -8], [3, -12]] as const) {
+      ctx.beginPath();
+      ctx.moveTo(x, y - 3);
+      ctx.quadraticCurveTo(x + dx * 0.6, y - 3 + dy * 0.6, x + dx, y + dy);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#5d9450";
+    for (const [dx, dy] of [[-6, -10], [0, -14], [6, -10]] as const) {
+      ctx.beginPath();
+      ctx.ellipse(x + dx, y + dy, 3.2, 2, dx * 0.06, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  /** Scratching post: base, wrapped column, top perch. */
+  private drawPost(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + 5, w * 0.55, h * 0.12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#8a6844";
+    ctx.fillRect(x - w * 0.45, y - 2, w * 0.9, 6); // base
+    ctx.fillStyle = "#c0a878";
+    ctx.fillRect(x - 4, y - h * 0.7, 8, h * 0.7); // wrapped column
+    ctx.strokeStyle = "rgba(120,90,50,0.6)";
+    ctx.lineWidth = 1;
+    for (let yy = y - h * 0.7 + 3; yy < y - 2; yy += 4) {
+      ctx.beginPath();
+      ctx.moveTo(x - 4, yy); ctx.lineTo(x + 4, yy);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#8a6844";
+    ctx.beginPath();
+    ctx.roundRect(x - 11, y - h * 0.7 - 7, 22, 7, 2); // perch
+    ctx.fill();
+  }
+  /** Folded blanket stack. */
+  private drawBlanket(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    const cols = ["#b56a4a", "#7a8ab0", "#c9b070"];
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = cols[i];
+      ctx.beginPath();
+      ctx.roundRect(x - w * 0.42, y - 6 + i * 5, w * 0.84, 6, 3);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.15)";
+      ctx.fillRect(x - w * 0.42, y - 6 + i * 5 + 1.5, w * 0.84, 1.5);
+    }
   }
 
   private drawHaybale(x: number, y: number, w: number, h: number) {
@@ -2378,6 +2955,46 @@ export class GameCanvas {
       ctx.ellipse(x, y, i * 6 + Math.sin(this.time * 2 + x) * 1.5, i * 3, 0, 0, Math.PI * 2);
       ctx.stroke();
     }
+  }
+
+  /** A proper Twoleg front door: frame, panel, window, step — the visual
+   *  cue that this entrance can be used (press E). */
+  private drawDoor(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    const dw = Math.max(18, w * 1.1);
+    const dh = Math.max(26, h * 1.6);
+    // shadow
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + dh * 0.16, dw * 0.62, dh * 0.14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // frame
+    ctx.fillStyle = "#7d6248";
+    ctx.fillRect(x - dw / 2 - 3, y - dh, dw + 6, dh + 4);
+    // door panel with grain
+    ctx.fillStyle = "#8a6a48";
+    ctx.fillRect(x - dw / 2, y - dh + 3, dw, dh - 2);
+    ctx.strokeStyle = "rgba(60,40,24,0.5)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 2; i++) {
+      ctx.strokeRect(x - dw / 2 + 3, y - dh + 3 + i * (dh / 3), dw - 6, dh / 3 - 3);
+    }
+    // little window in the upper panel
+    ctx.fillStyle = "rgba(170, 210, 235, 0.9)";
+    ctx.fillRect(x - dw * 0.18, y - dh + 8, dw * 0.36, dh * 0.18);
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.strokeRect(x - dw * 0.18, y - dh + 8, dw * 0.36, dh * 0.18);
+    // handle
+    ctx.fillStyle = "#d8c26a";
+    ctx.beginPath();
+    ctx.arc(x + dw * 0.3, y - dh * 0.42, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    // stone step
+    ctx.fillStyle = "#9c9a94";
+    ctx.fillRect(x - dw * 0.62, y + dh * 0.12, dw * 1.24, 5);
+    // welcome mat
+    ctx.fillStyle = "#7a5c3c";
+    ctx.fillRect(x - dw * 0.4, y + dh * 0.12 + 5, dw * 0.8, 4);
   }
 
   private drawStump(x: number, y: number, r: number) {
