@@ -89,6 +89,9 @@ const schema = defineSchema(
       inputSequence: v.optional(v.number()),
       stateVersion: v.optional(v.number()),
       serverTick: v.optional(v.number()),
+      // synchronized state vocabulary (idle/walk/run/crouch + CatPose)
+      movementState: v.optional(v.string()),
+      animationState: v.optional(v.string()),
     }).index("by_user", ["userId"])
       .index("by_updated", ["updatedAt"]),
 

@@ -16,7 +16,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
-import { GameCanvas, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
+import { GameCanvas, type MovementState, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
 import { interiors } from "@/game/engine";
 import { lore, npcs, areaAt, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
@@ -42,6 +42,18 @@ import type { CatSkin } from "@/game/draw";
 // ---------------------------------------------------------------------------
 // Main Game component
 // ---------------------------------------------------------------------------
+
+/** live snapshot of the local cat's movement/animation state */
+type MovementSnapshot = ReturnType<GameCanvas["engineState"]>;
+
+/** real movement state of the local cat, sampled straight from the engine */
+export function movementSample(g: { engineState?: () => MovementSnapshot } | null) {
+  if (g?.engineState) {
+    const s = g.engineState();
+    return { x: s.x, y: s.y, facing: s.facing, moving: s.moving, movementState: s.movementState, animationState: s.animationState };
+  }
+  return { facing: 1, moving: false };
+}
 
 export default function Game() {
   const navigate = useNavigate();
@@ -240,14 +252,20 @@ export default function Game() {
         if (id) setDiscovered((d) => (d.includes(id) ? d : [...d, id]));
       },
       onNearby: (t) => setNearby(t),
-      onMove: (x, y) => setPos({ x, y }),
+      onMove: (x, y) => {
+        if (!interiorRef.current) outdoorRef.current = { x, y };
+        setPos({ x, y });
+      },
       onInteract: (t) => handleInteractRef.current(t),
       onPreyCaught: () => {
         addXp({ amount: 4 }).catch(() => undefined);
       },
       onClock: (h) => setClock(h),
       onWeatherChange: (w) => setWeather(w),
-      onInteriorChange: (id) => setInterior(id),
+      onInteriorChange: (id) => {
+        interiorRef.current = id;
+        setInterior(id);
+      },
       onNpcIdle: (name, line) => {
         setDialogue({ name, text: line });
         window.setTimeout(() => setDialogue((d) => (d && d.name === name && d.text === line ? null : d)), 6000);
@@ -266,12 +284,13 @@ export default function Game() {
       hb = window.setInterval(() => {
         const g = gameRef.current;
         if (!g) return;
+        const p = interiorRef.current ? outdoorRef.current : posRef.current;
+        const m = interiorRef.current ? { facing: 1, moving: false } : movementSample(g);
         heartbeat({
           inputSequence: ++inputSeq.current,
-          x: posRef.current.x,
-          y: posRef.current.y,
-          facing: 1,
-          moving: false,
+          x: p.x,
+          y: p.y,
+          ...m,
           mode: "open",
           catName: myCat.name,
           clan: myCat.clan,
@@ -279,6 +298,32 @@ export default function Game() {
           appearance: fullSkin(myCat.appearance),
         }).catch(() => undefined);
       }, 5000);
+    }
+
+    // movement sync: a steady 300ms cadence so remote cats can be
+    // interpolated smoothly (the 5s heartbeat above is only the presence
+    // keepalive — far too sparse to animate other players).
+    let sync: number | undefined;
+    if (mode === "open" && myCat) {
+      sync = window.setInterval(() => {
+        const g = gameRef.current;
+        if (!g || interiorRef.current) return; // room-local coords are not world positions
+        const s = g.engineState();
+        heartbeat({
+          inputSequence: ++inputSeq.current,
+          x: s.x,
+          y: s.y,
+          facing: s.facing,
+          moving: s.moving,
+          movementState: s.movementState,
+          animationState: s.animationState,
+          mode: "open",
+          catName: myCat.name,
+          clan: myCat.clan,
+          rank: "apprentice",
+          appearance: fullSkin(myCat.appearance),
+        }).catch(() => undefined);
+      }, 300);
     }
 
     // autosave
@@ -322,6 +367,7 @@ export default function Game() {
 
     return () => {
       window.clearInterval(hb);
+      window.clearInterval(sync);
       window.clearInterval(saveInterval);
       window.clearInterval(bubbleInterval);
       window.removeEventListener("beforeunload", onUnload);
@@ -389,6 +435,8 @@ export default function Game() {
       seen.add(r.userId);
       map.set(r.userId, r);
     }
+    // a player joining (or re-joining) is re-buffed by the engine from their
+    // fresh authoritative snapshot — no stale interpolation state is reused
     for (const k of [...map.keys()]) if (!seen.has(k)) map.delete(k);
   }, [remotesRaw]);
 
@@ -400,11 +448,11 @@ export default function Game() {
     const sample = async () => {
       const t0 = performance.now();
       try {
+        const p = interiorRef.current ? outdoorRef.current : posRef.current;
         await heartbeat({
-          x: posRef.current.x,
-          y: posRef.current.y,
-          facing: 1,
-          moving: false,
+          x: p.x,
+          y: p.y,
+          ...(interiorRef.current ? { facing: 1, moving: false } : movementSample(gameRef.current)),
           mode: mode === "story" ? "story" : "open",
           catName: myCat?.name ?? "Cat",
           clan: myCat?.clan,
@@ -588,6 +636,10 @@ export default function Game() {
   const lastSendAt = useRef(0);
   /** monotonic client input sequence — the server rejects already-processed inputs */
   const inputSeq = useRef(0);
+  /** live interior id (null = outdoors); engine coords are room-local inside */
+  const interiorRef = useRef<string | null>(null);
+  /** last known OUTDOOR world position — what presence broadcasts */
+  const outdoorRef = useRef({ x: 0, y: 0 });
 
   const advanceStory = useCallback(() => {
     const step = storySteps[storyStepRef.current];
