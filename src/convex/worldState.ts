@@ -77,15 +77,13 @@ export const tickWorld = mutation({
       });
       return { accepted: true, leader: args.myUserId };
     }
-    // leader election: lexicographically smallest online userId writes.
+    // Leader election: the lexicographically smallest ONLINE userId writes.
+    // A stored leader is only valid while it keeps ticking — if it has gone
+    // quiet for 30s (tab closed, crashed, offline), any caller takes over.
+    // Without this, a vanished small-id leader froze the shared clock forever.
     if (args.myUserId !== row.leaderUserId) {
-      // take over if the previous leader vanished (stale heartbeat)
-      if (!row.leaderUserId || row.leaderUserId < args.myUserId) {
-        // keep existing leader if it's still "smaller" (deterministic order)
-        if (row.leaderUserId && row.leaderUserId < args.myUserId) {
-          return { accepted: false, leader: row.leaderUserId };
-        }
-      } else {
+      const leaderIsStale = now - row.serverTick > 30_000;
+      if (row.leaderUserId && !leaderIsStale) {
         return { accepted: false, leader: row.leaderUserId };
       }
     }

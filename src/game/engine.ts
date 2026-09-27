@@ -2674,8 +2674,11 @@ export class GameCanvas {
 
   /** Soft cloud shadows drifting across the world (world-space). */
   private drawCloudShadows() {
-    // Only genuinely overcast skies cast cloud shadows — never a clear day.
-    // (env.dark also rises at night, so gate on weather, not darkness alone.)
+    // Only genuinely overcast skies cast cloud shadows — never a clear day
+    // or a clear night (env.dark rises at night, so gate on the weather kind,
+    // not darkness alone).
+    if (this.weather === "clear") return;
+    if (this.weather === "snow") return;
     if (this.env.dark < 0.06) return;
     if (this.env.rain > 0.4 || this.env.fog > 0.35) return; // rain/fog hide shadows
     const ctx = this.ctx;

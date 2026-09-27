@@ -107,6 +107,10 @@ export const savePosition = mutation({
     x: v.number(),
     y: v.number(),
     discovered: v.optional(v.array(v.string())),
+    /** Client wall-clock at send time: lets the server ignore out-of-order
+     *  writes from a previous session (e.g. a sign-out flush racing a
+     *  delayed autosave from the same account). */
+    clientUpdatedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -116,11 +120,18 @@ export const savePosition = mutation({
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .first();
     if (!p) throw new Error("No player save");
+    // stale-write guard: never let an OLDER client timestamp overwrite a
+    // NEWER position (race between the periodic autosave and the sign-out
+    // flush, or two tabs of the same account).
+    const effectiveAt = typeof args.clientUpdatedAt === "number" ? args.clientUpdatedAt : Date.now();
+    if (typeof p.updatedAt === "number" && p.updatedAt > effectiveAt + 2000) {
+      return false; // a newer save already landed; drop this stale write
+    }
     const discovered =
       args.discovered && args.discovered.length > (p.discovered?.length ?? 0)
         ? args.discovered
         : p.discovered;
-    await ctx.db.patch(p._id, { x: args.x, y: args.y, discovered, updatedAt: Date.now() });
+    await ctx.db.patch(p._id, { x: args.x, y: args.y, discovered, updatedAt: effectiveAt });
     return true;
   },
 });

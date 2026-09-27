@@ -272,11 +272,20 @@ export class AudioEngine {
 
   /** Layered ambience: fades in new layers, fades out removed ones. */
   setAmbience(wanted: Partial<Record<AmbienceLayerId, number>>) {
-    this.wanted = wanted;
-    if (!this.started) return;
-    const ids = new Set([...Object.keys(wanted), ...this.chans.keys()]) as Set<AmbienceLayerId>;
+    if (!this.started) {
+      this.wanted = wanted;
+      return;
+    }
+    // clamp targets (defensive: >1 targets used to push element volume >1)
+    const clamped: Partial<Record<AmbienceLayerId, number>> = {};
+    for (const k of Object.keys(wanted) as AmbienceLayerId[]) {
+      const v = wanted[k];
+      if (typeof v === "number" && v > 0) clamped[k] = Math.min(1, Math.max(0, v));
+    }
+    this.wanted = clamped;
+    const ids = new Set([...Object.keys(clamped), ...this.chans.keys()]) as Set<AmbienceLayerId>;
     for (const id of ids) {
-      const target = (wanted[id] ?? 0);
+      const target = (clamped[id] ?? 0);
       const existing = this.chans.get(id);
       if (target <= 0.001) {
         if (existing) {

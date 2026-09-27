@@ -372,7 +372,7 @@ export default function Game() {
     const saveInterval = window.setInterval(() => {
       const g = gameRef.current;
       if (!g) return;
-      savePosition({ x: posRef.current.x, y: posRef.current.y, discovered: discRef.current }).catch(() => undefined);
+      savePosition({ x: posRef.current.x, y: posRef.current.y, discovered: discRef.current, clientUpdatedAt: Date.now() }).catch((e) => console.error("[save] position autosave failed:", e));
     }, 6000);
 
     // remote-player speech bubbles: create from recent messages, track the
@@ -424,18 +424,24 @@ export default function Game() {
   // clock. The engine's local clock only smooths transitions between
   // authoritative updates. ---
   const worldAppliedRef = useRef(0);
+  const serverWeatherAppliedRef = useRef(false);
   useEffect(() => {
     const g = gameRef.current;
     if (!g || !worldState) return;
     // only apply when the serverTick is NEWER than the last one we applied
     if (worldState.serverTick <= worldAppliedRef.current) return;
     worldAppliedRef.current = worldState.serverTick;
+    serverWeatherAppliedRef.current = true;
     const gs = g as unknown as {
       time: number; dayTime: number; weather: string; weatherUntil: number; GAME_DAY_SECONDS?: number;
     };
     const dayLen = worldState.dayLengthS ?? 600;
     gs.dayTime = (worldState.worldTime / dayLen) * 600; // engine uses 600s day
     gs.weather = worldState.weather as WeatherKind;
+    // The HUD must mirror the AUTHORITATIVE state: the effect below resets
+    // weatherUntil (which suppresses engine re-roll callbacks), so derive the
+    // HUD label directly from the applied server weather.
+    setWeather((worldState.weather as WeatherKind) ?? "clear");
     // The server owns weather, but NEVER freeze the local picker: if the
     // authority stalls (embedded preview, offline mode), a cloudy sky used to
     // stick on screen forever. 45s grace lets the leader override; after that
@@ -468,12 +474,35 @@ export default function Game() {
         leaderRef.current = false; // lost leadership; stop ticking
       });
     }, 5000);
+    // If another client currently leads, keep polling claimLeadership so the
+    // clock recovers automatically when that leader goes quiet.
+    const re = window.setInterval(() => {
+      if (!alive || leaderRef.current) return;
+      claimLeadership({ myUserId })
+        .then((ok) => { if (alive) leaderRef.current = ok; })
+        .catch(() => undefined);
+    }, 10000);
     return () => {
       alive = false;
       window.clearInterval(t);
+      window.clearInterval(re);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, mode, myUserId]);
+
+  // Local weather re-rolls are only a fallback for offline play. If the
+  // shared server weather was ever applied, never let a local re-roll change
+  // the sky afterwards (they used to fight and leave stray cloud/snow FX).
+  useEffect(() => {
+    if (phase !== "playing") return;
+    if (serverWeatherAppliedRef.current) return;
+    const id = window.setInterval(() => {
+      const g = gameRef.current as unknown as { weather?: string; weatherUntil?: number } | null;
+      if (!g) return;
+      setWeather((g.weather as WeatherKind) ?? "clear");
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [phase]);
 
   // Sync remotes into the engine.
   useEffect(() => {

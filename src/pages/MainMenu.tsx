@@ -839,7 +839,10 @@ function SignOutControl() {
       setSaveState("saving");
       const raw = localStorage.getItem("wcrpg-last-pos");
       const pos = raw ? (JSON.parse(raw) as { x: number; y: number }) : null;
-      if (pos) await savePosition({ x: pos.x, y: pos.y });
+      if (pos) await savePosition({ x: pos.x, y: pos.y, clientUpdatedAt: Date.now() });
+      // the flush is confirmed; clear the staging slot so the NEXT account
+      // can never inherit this position (belt-and-braces with the reload)
+      localStorage.removeItem("wcrpg-last-pos");
       setSaveState("saved");
       // 3-5: safe disconnect → the auth session is cleared; saved cats stay.
       await signOut();
