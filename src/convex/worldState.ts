@@ -96,8 +96,17 @@ export const tickWorld = mutation({
     let weatherStartedAt = row.weatherStartedAt;
     let weatherDurationMs = row.weatherDurationMs;
     if (now - weatherStartedAt > weatherDurationMs) {
+      // weighted picker: clear skies dominate, storms are rare (mirrors the
+      // client's local weights so the shared weather feels natural)
       const options = ["clear", "cloudy", "rain", "fog", "wind", "storm", "snow"] as const;
-      weather = options[Math.floor(Math.random() * options.length)];
+      const weights = [38, 20, 12, 7, 15, 4, 4];
+      let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+      let idx = 0;
+      for (let i = 0; i < options.length; i++) {
+        r -= weights[i];
+        if (r <= 0) { idx = i; break; }
+      }
+      weather = options[idx];
       weatherIntensity = weather === "storm" ? 1 : weather === "rain" ? 0.6 : 0.3;
       weatherStartedAt = now;
       weatherDurationMs = 60_000 + Math.random() * 120_000;

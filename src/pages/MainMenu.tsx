@@ -631,7 +631,8 @@ function CharacterScreen({
 
 // --- settings screen -----------------------------------------------------------
 
-function SettingsScreen({
+/** Full-screen settings panel, shared with the in-game ESC menu. */
+export function SettingsScreen({
   settings,
   onChange,
   onClose,

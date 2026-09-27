@@ -20,7 +20,7 @@ import { GameCanvas, type MovementState, type NearbyTarget, type RemotePlayer, t
 import { interiors } from "@/game/engine";
 import { lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
-import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } from "./MainMenu";
+import MainMenu, { LoadingScreen, loadSettings, SettingsScreen, type GameMode, type Settings } from "./MainMenu";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
 import { WorldMapCanvas, MapLegend, WorldMapOverlay, MAP_SPOTS } from "./WorldMapData";
 import {
@@ -63,8 +63,12 @@ export default function Game() {
   const [pendingMode, setPendingMode] = useState<GameMode | null>(null);
   /** explicit spawn when the session's Clan choice moves the cat to a camp */
   const [pendingSpawn, setPendingSpawn] = useState<{ x: number; y: number } | null>(null);
-  const [pauseOpen, setPauseOpen] = useState(false);
-  const [catClanOpen, setCatClanOpen] = useState(false);
+  // --- centralized UI layer (one active interface at a time) ---
+  // Z-order: dialogue/confirmations on top (z-50), opened menus in the middle
+  // (z-40), ESC menu + HUD at the bottom (z-30). Only the active layer mounts,
+  // so hidden menus can never block input or render above the active one.
+  type ActiveUi = "gameplay" | "esc" | "settings" | "map" | "friends" | "messages" | "cat" | "chat" | "codex";
+  const [activeUI, setActiveUI] = useState<ActiveUi>("gameplay");
   /** live facing for the minimap arrow (engine mutates a ref, so poll it) */
   const [facing, setFacing] = useState<1 | -1>(1);
   const [gameSettings, setGameSettings] = useState<Settings>(() => loadSettings());
@@ -101,9 +105,10 @@ export default function Game() {
     npcId?: string;
     lineIdx?: number;
   } | null>(null);
-  const [codexOpen, setCodexOpen] = useState(false);
-  const [mapOpen, setMapOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
+  // Panel visibility is derived from the single active layer.
+  const codexOpen = activeUI === "codex";
+  const mapOpen = activeUI === "map";
+  const chatOpen = activeUI === "chat";
   const [chatChannel, setChatChannel] = useState<ChatChannel>("global");
   const [discovered, setDiscovered] = useState<string[]>(["camp"]);
   const [questsDone, setQuestsDone] = useState<string[]>([]);
@@ -116,7 +121,7 @@ export default function Game() {
   const [chatFeed, setChatFeed] = useState<{ id: string; fromName: string; text: string; mine?: boolean; channel: string; x?: number; y?: number }[]>([]);
   // --- social / waypoint / network state ---
   const [socialScreen, setSocialScreen] = useState<SocialScreen>("CLOSED");
-  const [friendsOpen, setFriendsOpen] = useState(false);
+  const friendsOpen = activeUI === "friends" || activeUI === "messages";
   const [waypointLabel, setWaypointLabel] = useState<string | null>(null);
   const [currentWaypointId, setCurrentWaypointId] = useState<string | null>(null);
   const [waypointInfo, setWaypointInfo] = useState<{ meters: number; tiles: number; arrived: boolean } | null>(null);
@@ -173,7 +178,7 @@ export default function Game() {
   // Clan is confirmed every session (changeable, never locked). ---
   const startMode = useCallback((m: GameMode, clanId: string) => {
     setPendingMode(m);
-    setPauseOpen(false);
+    setActiveUI("gameplay");
     if (clanId) {
       setPendingSpawn(CLAN_SPAWNS[clanId] ?? null);
       if (player && clanId !== player.clan) {
@@ -389,12 +394,18 @@ export default function Game() {
     if (worldState.serverTick <= worldAppliedRef.current) return;
     worldAppliedRef.current = worldState.serverTick;
     const gs = g as unknown as {
-      dayTime: number; weather: string; weatherUntil: number; GAME_DAY_SECONDS?: number;
+      time: number; dayTime: number; weather: string; weatherUntil: number; GAME_DAY_SECONDS?: number;
     };
     const dayLen = worldState.dayLengthS ?? 600;
     gs.dayTime = (worldState.worldTime / dayLen) * 600; // engine uses 600s day
     gs.weather = worldState.weather as WeatherKind;
-    gs.weatherUntil = Number.MAX_SAFE_INTEGER; // server owns weather changes
+    // The server owns weather, but NEVER freeze the local picker: if the
+    // authority stalls (embedded preview, offline mode), a cloudy sky used to
+    // stick on screen forever. 45s grace lets the leader override; after that
+    // the client may pick again so the sky always keeps changing.
+    // engine-time grace (this.time is session seconds): 45s for the leader
+    // to override; after that the client may pick again so the sky keeps moving
+    gs.weatherUntil = (gs.time ?? 0) + 45;
   }, [worldState]);
 
   // Leader drives the shared clock: claim (idempotent), then tick it every
@@ -414,6 +425,8 @@ export default function Game() {
     })();
     const t = window.setInterval(() => {
       if (!alive || !leaderRef.current) return;
+      // advance the shared clock only when the authority is responsive; the
+      // failed-call path below releases leadership so another client takes over
       tickWorld({ myUserId, advanceSeconds: 5 }).catch(() => {
         leaderRef.current = false; // lost leadership; stop ticking
       });
@@ -478,10 +491,10 @@ export default function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, mode, myCat?.name]);
 
-  // Pause while panels are open.
+  // Pause the world while a menu or dialogue is on screen.
   useEffect(() => {
-    gameRef.current?.setPaused(dialogue !== null || codexOpen || mapOpen || chatOpen || pauseOpen || catClanOpen || friendsOpen);
-  }, [dialogue, codexOpen, mapOpen, chatOpen, pauseOpen, catClanOpen, friendsOpen]);
+    gameRef.current?.setPaused(dialogue !== null || activeUI !== "gameplay");
+  }, [dialogue, activeUI]);
 
   // Camera distance from Settings.
   useEffect(() => {
@@ -498,24 +511,28 @@ export default function Game() {
     return () => window.clearInterval(t);
   }, [phase]);
 
-  // Esc closes the social panel first, then toggles the pause menu
-  // (unless typing in an input — engine ignores those too).
+  // ESC navigation through the centralized UI stack:
+  // gameplay → ESC menu → submenu → Back → ESC menu → gameplay.
+  // Typing in an input is ignored (the engine ignores those keys too).
   useEffect(() => {
     if (phase !== "playing") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      if (friendsOpen) {
-        setFriendsOpen(false);
-        setSocialScreen("CLOSED");
-        return;
-      }
-      setPauseOpen((p) => !p);
+      setActiveUI((ui) => {
+        switch (ui) {
+          case "esc": return "gameplay";
+          case "settings": case "map": case "friends": case "messages":
+          case "cat": case "chat": case "codex":
+            return "esc"; // Back from a submenu: reopen the ESC menu
+          default: return "esc"; // gameplay → ESC menu
+        }
+      });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [phase, friendsOpen]);
+  }, [phase]);
 
   const posRef = useRef(pos);
   posRef.current = pos;
@@ -807,10 +824,10 @@ export default function Game() {
             </span>
             <span className="hidden text-[9px] font-bold uppercase text-muted-foreground sm:inline">{connQuality}</span>
           </div>
-          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setChatOpen((o) => !o)}>
+          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setActiveUI((u) => (u === "chat" ? "gameplay" : "chat"))}>
             <MessageCircle className="size-3.5" /> Chat
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setMapOpen(true)}>
+          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setActiveUI("map")}>
             Map
           </Button>
           <Button
@@ -819,7 +836,7 @@ export default function Game() {
             className="relative gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm"
             onClick={() => {
               setSocialScreen("FRIENDS_HOME");
-              setFriendsOpen(true);
+              setActiveUI("friends");
             }}
           >
             <Users className="size-3.5" /> Friends
@@ -835,7 +852,7 @@ export default function Game() {
             className="relative gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm"
             onClick={() => {
               setSocialScreen("MESSAGES_HOME");
-              setFriendsOpen(true);
+              setActiveUI("messages");
             }}
           >
             <Mail className="size-3.5" /> Messages
@@ -845,7 +862,7 @@ export default function Game() {
               </span>
             )}
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setCodexOpen((o) => !o)}>
+          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setActiveUI((u) => (u === "codex" ? "gameplay" : "codex"))}>
             <BookOpen className="size-3.5" /> Codex
           </Button>
         </div>
@@ -960,7 +977,7 @@ export default function Game() {
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 24 }}
-            className="pointer-events-auto absolute inset-x-0 bottom-16 z-30 mx-auto w-[min(620px,calc(100%-2rem))]"
+            className="pointer-events-auto absolute inset-x-0 bottom-16 z-50 mx-auto w-[min(620px,calc(100%-2rem))]"
           >
             <div className="rounded-2xl border border-border/60 bg-card/95 p-4 shadow-2xl shadow-black/30 backdrop-blur-md">
               <div className="flex items-start justify-between gap-3">
@@ -991,7 +1008,7 @@ export default function Game() {
       <AnimatePresence>
         {chatOpen && (
           <ChatPanel
-            onClose={() => setChatOpen(false)}
+            onClose={() => setActiveUI("gameplay")}
             channel={chatChannel}
             setChannel={setChatChannel}
             myClan={myCat?.clan}
@@ -1006,7 +1023,7 @@ export default function Game() {
         {codexOpen && (
           <CodexPanel
             open
-            onClose={() => setCodexOpen(false)}
+            onClose={() => setActiveUI("gameplay")}
             questsDone={questsDone}
             discovered={discovered}
             storyStep={storyStep}
@@ -1019,7 +1036,7 @@ export default function Game() {
       <AnimatePresence>
         {mapOpen && (
           <WorldMapOverlay
-            onClose={() => setMapOpen(false)}
+            onClose={() => setActiveUI("gameplay")}
             px={pos.x}
             py={pos.y}
             facing={facing}
@@ -1040,7 +1057,7 @@ export default function Game() {
                 setWaypointLabel(spot.label.toUpperCase());
                 setCurrentWaypointId(spot.id);
               }
-              setMapOpen(false);
+              setActiveUI("gameplay");
             }}
           />
         )}
@@ -1067,7 +1084,7 @@ export default function Game() {
                 className="h-7 rounded-lg text-[11px]"
                 onClick={() => {
                   setSocialScreen("MESSAGES_HOME");
-                  setFriendsOpen(true);
+                  setActiveUI("messages");
                   setDmToast(null);
                 }}
               >
@@ -1081,19 +1098,18 @@ export default function Game() {
         )}
       </AnimatePresence>
 
-      {/* Friends & DMs */}
-      <FriendsDMsPanel
-        screen={socialScreen}
-        setScreen={setSocialScreen}
-        onClose={() => {
-          setFriendsOpen(false);
-          setSocialScreen("CLOSED");
-        }}
-      />
+      {/* Friends & DMs — only mounted when it is the active layer */}
+      {friendsOpen && (
+        <FriendsDMsPanel
+          screen={socialScreen}
+          setScreen={setSocialScreen}
+          onClose={() => setActiveUI("gameplay")}
+        />
+      )}
 
       {/* Cat & Clan settings */}
       <AnimatePresence>
-        {catClanOpen && myCat && (
+        {activeUI === "cat" && myCat && (
           <CatClanMenu
             open
             player={{
@@ -1103,7 +1119,7 @@ export default function Game() {
               xp: player?.xp ?? 0,
               skin: myCat.appearance,
             }}
-            onClose={() => setCatClanOpen(false)}
+            onClose={() => setActiveUI("gameplay")}
             onSave={(v: CatClanSave) => {
               if (v.name && v.name !== myCat.name) {
                 updateCat({ catName: v.name }).catch(() => undefined);
@@ -1121,20 +1137,21 @@ export default function Game() {
                   })
                   .catch(() => undefined);
               }
-              setCatClanOpen(false);
+              setActiveUI("gameplay");
             }}
           />
         )}
       </AnimatePresence>
 
-      {/* Pause menu (Esc) */}
+      {/* ESC/pause menu — lowest menu layer (z-30). Hidden while a menu
+          opened from it is active; Back/ESC returns here. */}
       <AnimatePresence>
-        {pauseOpen && (
+        {activeUI === "esc" && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-sm"
           >
             <motion.div
               initial={{ scale: 0.94, y: 10 }}
@@ -1146,28 +1163,43 @@ export default function Game() {
               <p className="mt-1 text-lg font-extrabold tracking-tight">{myCat?.name ?? "Cat"}</p>
               {clanLabel && <p className="text-xs text-muted-foreground">{clanLabel} · {rankLabel}</p>}
               <div className="mt-4 space-y-2">
-                <Button className="w-full rounded-xl" onClick={() => setPauseOpen(false)}>
+                <Button className="w-full rounded-xl" onClick={() => setActiveUI("gameplay")}>
                   Resume
                 </Button>
-                <Button
-                  variant="outline"
-                  className="w-full rounded-xl"
-                  onClick={() => setMapOpen(true)}
-                >
+                <Button variant="outline" className="w-full rounded-xl" onClick={() => setActiveUI("map")}>
                   Territory map
                 </Button>
                 <Button
                   variant="outline"
                   className="w-full rounded-xl"
-                  onClick={() => setCatClanOpen(true)}
+                  onClick={() => {
+                    setSocialScreen("FRIENDS_HOME");
+                    setActiveUI("friends");
+                  }}
                 >
-                  Cat & Clan
+                  Friends
                 </Button>
                 <Button
                   variant="outline"
                   className="w-full rounded-xl"
                   onClick={() => {
-                    setPauseOpen(false);
+                    setSocialScreen("MESSAGES_HOME");
+                    setActiveUI("messages");
+                  }}
+                >
+                  Messages
+                </Button>
+                <Button variant="outline" className="w-full rounded-xl" onClick={() => setActiveUI("cat")}>
+                  Cat & Clan
+                </Button>
+                <Button variant="outline" className="w-full rounded-xl" onClick={() => setActiveUI("settings")}>
+                  Settings
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full rounded-xl"
+                  onClick={() => {
+                    setActiveUI("gameplay");
                     setPhase("menu");
                   }}
                 >
@@ -1177,6 +1209,22 @@ export default function Game() {
               <p className="mt-3 text-[10px] text-muted-foreground">Progress saves automatically.</p>
             </motion.div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Settings — middle layer (z-40); Back returns to the ESC menu */}
+      <AnimatePresence>
+        {activeUI === "settings" && (
+          <SettingsScreen
+            settings={gameSettings}
+            onChange={(s) => {
+              setGameSettings(s);
+              try {
+                localStorage.setItem("wcrpg-settings", JSON.stringify(s));
+              } catch { /* storage unavailable */ }
+            }}
+            onClose={() => setActiveUI("esc")}
+          />
         )}
       </AnimatePresence>
     </main>

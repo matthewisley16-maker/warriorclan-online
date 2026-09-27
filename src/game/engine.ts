@@ -24,6 +24,9 @@ import {
   type NPCDef,
   type PreyKind,
 } from "./world";
+import { TP_Y, clearTraffic, drawTunnelPortal, drawVehicle, trafficList, updateTraffic } from "./traffic";
+/** Render-path traffic timestep fallback (wired from the update loop below). */
+let dt = 0.016;
 import {
   drawBarn,
   drawCat,
@@ -1046,6 +1049,7 @@ export class GameCanvas {
     this.camY = y;
     this.interiorId = null;
     this.doorCooldownUntil = this.time + 1.2;
+    clearTraffic(); // vehicles are road-only; rebuild the fleet on arrival
     this.cb.onInteriorChange(null);
   }
 
@@ -1061,6 +1065,7 @@ export class GameCanvas {
       const owner = allObjects.find((o) => o.interior === id);
       if (owner) this.enteredFrom = { id: owner.id, x: owner.x, y: owner.y, w: owner.w, h: owner.h };
     }
+    clearTraffic(); // interiors are indoors: the fleet resets on entry
     this.interiorId = id;
     const geo = ROOM_GEO[id];
     this.px = ((geo?.w ?? ROOM_W) / 2) * 32;
@@ -1397,6 +1402,10 @@ export class GameCanvas {
     if (this.destroyed) return;
     const dt = Math.min(0.05, (now - this.lastTime) / 1000 || 0.016);
     this.lastTime = now;
+    if (this.paused !== this.lastPausedState) {
+      this.lastPausedState = this.paused;
+      if (this.paused) this.trafficPausedUntil = this.time + 0.75; // pause grace
+    }
     if (!this.paused) {
       this.time += dt;
       this.dayTime = (this.dayTime + dt) % GAME_DAY_SECONDS;
@@ -1446,6 +1455,10 @@ export class GameCanvas {
     const g = Math.sin(this.time * 0.9) * Math.sin(this.time * 0.23 + 2);
     return Math.max(0, 0.55 + 0.45 * g);
   }
+
+  /** traffic freezes while paused (pause menus, interiors, dialogue) */
+  private trafficPausedUntil = 0;
+  private lastPausedState = false;
 
   private update(dt: number) {
     // clock + weather callbacks
@@ -2430,6 +2443,18 @@ export class GameCanvas {
     ents.sort((a, b) => a.y - b.y);
     for (const e of ents) e.draw();
 
+    // Thunderpath traffic + tunnel portals (vehicles exist ONLY on the road;
+    // they spawn inside a tunnel and vanish into the tunnel on the other side)
+    if (this.time >= this.trafficPausedUntil && viewT < TP_Y + 200 && viewB > TP_Y - 320) {
+      updateTraffic(dt, this.time);
+      drawTunnelPortal(ctx, 6, -1);
+      drawTunnelPortal(ctx, WORLD_W - 6, 1);
+      for (const v of trafficList()) {
+        if (v.x < viewL - 200 || v.x > viewR + 200) continue;
+        drawVehicle(ctx, v);
+      }
+    }
+
     // waypoint beacon + directional arrow (world space, floats over the cat)
     if (this.waypoint) {
       const ang = Math.atan2(this.waypoint.y - this.py, this.waypoint.x - this.px);
@@ -2589,7 +2614,10 @@ export class GameCanvas {
 
   /** Soft cloud shadows drifting across the world (world-space). */
   private drawCloudShadows() {
+    // Only genuinely overcast skies cast cloud shadows — never a clear day.
+    // (env.dark also rises at night, so gate on weather, not darkness alone.)
     if (this.env.dark < 0.06) return;
+    if (this.env.rain > 0.4 || this.env.fog > 0.35) return; // rain/fog hide shadows
     const ctx = this.ctx;
     const t = this.time;
     for (let i = 0; i < 4; i++) {
