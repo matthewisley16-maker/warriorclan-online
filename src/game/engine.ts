@@ -93,6 +93,14 @@ interface RemoteRenderState {
   /** anti-blink latch: keep "walk" briefly when movement state flickers */
   walkLatchUntil?: number;
   poseChangedAt?: number;
+  /**
+   * LOCAL animation clock (performance.now-based ms). Advances every frame at
+   * a speed-matched cadence, so remote walk cycles run continuously and are
+   * completely decoupled from packet arrival ("state → local animation").
+   */
+  animMs: number;
+  /** measured interpolation speed (px/s) — drives animation cadence */
+  lastSpeedPxS: number;
 }
 
 interface RemoteStateSample {
@@ -101,11 +109,13 @@ interface RemoteStateSample {
   facing: number;
   pose: CatPose;
   serverTick: number;
+  /** SERVER wall-clock (Date.now) — packet jitter never touches the timeline */
   receivedAt: number;
 }
 
 // interpolation tuning (networking constants, not gameplay tuning)
-const REMOTE_INTERP_DELAY_MS = 140; // render this far behind the newest packet
+const REMOTE_INTERP_DELAY_MS = 110; // render this far behind the newest packet
+const REMOTE_HARD_SNAP_DIST = 90; // drift beyond this = real desync, glide fast
 const REMOTE_BUFFER_MS = 600; // keep this much history for late packets
 const REMOTE_EXTRAPOLATE_MS = 220; // coast on velocity at most this long
 const REMOTE_MAX_EXTRAP = 26; // never coast farther than this (px)
@@ -1856,19 +1866,23 @@ export class GameCanvas {
     // server tick that produced it. ---
     for (const [uid, r] of this.remotes) {
       const nowMs = this.time * 1000;
+      const wallMs = performance.now();
+      // serverTick is a Date.now() stamp of the moment the server processed
+      // the state — use it as the sample's timeline position
+      const serverNowMs = (r as unknown as { serverTick?: number }).serverTick;
       let cur = this.remoteRender.get(uid);
       if (!cur) {
         // fresh snapshot (first sight or reconnect): start exactly at the
         // authoritative position — never reuse stale interpolation state
-        const s = this.remoteStateOf(r, nowMs);
-        cur = { x: s.x, y: s.y, facing: s.facing, pose: s.pose, serverTick: s.serverTick, receivedAt: s.receivedAt, buffer: [s] };
+        const s = this.remoteStateOf(r, nowMs, serverNowMs);
+        cur = { x: s.x, y: s.y, facing: s.facing, pose: s.pose, serverTick: s.serverTick, receivedAt: s.receivedAt, buffer: [s], animMs: wallMs % 100000, lastSpeedPxS: 0 };
         this.remoteRender.set(uid, cur);
         continue;
       }
       const tick = r.serverTick ?? 0;
       if (tick > cur.serverTick) {
         // a newer server state arrived: buffer it (bounded) and advance
-        const s = this.remoteStateOf(r, nowMs);
+        const s = this.remoteStateOf(r, nowMs, serverNowMs);
         const last = cur.buffer[cur.buffer.length - 1];
         if (last && Math.hypot(s.x - last.x, s.y - last.y) > REMOTE_SNAP_DIST) {
           // discontinuity: the cat teleported server-side (correction,
@@ -1879,17 +1893,21 @@ export class GameCanvas {
           cur.pose = s.pose;
           cur.serverTick = tick;
           cur.receivedAt = s.receivedAt;
+          cur.animMs = wallMs % 100000;
           continue;
         }
-        cur.buffer.push(s);
-        while (cur.buffer.length > 5 || nowMs - cur.buffer[0].receivedAt > REMOTE_BUFFER_MS) {
-          cur.buffer.shift();
-          if (cur.buffer.length <= 1) break;
+        // ignore out-of-order/duplicate samples (jitter protection)
+        if (!last || s.receivedAt > last.receivedAt) {
+          cur.buffer.push(s);
+          while (cur.buffer.length > 6 || cur.buffer[cur.buffer.length - 1].receivedAt - cur.buffer[0].receivedAt > REMOTE_BUFFER_MS) {
+            cur.buffer.shift();
+            if (cur.buffer.length <= 1) break;
+          }
         }
         cur.serverTick = tick;
         cur.receivedAt = s.receivedAt;
       }
-      this.stepRemoteRender(cur, dt);
+      this.stepRemoteRender(cur, dt, wallMs);
     }
     for (const uid of [...this.remoteRender.keys()]) {
       if (!this.remotes.has(uid)) this.remoteRender.delete(uid);
@@ -2626,7 +2644,7 @@ export class GameCanvas {
             rp.y - (this.waterAt(rp.x, rp.y) ? 4 + Math.sin(this.time * SWIM_BOB_HZ * Math.PI * 2 + (r.userId.charCodeAt(0) % 10)) * 2 : 0),
             (rp.facing >= 0 ? 1 : -1) as 1 | -1,
             rp.pose,
-            this.time,
+            rp.animMs / 1000,
             (r.userId.charCodeAt(0) % 10),
           );
           ctx.font = "600 11px system-ui, sans-serif";
@@ -4121,7 +4139,7 @@ export class GameCanvas {
   // ---- remote networking helpers ------------------------------------------
 
   /** Normalize an incoming server state into a buffered sample. */
-  private remoteStateOf(r: RemotePlayer, nowMs: number): RemoteStateSample {
+  private remoteStateOf(r: RemotePlayer, nowMs: number, serverNowMs?: number): RemoteStateSample {
     const ms = r.movementState ?? (r.moving ? "walk" : "idle");
     const anim = r.animationState ?? (r.moving ? "walk" : "sit");
     return {
@@ -4130,12 +4148,18 @@ export class GameCanvas {
       facing: r.facing,
       pose: this.poseFromMovement(ms, anim),
       serverTick: r.serverTick ?? 0,
-      receivedAt: nowMs,
+      // prefer the SERVER clock (stateVersion = server tick time) so the
+      // interpolation timeline is immune to client receive jitter; fall back
+      // to local arrival time only when the server time is unknown
+      receivedAt: typeof serverNowMs === "number" ? serverNowMs : nowMs,
     };
   }
 
   /** Movement state -> draw pose, using the game's existing 2D poses. */
   private poseFromMovement(ms: MovementState, anim: CatPose): CatPose {
+    // swimming is carried purely in the animation state (movementState stays
+    // "walk") and must always draw the swim sprite
+    if (anim === "swim") return "swim";
     // animation state drives the sprite; movement state only disambiguates
     // idle-like anims so a moving cat can never draw an idle pose.
     if (ms === "walk" || ms === "run") return "walk";
@@ -4150,11 +4174,12 @@ export class GameCanvas {
    * if the timeline is exhausted (late packet), coast briefly along the last
    * velocity, then hold position; large desyncs snap (authoritative fix).
    */
-  private stepRemoteRender(cur: RemoteRenderState, dt: number) {
-    const nowMs = this.time * 1000;
-    const targetMs = nowMs - REMOTE_INTERP_DELAY_MS;
+  private stepRemoteRender(cur: RemoteRenderState, dt: number, wallMs: number) {
     const buf = cur.buffer;
     if (buf.length === 0) return;
+    const latest = buf[buf.length - 1];
+    const serverNow = latest.receivedAt;
+    const targetMs = serverNow - REMOTE_INTERP_DELAY_MS;
 
     // --- locate the two samples surrounding the delayed render time ---
     let i = buf.length - 1;
@@ -4164,8 +4189,10 @@ export class GameCanvas {
 
     let nx: number;
     let ny: number;
-    const pose = b.pose;
-    const facing = b.facing;
+    // visuals come from the INTERPOLATED timeline position, not the newest
+    // packet: pose/facing must always match the movement being drawn
+    let pose: CatPose = b.pose;
+    let facing = b.facing;
 
     if (b.receivedAt >= targetMs && b.receivedAt > a.receivedAt) {
       // between two real server states: interpolate (smooth, ordered)
@@ -4173,6 +4200,14 @@ export class GameCanvas {
       const t = Math.min(1, Math.max(0, (targetMs - a.receivedAt) / span));
       nx = a.x + (b.x - a.x) * t;
       ny = a.y + (b.y - a.y) * t;
+      // visuals blend along the same segment
+      const fa = a.facing !== b.facing && t > 0.5 ? b.facing : a.facing;
+      facing = fa;
+      pose = t > 0.5 ? b.pose : a.pose;
+      if (a.pose === "walk" || b.pose === "walk") {
+        // a moving segment draws as movement even mid-transition
+        pose = a.pose === "walk" && t < 0.5 ? "walk" : b.pose === "walk" ? "walk" : pose;
+      }
     } else if (b.pose === "walk") {
       // past the newest sample of a MOVING cat: brief safe extrapolation along
       // its velocity, distance-capped so it can never run away from the server
@@ -4193,27 +4228,64 @@ export class GameCanvas {
       ny = b.y;
     }
 
-    // --- correction: glide toward the timeline, capped so convergence can
-    // never outrun plausible movement (anti rubber-banding) ---
+    // --- convergence: smooth at normal drift, fast glide when genuinely out
+    // of sync, hard snap only for real teleport-class corrections ---
     const drift = Math.hypot(nx - cur.x, ny - cur.y);
     if (drift > 0.01) {
-      const step = Math.min(drift, REMOTE_MAX_CATCHUP * dt);
-      cur.x += ((nx - cur.x) / drift) * step;
-      cur.y += ((ny - cur.y) / drift) * step;
-    }
-
-    // --- direction + pose: state-driven, only changes when state changes ---
-    if (facing !== cur.facing) cur.facing = facing;
-    if (pose === "walk") {
-      cur.pose = "walk"; // moving: walking animation, always
-      cur.walkLatchUntil = nowMs + REMOTE_POSE_LATCH_MS;
-    } else if (pose !== cur.pose) {
-      if (cur.pose === "walk" && nowMs < (cur.walkLatchUntil ?? 0)) {
-        // hold walk briefly so a 1-frame movement blip never blinks idle
+      if (drift > REMOTE_HARD_SNAP_DIST) {
+        // visibly wrong (lag spike, server correction): glide hard, no
+        // rubber-band oscillation — cap by distance so big fixes land fast
+        const step = Math.min(drift, Math.max(drift * 0.22, 220 * dt));
+        cur.x += ((nx - cur.x) / drift) * step;
+        cur.y += ((ny - cur.y) / drift) * step;
       } else {
-        cur.pose = pose;
+        // normal follow: exponential ease (frame-rate independent, ~6.5/s)
+        const k = 1 - Math.exp(-6.5 * Math.max(dt, 1 / 240));
+        cur.x += (nx - cur.x) * k;
+        cur.y += (ny - cur.y) * k;
       }
     }
+
+    // --- direction: follow the timeline, but never flip-flop on jitter —
+    // require the state to persist ~120ms before turning the sprite ---
+    if (facing !== cur.facing) {
+      if (cur.poseChangedAt === undefined || wallMs - cur.poseChangedAt > 120) {
+        cur.facing = facing as 1 | -1;
+        cur.poseChangedAt = wallMs;
+      }
+    }
+
+    // --- pose: state-driven; movement always animates, idles need to persist
+    // ~160ms (anti-blink) and respect the walk latch so blips never flash ---
+    if (pose === "walk" || pose === "swim" || pose === "crouch") {
+      if (cur.pose !== pose) {
+        cur.pose = pose;
+        cur.poseChangedAt = wallMs;
+      }
+      cur.walkLatchUntil = wallMs + REMOTE_POSE_LATCH_MS;
+    } else if (cur.pose !== pose) {
+      const latched = (cur.pose === "walk" || cur.pose === "swim") && wallMs < (cur.walkLatchUntil ?? 0);
+      const young = cur.poseChangedAt !== undefined && wallMs - cur.poseChangedAt < 160;
+      if (!latched && !young) {
+        cur.pose = pose;
+        cur.poseChangedAt = wallMs;
+      }
+    }
+
+    // --- animation clock: LOCAL, continuous, speed-matched. Walk cadence is
+    // ~4.5 Hz at 165 px/s and scales with measured speed; idle breathing is
+    // slow. Packets never restart or pause the cycle. ---
+    const speed = Math.hypot(nx - a.x, ny - a.y) / Math.max(0.001, (b.receivedAt - a.receivedAt) / 1000);
+    cur.lastSpeedPxS = Number.isFinite(speed) && speed > 1 ? Math.min(speed, 400) : cur.lastSpeedPxS;
+    // cadence multiplier relative to the local cat's cycle: 1.0 at walking
+    // speed, faster at a run, slow breathing when idle — animation speed
+    // always matches the movement being drawn (spec: movement == animation)
+    const speedFactor =
+      cur.pose === "walk" ? Math.min(1.55, Math.max(0.6, cur.lastSpeedPxS / 165))
+        : cur.pose === "swim" ? 0.85
+        : cur.pose === "crouch" ? 0.75
+        : 0.5;
+    cur.animMs += Math.max(0, Math.min(dt, 0.1)) * 1000 * speedFactor;
   }
 
 }

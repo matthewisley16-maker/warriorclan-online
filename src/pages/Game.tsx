@@ -351,6 +351,15 @@ export default function Game() {
         const g = gameRef.current;
         if (!g || interiorRef.current) return; // room-local coords are not world positions
         const s = g.engineState();
+        // meaningful-change gating: identical stationary states are not
+        // re-sent at 300ms — the 5s heartbeat below keeps presence alive
+        const last = lastSyncRef.current;
+        const stationary = !s.moving;
+        // skip only when ALREADY stationary-and-unchanged since the last send
+        // (the first packet after stopping always goes out so remotes see the
+        // idle transition immediately instead of extrapolating forever)
+        if (last && stationary && !last.wasMoving && Math.hypot(s.x - last.x, s.y - last.y) < 2 && last.ms === s.movementState && last.an === s.animationState) return;
+        lastSyncRef.current = { x: s.x, y: s.y, ms: s.movementState, an: s.animationState, wasMoving: !stationary };
         heartbeat({
           inputSequence: ++inputSeq.current,
           x: s.x,
@@ -836,6 +845,8 @@ export default function Game() {
   const lastSendAt = useRef(0);
   /** monotonic client input sequence — the server rejects already-processed inputs */
   const inputSeq = useRef(0);
+  /** last movement state sent to the server (meaningful-change gating) */
+  const lastSyncRef = useRef<{ x: number; y: number; ms: string; an: string; wasMoving: boolean } | null>(null);
   /** live interior id (null = outdoors); engine coords are room-local inside */
   const interiorRef = useRef<string | null>(null);
   /** last known OUTDOOR world position — what presence broadcasts */
