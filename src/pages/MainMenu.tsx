@@ -28,6 +28,7 @@ import {
   Sparkles,
   Trophy,
   User,
+  VolumeX,
   Volume2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -72,6 +73,14 @@ export type Settings = {
   chatTimestamps: boolean;
   reduceMotion: boolean;
   largeText: boolean;
+  // --- audio (Music & sound-effects system) ---
+  audioMaster: number;
+  audioMusic: number;
+  audioSfx: number;
+  audioAmbience: number;
+  muteMusic: boolean;
+  muteSfx: boolean;
+  muteAmbience: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -85,6 +94,13 @@ export const DEFAULT_SETTINGS: Settings = {
   chatTimestamps: false,
   reduceMotion: false,
   largeText: false,
+  audioMaster: 0.8,
+  audioMusic: 0.6,
+  audioSfx: 0.8,
+  audioAmbience: 0.7,
+  muteMusic: false,
+  muteSfx: false,
+  muteAmbience: false,
 };
 
 export function loadSettings(): Settings {
@@ -676,15 +692,6 @@ export function SettingsScreen({
           </div>
 
           <div className={section}>
-            <p className={head}><Volume2 className="size-3.5 text-amber-300" /> Audio</p>
-            <div className="mt-2.5 space-y-3">
-              <SliderRow label="Master volume" value={settings.volume} min={0} max={1} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => set("volume", v)} />
-              <SliderRow label="Music" value={settings.music} min={0} max={1} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => set("music", v)} />
-              <SliderRow label="Sound effects" value={settings.sfx} min={0} max={1} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => set("sfx", v)} />
-            </div>
-          </div>
-
-          <div className={section}>
             <p className={head}><Gamepad2 className="size-3.5 text-amber-300" /> Controls & chat</p>
             <div className="mt-2.5 space-y-2 text-xs text-white/70">
               <div className="flex flex-wrap gap-1.5">
@@ -705,6 +712,25 @@ export function SettingsScreen({
               <ToggleRow label="Reduce motion" value={settings.reduceMotion} onChange={(v) => set("reduceMotion", v)} />
               <ToggleRow label="Larger text" value={settings.largeText} onChange={(v) => set("largeText", v)} />
             </div>
+          </div>
+
+          <div className={section}>
+            <p className={head}><Volume2 className="size-3.5 text-amber-300" /> Music & sound</p>
+            <div className="mt-2.5 space-y-3">
+              <SliderRow label="Master volume" value={settings.audioMaster} min={0} max={1} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => set("audioMaster", v)} />
+              <SliderRow label="Music (8-bit area themes)" value={settings.audioMusic} min={0} max={1} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => set("audioMusic", v)} />
+              <SliderRow label="Sound effects (actions, UI, cats)" value={settings.audioSfx} min={0} max={1} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => set("audioSfx", v)} />
+              <SliderRow label="Ambience (forest, weather, river)" value={settings.audioAmbience} min={0} max={1} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => set("audioAmbience", v)} />
+            </div>
+            <div className="mt-3.5">
+              <ToggleRow label="Mute music" value={settings.muteMusic} onChange={(v) => set("muteMusic", v)} />
+              <ToggleRow label="Mute sound effects" value={settings.muteSfx} onChange={(v) => set("muteSfx", v)} />
+              <ToggleRow label="Mute ambience" value={settings.muteAmbience} onChange={(v) => set("muteAmbience", v)} />
+            </div>
+            <p className="mt-2 text-[11px] leading-snug text-white/45">
+              <VolumeX className="mr-1 inline size-3" />
+              Music follows your territory, ambience follows the forest, weather and time of day.
+            </p>
           </div>
 
           <p className="text-center text-[10px] text-white/40">Settings save automatically on this device.</p>

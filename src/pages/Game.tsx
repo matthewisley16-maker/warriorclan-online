@@ -17,8 +17,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import { GameCanvas, type MovementState, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
+import {
+  AudioEngine,
+  computeAmbience,
+  computeMusic,
+  stepKindFor,
+  type MusicId,
+} from "@/game/audio";
 import { interiors } from "@/game/engine";
-import { lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
+import { GROUND_CELL, GROUND_COLS, GROUND_ROWS, groundMap, lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
 import MainMenu, { LoadingScreen, loadSettings, SettingsScreen, type GameMode, type Settings } from "./MainMenu";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
@@ -46,6 +53,28 @@ import type { CatSkin } from "@/game/draw";
 
 /** live snapshot of the local cat's movement/animation state */
 type MovementSnapshot = ReturnType<GameCanvas["engineState"]>;
+
+/** App-wide audio singleton (music + ambience + SFX buses). */
+const audioRef: { current: AudioEngine | null } = { current: null };
+function audio(): AudioEngine {
+  if (!audioRef.current) audioRef.current = new AudioEngine();
+  return audioRef.current;
+}
+
+function musicOfClan(clan?: string): MusicId {
+  switch (clan) {
+    case "riverclan": return "riverclan";
+    case "windclan": return "windclan";
+    case "shadowclan": return "shadowclan";
+    default: return "thunderclan";
+  }
+}
+
+function groundIndexAt(x: number, y: number): number {
+  const c = Math.max(0, Math.min(GROUND_COLS - 1, Math.floor(x / GROUND_CELL)));
+  const r = Math.max(0, Math.min(GROUND_ROWS - 1, Math.floor(y / GROUND_CELL)));
+  return groundMap[r * GROUND_COLS + c] ?? 0;
+}
 
 /** real movement state of the local cat, sampled straight from the engine */
 export function movementSample(g: { engineState?: () => MovementSnapshot } | null) {
@@ -178,6 +207,7 @@ export default function Game() {
   // --- enter a mode: the ONE persistent cat is used, never a new character.
   // Clan is confirmed every session (changeable, never locked). ---
   const startMode = useCallback((m: GameMode, clanId: string) => {
+    audio().resume(); // Play click = user gesture: unlock WebAudio early
     setPendingMode(m);
     setActiveUI("gameplay");
     if (clanId) {
@@ -255,6 +285,7 @@ export default function Game() {
     const game = new GameCanvas(canvasRef.current, spawn, {
       onAreaChange: (name, id) => {
         setAreaName(name);
+        posAreaIdRef.current = id; // audio: biome id for footsteps + ambience
         if (id) setDiscovered((d) => (d.includes(id) ? d : [...d, id]));
       },
       onNearby: (t) => setNearby(t),
@@ -264,6 +295,8 @@ export default function Game() {
       },
       onInteract: (t) => handleInteractRef.current(t),
       onPreyCaught: () => {
+        audio().playSfx("hunt_pounce", { volume: 0.9, throttleMs: 150 }); // capture impact
+        window.setTimeout(() => audio().playSfx("collect", { volume: 0.7, throttleMs: 300 }), 500); // prey claimed
         addXp({ amount: 4 }).catch(() => undefined);
       },
       onClock: (h) => setClock(h),
@@ -282,6 +315,9 @@ export default function Game() {
       },
     });
     gameRef.current = game;
+    // Audio unlock: entering the game follows the Play click (user gesture),
+    // which satisfies browser autoplay policies.
+    audio().start();
     if (myCat?.appearance) game.mySkin = { ...myCat.appearance, furDark: myCat.appearance.furDark || "#5a3a20" };
 
     // presence heartbeat (open world only)
@@ -502,6 +538,92 @@ export default function Game() {
     gameRef.current?.setCameraScale(gameSettings.cameraDistance);
   }, [gameSettings, phase]);
 
+  // --- audio: settings → engine (the single source of truth is gameSettings;
+  // the AudioEngine persists its own copy for the main menu too) ---
+  useEffect(() => {
+    audio().setSettings({
+      master: gameSettings.audioMaster,
+      music: gameSettings.audioMusic,
+      sfx: gameSettings.audioSfx,
+      ambience: gameSettings.audioAmbience,
+      muteMusic: gameSettings.muteMusic,
+      muteSfx: gameSettings.muteSfx,
+      muteAmbience: gameSettings.muteAmbience,
+    });
+  }, [
+    gameSettings.audioMaster, gameSettings.audioMusic, gameSettings.audioSfx,
+    gameSettings.audioAmbience, gameSettings.muteMusic, gameSettings.muteSfx,
+    gameSettings.muteAmbience,
+  ]);
+
+  // --- audio scene: music follows area/interior, ambience follows
+  // area + weather + time of day. Fades are handled inside the engine. ---
+  useEffect(() => {
+    if (phase !== "playing") return;
+    const scene = {
+      areaId: interior ? "camp" : areaName.toLowerCase().includes("thunderpath") ? "thunderpath"
+        : areaName.toLowerCase().includes("river") ? "river"
+        : areaName.toLowerCase().includes("moor") ? "moor"
+        : areaName.toLowerCase().includes("twoleg") ? "twolegplace"
+        : areaName.toLowerCase().includes("marsh") ? "marsh"
+        : areaName.toLowerCase().includes("shadowclan") ? "shadowclan-territory"
+        : areaName.toLowerCase().includes("riverclan") ? "riverclan-territory"
+        : areaName.toLowerCase().includes("windclan") ? "windclan-camp"
+        : "forest",
+      interior,
+      weather,
+      clock,
+      mode,
+    };
+    audio().setAmbience(computeAmbience(scene));
+    audio().setMusic(computeMusic(scene));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, areaName, interior, weather, clock, mode]);
+
+  // --- footsteps: terrain-aware, paced from the cat's real speed. Also the
+  // hop's landing thump, the crouch purr and rare indoor ambient mews. ---
+  useEffect(() => {
+    if (phase !== "playing") return;
+    const t = window.setInterval(() => {
+      const g = gameRef.current;
+      if (!g) return;
+      const s = g.engineState();
+      const moving = s.moving && (s.movementState === "walk" || s.movementState === "run" || s.movementState === "crouch");
+      if (moving) {
+        const px = s.x, py = s.y;
+        const kind = stepKindFor(posAreaIdRef.current, !!interiorRef.current, groundIndexAt(px, py));
+        const cadence = s.movementState === "run" ? 260 : s.movementState === "crouch" ? 460 : 340;
+        const last = lastStepRef.current;
+        if (performance.now() - last >= cadence) {
+          lastStepRef.current = performance.now();
+          audio().playStep(kind);
+        }
+      }
+    }, 120);
+    return () => window.clearInterval(t);
+  }, [phase]);
+
+  // Hop landing + crouch purr loop + rare indoor cat sounds.
+  useEffect(() => {
+    if (phase !== "playing") return;
+    const t = window.setInterval(() => {
+      const g = gameRef.current;
+      if (!g) return;
+      const hopping = g.isHopping();
+      if (hoppingRef.current && !hopping) audio().playSfx("land", { volume: 0.8, throttleMs: 200 });
+      hoppingRef.current = hopping;
+      if (interiorRef.current && Math.random() < 0.006) audio().playSfx(Math.random() < 0.5 ? "cat_purr" : "cat_mew2", { volume: 0.5, throttleMs: 6000 });
+    }, 100);
+    return () => window.clearInterval(t);
+  }, [phase]);
+
+  // Stop all audio when leaving the game (mode switch/unmount).
+  useEffect(() => {
+    if (phase === "playing") return;
+    audio().stopAll(400);
+  }, [phase]);
+  useEffect(() => () => audio().stopAll(200), []);
+
   // Touch device? A coarse pointer means phone/tablet => show touch controls.
   // PC (fine pointer) keeps the exact keyboard controls and shows nothing new.
   const [isTouch, setIsTouch] = useState(false);
@@ -532,6 +654,7 @@ export default function Game() {
       if (e.key !== "Escape") return;
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      audio().playSfx("ui_move", { throttleMs: 250 }); // menu open / back / close
       setActiveUI((ui) => {
         switch (ui) {
           case "esc": return "gameplay";
@@ -561,6 +684,7 @@ export default function Game() {
   const handleInteract = useCallback(
     (target: NearbyTarget) => {
       const cur = dialogueRef.current;
+      audio().resume(); // every interaction is also a valid autoplay unlock
 
       // NPC conversations: E opens, then E continues to the next line, and
       // closes when the lines run out.
@@ -575,6 +699,7 @@ export default function Game() {
             setDialogue({ name: npc.name, role: npc.role, text: npc.lines[nextIdx], npcId: npc.id, lineIdx: nextIdx });
           }
         } else {
+          audio().playSfx("cat_mew2", { volume: 0.6, throttleMs: 2500 }); // a cat greets you
           setDialogue({ name: npc.name, role: npc.role, text: npc.lines[0], npcId: npc.id, lineIdx: 0 });
         }
         // story completion counts the first line of the conversation
@@ -597,6 +722,7 @@ export default function Game() {
         // The pounce IS the kill: the engine marks the prey dying (exactly
         // once) and reports the kind via onPreyCaught, which awards the XP —
         // exactly once. (This path must NOT award XP again.)
+        audio().playSfx("hunt_pounce", { volume: 0.9, throttleMs: 150 });
         const kind = gameRef.current?.pounceAt();
         if (kind) {
           setDialogue({ name: "Hunt", text: `You pounce! The ${kind} never knew what hit it. (+4 XP)` });
@@ -606,6 +732,7 @@ export default function Game() {
       if (target.kind === "object") {
         if (target.interior) {
           setDialogue(null); // close any NPC conversation before stepping inside
+          audio().playSfx("door", { throttleMs: 800 });
           const owner = allObjects.find((o) => o.interior === target.interior);
           gameRef.current?.enterInterior(
             target.interior,
@@ -621,6 +748,7 @@ export default function Game() {
         }
         if (target.interact && lore[target.interact]) {
           const l = lore[target.interact];
+          audio().playSfx("collect", { volume: 0.6, throttleMs: 700 }); // discovery/lore pickup
           setDialogue({ name: l.title, text: l.text });
           if (mode === "story") {
             const step = storySteps[storyStepRef.current];
@@ -637,6 +765,7 @@ export default function Game() {
           const qid = qMap[target.interact];
           if (qid && !questsDoneRef.current.includes(qid)) {
             setQuestsDone((q) => [...q, qid]);
+            audio().playSfx("quest_done", { throttleMs: 1000 });
             completeQuest({ questId: qid }).catch(() => undefined);
           }
         }
@@ -661,6 +790,9 @@ export default function Game() {
   storyStepRef.current = storyStep;
   const areaAtRef = useRef<string>("");
   areaAtRef.current = areaName;
+  const posAreaIdRef = useRef<string>("");
+  const lastStepRef = useRef(0);
+  const hoppingRef = useRef(false);
   const questsDoneRef = useRef(questsDone);
   questsDoneRef.current = questsDone;
   const dialogueRef = useRef(dialogue);
@@ -677,6 +809,7 @@ export default function Game() {
   const advanceStory = useCallback(() => {
     const step = storySteps[storyStepRef.current];
     if (!step) return;
+    audio().playSfx("quest_done", { throttleMs: 1000 }); // milestone cue
     if (step.onComplete?.length) {
       const line = step.onComplete[0];
       setDialogue({ name: line.speaker, text: line.text });
@@ -839,7 +972,7 @@ export default function Game() {
           <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setActiveUI((u) => (u === "chat" ? "gameplay" : "chat"))}>
             <MessageCircle className="size-3.5" /> Chat
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setActiveUI("map")}>
+          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => { audio().playSfx("ui_open"); setActiveUI("map"); }}>
             Map
           </Button>
           <Button
@@ -847,6 +980,7 @@ export default function Game() {
             size="sm"
             className="relative gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm"
             onClick={() => {
+              audio().playSfx("ui_open");
               setSocialScreen("FRIENDS_HOME");
               setActiveUI("friends");
             }}
@@ -863,6 +997,7 @@ export default function Game() {
             size="sm"
             className="relative gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm"
             onClick={() => {
+              audio().playSfx("ui_open");
               setSocialScreen("MESSAGES_HOME");
               setActiveUI("messages");
             }}
@@ -940,6 +1075,7 @@ export default function Game() {
               <button
                 className="mt-1 rounded-full border border-amber-400/40 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-amber-300 hover:bg-amber-400/10"
                 onClick={() => {
+                  audio().playSfx("ui_cancel");
                   gameRef.current?.clearWaypoint();
                   setWaypointLabel(null);
                   setWaypointInfo(null);
@@ -1066,6 +1202,7 @@ export default function Game() {
             waypoint={waypointLabel ? currentWaypointId : undefined}
             onSetWaypoint={(id) => {
               if (!id) {
+                audio().playSfx("ui_cancel");
                 gameRef.current?.clearWaypoint();
                 setWaypointLabel(null);
                 setWaypointInfo(null);
@@ -1073,6 +1210,7 @@ export default function Game() {
               // id === spot id when set — label applied below via MAP_SPOTS lookup
               const spot = MAP_SPOTS.find((s) => s.id === id);
               if (spot) {
+                audio().playSfx("ui_confirm");
                 gameRef.current?.setWaypoint(spot.x, spot.y);
                 setWaypointLabel(spot.label.toUpperCase());
                 setCurrentWaypointId(spot.id);
@@ -1149,6 +1287,7 @@ export default function Game() {
               }
               if (v.clan && v.clan !== myCat.clan) {
                 const newClan = v.clan;
+                audio().playSfx("clan_join", { throttleMs: 800 }); // Clan change cue
                 updateCat({ clan: newClan })
                   .then(() => {
                     const g = gameRef.current;
@@ -1183,7 +1322,7 @@ export default function Game() {
               <p className="mt-1 text-lg font-extrabold tracking-tight">{myCat?.name ?? "Cat"}</p>
               {clanLabel && <p className="text-xs text-muted-foreground">{clanLabel} · {rankLabel}</p>}
               <div className="mt-4 space-y-2">
-                <Button className="w-full rounded-xl" onClick={() => setActiveUI("gameplay")}>
+                <Button className="w-full rounded-xl" onClick={() => { audio().playSfx("ui_click"); setActiveUI("gameplay"); }}>
                   Resume
                 </Button>
                 <Button variant="outline" className="w-full rounded-xl" onClick={() => setActiveUI("map")}>
