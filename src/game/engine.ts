@@ -918,6 +918,11 @@ const PLAYER_HALF_H = 8;
 const WALK_SPEED = 165;
 const RUN_SPEED = 250;
 const SNEAK_SPEED = 80;
+
+// Touch/Space 2D hop — a cosmetic sprite lift only; movement, collision and
+// the existing walk/pose animation are untouched (same cat, same animations).
+const HOP_DURATION = 0.5; // seconds of air time
+const HOP_HEIGHT = 18; // px lift at the apex
 const GAME_HOUR_START = 8; // start in the morning
 const GAME_DAY_SECONDS = 600; // 10 real minutes per in-game day
 
@@ -953,6 +958,14 @@ export class GameCanvas {
 
   private lastArea = "";
   private lastNearby: NearbyTarget | null = null;
+
+  // --- shared input state: touch buttons feed the SAME keys pipeline the
+  // keyboard uses, so PC and mobile run one movement system and the same
+  // animations. ---
+  private touchDx = 0;
+  private touchDy = 0;
+  private crouchHeld = false; // touch crouch is a toggle; keyboard is a hold
+  private hopT = -1; // active 2D hop timer (<0 = grounded)
   private lastWaypointEmit = 0;
   private lastMoveEmit = 0;
   private destroyed = false;
@@ -1040,6 +1053,39 @@ export class GameCanvas {
   setCameraScale(s: number) {
     this.userScale = Math.min(1.6, Math.max(0.7, s));
     this.resize();
+  }
+
+  /** Touch D-pad: which directions are currently held (-1/0/1 per axis). */
+  setTouchDir(dx: -1 | 0 | 1, dy: -1 | 0 | 1) {
+    this.touchDx = dx;
+    this.touchDy = dy;
+  }
+
+  /** Touch CROUCH toggle — activates the same sneak pipeline as holding C. */
+  setTouchCrouch(on: boolean) {
+    this.crouchHeld = on;
+  }
+
+  /** JUMP (touch button): the exact same hop Space triggers on PC. */
+  touchJump() {
+    this.startHop();
+  }
+
+  private startHop() {
+    if (this.paused || this.hopT >= 0) return;
+    this.hopT = 0;
+  }
+
+  /** Mid-hop sprite lift in px (0 when grounded). */
+  private hopLiftPx(): number {
+    if (this.hopT < 0) return 0;
+    const t = Math.min(1, this.hopT / HOP_DURATION);
+    return Math.round(Math.sin(t * Math.PI) * HOP_HEIGHT);
+  }
+
+  /** True while the cat is mid-hop (drives the JUMP button's pressed state). */
+  isHopping(): boolean {
+    return this.hopT >= 0;
   }
 
   teleport(x: number, y: number) {
@@ -1319,6 +1365,7 @@ export class GameCanvas {
       if (near) this.cb.onInteract(near);
       return;
     }
+    if (k === " " && !this.paused) this.startHop(); // PC jump: same hop as the touch JUMP button
     this.keys.add(k);
   };
 
@@ -1504,8 +1551,13 @@ export class GameCanvas {
       if (this.keys.has("s") || this.keys.has("arrowdown")) dy += 1;
       if (this.keys.has("a") || this.keys.has("arrowleft")) dx -= 1;
       if (this.keys.has("d") || this.keys.has("arrowright")) dx += 1;
+      // touch D-pad feeds the same pipeline (two held buttons = diagonal)
+      if (this.touchDx !== 0 || this.touchDy !== 0) {
+        dx += this.touchDx;
+        dy += this.touchDy;
+      }
     }
-    this.sneaking = this.keys.has("control") || this.keys.has("c");
+    this.sneaking = this.keys.has("control") || this.keys.has("c") || this.crouchHeld;
     const running = this.keys.has("shift");
     this.running = running;
     const speed = this.sneaking ? SNEAK_SPEED : running ? RUN_SPEED : WALK_SPEED;
@@ -1572,6 +1624,14 @@ export class GameCanvas {
     this.pSpeed = Math.hypot(movedX, movedY) / Math.max(dt, 1 / 120);
     this.prevPx = this.px;
     this.prevPy = this.py;
+
+    // --- 2D hop timer (shared by Space on PC and the JUMP button on touch):
+    // the sprite is LIFTED at draw time; the ground position never changes,
+    // so collisions and the existing animations are untouched. ---
+    if (this.hopT >= 0) {
+      this.hopT += dt;
+      if (this.hopT >= HOP_DURATION) this.hopT = -1;
+    }
     if (this.time > this.poseUntil && !movingNow && this.pPose === "walk") {
       this.pPose = "sit"; // idle read: standing cats sit, animation stops
     }
@@ -2197,8 +2257,8 @@ export class GameCanvas {
       ctx.fillStyle = "#f4f1e8";
       ctx.fillText(n.def.name, nxp, nyp - 28);
     }
-    // player
-    drawCat(ctx, this.playerSkin(), this.px, this.py, this.pxFacing, this.pPose, this.time, 0);
+    // player (lifted mid-hop; the cat sprite itself is unchanged)
+    drawCat(ctx, this.playerSkin(), this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.time, 0);
     // bubbles anchored to the player are drawn indoors too
     for (const b of this.bubbles) {
       if (b.track !== "player" || Date.now() > b.until) continue;
@@ -2431,7 +2491,7 @@ export class GameCanvas {
     ents.push({
       y: this.py,
       draw: () => {
-        drawCat(ctx, { ...this.playerSkin(), size: (this.playerSkin().size ?? 1) * 1.05 }, this.px, this.py, this.pxFacing, this.pPose, this.time, 0);
+        drawCat(ctx, { ...this.playerSkin(), size: (this.playerSkin().size ?? 1) * 1.05 }, this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.time, 0);
         if (this.pEmote) {
           ctx.font = "18px system-ui, sans-serif";
           ctx.textAlign = "center";

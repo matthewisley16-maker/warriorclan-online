@@ -4,8 +4,15 @@
 import { motion } from "framer-motion";
 import {
   BookOpen,
+  Cat,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsUp,
+  ChevronUp,
   CloudRain,
   CloudSun,
+  PawPrint,
   Send,
   Snowflake,
   Sun,
@@ -13,10 +20,10 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { WeatherKind } from "@/game/engine";
+import type { GameCanvas, WeatherKind } from "@/game/engine";
 import { areas } from "@/game/world";
 import { storySteps } from "@/game/story";
 import { quests } from "@/game/quests";
@@ -369,4 +376,149 @@ export function CodexPanel({
 
 export interface ChatBubbleKeyed {
   key: string;
+}
+
+// --- touch controls (mobile / tablet) ---------------------------------------
+// NOT a second movement system: buttons feed the engine's existing input
+// pipeline (setTouchDir / setTouchCrouch / touchJump), which drives the exact
+// same movement code and animations the keyboard uses. Roblox-style = clean,
+// rounded, tap-friendly; the game stays 2D with its original camera/art.
+
+export function TouchControls({
+  gameRef,
+  activeUI,
+}: {
+  gameRef: React.RefObject<GameCanvas | null>;
+  activeUI: string;
+}) {
+  const [dirs, setDirs] = useState({ up: false, down: false, left: false, right: false });
+  const [crouching, setCrouching] = useState(false);
+  const [hopping, setHopping] = useState(false);
+  /** mirror for instant reads — avoids stale closures on two-finger presses */
+  const dirsRef = useRef(dirs);
+
+  /** one D-pad button => direction booleans => one setTouchDir call */
+  const push = (d: Partial<typeof dirs>) => {
+    const next = { ...dirsRef.current, ...d };
+    dirsRef.current = next;
+    setDirs(next);
+    gameRef.current?.setTouchDir(
+      ((next.right ? 1 : 0) - (next.left ? 1 : 0)) as -1 | 0 | 1,
+      ((next.down ? 1 : 0) - (next.up ? 1 : 0)) as -1 | 0 | 1,
+    );
+  };
+
+  // release all inputs if a menu opens on top of the game
+  useEffect(() => {
+    if (activeUI !== "gameplay") {
+      dirsRef.current = { up: false, down: false, left: false, right: false };
+      setDirs(dirsRef.current);
+      setCrouching(false);
+      setHopping(false);
+      gameRef.current?.setTouchDir(0, 0);
+      gameRef.current?.setTouchCrouch(false);
+    }
+  }, [activeUI, gameRef]);
+  // (keyboard ESC/menu paths also clear engine keys via setPaused, so inputs
+  // never stick when a menu opens)
+
+  const hopTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (hopTimer.current) window.clearTimeout(hopTimer.current); }, []);
+
+  const onHop = () => {
+    gameRef.current?.touchJump();
+    setHopping(true);
+    if (hopTimer.current) window.clearTimeout(hopTimer.current);
+    hopTimer.current = window.setTimeout(() => setHopping(false), 250);
+  };
+
+  const onCrouch = () => {
+    const next = !crouching;
+    setCrouching(next);
+    gameRef.current?.setTouchCrouch(next); // same sneak pipeline as holding C
+  };
+
+  /** finger slides off the button => treat as released (no stuck inputs) */
+  const dirBtn = (key: "up" | "down" | "left" | "right", icon: ReactNode, cls: string) => {
+    const held = dirs[key];
+    const set = (v: boolean) => (e: ReactPointerEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      if (held === v) return;
+      push({ [key]: v } as Partial<typeof dirs>);
+      if (v) e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    return (
+      <button
+        type="button"
+        aria-label={key}
+        className={cn(
+          "pointer-events-auto flex touch-none items-center justify-center rounded-2xl border border-white/20 bg-black/35 text-white/90 shadow-lg backdrop-blur-sm transition-[transform,background-color] active:scale-95 active:bg-black/55",
+          held && "bg-black/55 scale-95",
+          cls,
+        )}
+        onPointerDown={set(true)}
+        onPointerUp={set(false)}
+        onPointerCancel={set(false)}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {icon}
+      </button>
+    );
+  };
+  /** action button (CROUCH / JUMP): tap-friendly, lights up while active */
+  const actionBtn = (label: string, held: boolean, onDown: () => void, icon: ReactNode) => (
+    <button
+      type="button"
+      aria-label={label}
+      className={cn(
+        "pointer-events-auto flex touch-none items-center justify-center rounded-2xl border border-white/20 bg-black/35 text-white/90 shadow-lg backdrop-blur-sm transition-transform active:scale-95",
+        held && "scale-95 border-amber-300/60 bg-black/55 text-amber-300",
+        size,
+      )}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        onDown();
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {icon}
+    </button>
+  );
+  const size = "h-16 w-16 sm:h-[4.5rem] sm:w-[4.5rem]"; // phone, then tablet-sized
+  const sz = "size-7 sm:size-8";
+
+  return (
+    <>
+      {/* D-pad — lower-left, middle of the screen stays clear */}
+      <div className="pointer-events-none absolute bottom-24 left-4 z-30 grid grid-cols-3 gap-1.5 select-none">
+        <div />
+        {dirBtn("up", <ChevronUp className={sz} />, size)}
+        <div />
+        {dirBtn("left", <ChevronLeft className={sz} />, size)}
+        <div className="flex items-center justify-center">
+          <PawPrint className="size-4 text-white/25" />
+        </div>
+        {dirBtn("right", <ChevronRight className={sz} />, size)}
+        <div />
+        {dirBtn("down", <ChevronDown className={sz} />, size)}
+        <div />
+      </div>
+
+      {/* CROUCH + JUMP — lower-right, stacked like the reference layout */}
+      <div className="pointer-events-none absolute bottom-24 right-4 z-30 flex flex-col items-end gap-2.5 select-none">
+        {actionBtn(
+          "Crouch",
+          crouching,
+          onCrouch,
+          <Cat className={sz} />,
+        )}
+        {actionBtn(
+          "Jump",
+          hopping,
+          onHop,
+          <ChevronsUp className={sz} />,
+        )}
+      </div>
+    </>
+  );
 }

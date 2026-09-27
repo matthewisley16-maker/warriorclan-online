@@ -28,6 +28,7 @@ import {
   CodexPanel,
   EMOTES,
   EmoteBar,
+  TouchControls,
   CLANS,
   formatHour,
   fullSkin,
@@ -501,6 +502,17 @@ export default function Game() {
     gameRef.current?.setCameraScale(gameSettings.cameraDistance);
   }, [gameSettings, phase]);
 
+  // Touch device? A coarse pointer means phone/tablet => show touch controls.
+  // PC (fine pointer) keeps the exact keyboard controls and shows nothing new.
+  const [isTouch, setIsTouch] = useState(false);
+  useEffect(() => {
+    const coarse = window.matchMedia("(pointer: coarse)");
+    const update = () => setIsTouch(coarse.matches);
+    update();
+    coarse.addEventListener?.("change", update);
+    return () => coarse.removeEventListener?.("change", update);
+  }, []);
+
   // Keep the minimap arrow direction in sync with the player's facing.
   useEffect(() => {
     if (phase !== "playing") return;
@@ -958,9 +970,12 @@ export default function Game() {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
-            className="pointer-events-none absolute bottom-20 left-1/2 z-20 -translate-x-1/2"
+            className={`${isTouch ? "pointer-events-auto" : "pointer-events-none"} absolute bottom-20 left-1/2 z-20 -translate-x-1/2`}
           >
-            <div className="rounded-full border border-border/60 bg-card/95 px-4 py-2 shadow-xl backdrop-blur-sm">
+            <div
+              className="rounded-full border border-border/60 bg-card/95 px-4 py-2 shadow-xl backdrop-blur-sm"
+              onClick={isTouch ? () => handleInteract(nearby) : undefined}
+            >
               <p className="text-xs text-foreground/90">
                 <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold">E</kbd>{" "}
                 {nearby.kind === "npc" ? `Speak with ${nearby.label}` : nearby.label}
@@ -1003,6 +1018,11 @@ export default function Game() {
 
       {/* Emote bar */}
       <EmoteBar onEmote={handleEmote} />
+
+      {/* Touch controls — mobile/tablet only; the buttons feed the SAME
+          engine input pipeline the keyboard uses (same movement code, same
+          cat animations, same 2D camera). Never shown on PC. */}
+      {isTouch && <TouchControls gameRef={gameRef} activeUI={activeUI} />}
 
       {/* Chat */}
       <AnimatePresence>
