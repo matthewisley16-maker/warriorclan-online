@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import { GameCanvas, type MovementState, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
 import { interiors } from "@/game/engine";
-import { lore, npcs, areaAt, CLAN_SPAWNS, SPAWN } from "@/game/world";
+import { lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
 import MainMenu, { LoadingScreen, loadSettings, type GameMode, type Settings } from "./MainMenu";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
@@ -566,10 +566,10 @@ export default function Game() {
 
       if (target.kind === "prey") {
         // The pounce IS the kill: the engine marks the prey dying (exactly
-        // once) and reports the kind, so XP is awarded here and only here.
+        // once) and reports the kind via onPreyCaught, which awards the XP —
+        // exactly once. (This path must NOT award XP again.)
         const kind = gameRef.current?.pounceAt();
         if (kind) {
-          addXp({ amount: 4 }).catch(() => undefined);
           setDialogue({ name: "Hunt", text: `You pounce! The ${kind} never knew what hit it. (+4 XP)` });
         }
         return;
@@ -577,7 +577,11 @@ export default function Game() {
       if (target.kind === "object") {
         if (target.interior) {
           setDialogue(null); // close any NPC conversation before stepping inside
-          gameRef.current?.enterInterior(target.interior);
+          const owner = allObjects.find((o) => o.interior === target.interior);
+          gameRef.current?.enterInterior(
+            target.interior,
+            owner ? { id: owner.id, x: owner.x, y: owner.y, w: owner.w, h: owner.h } : undefined,
+          );
           const room = interiors[target.interior];
           if (room) setDialogue({ name: room.name, text: room.desc, lineIdx: 0 });
           return;

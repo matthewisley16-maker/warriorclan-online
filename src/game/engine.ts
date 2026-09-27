@@ -1049,11 +1049,18 @@ export class GameCanvas {
     this.cb.onInteriorChange(null);
   }
 
-  enterInterior(id: string, fromObj?: { x: number; y: number; w: number; h: number }) {
+  enterInterior(id: string, fromObj?: { x: number; y: number; w: number; h: number; id?: string }) {
     const room = interiors[id];
     if (!room) return;
     if (!this.interiorId) this.exitPos = { x: this.px, y: this.py };
+    // Anchor the exit to the WORLD object this interior belongs to. The E-key
+    // path ("Enter <den>") passes no object, so look it up — without this the
+    // exit spot is guessed from the entry position and can land in a wall.
     if (fromObj) this.enteredFrom = fromObj;
+    else {
+      const owner = allObjects.find((o) => o.interior === id);
+      if (owner) this.enteredFrom = { id: owner.id, x: owner.x, y: owner.y, w: owner.w, h: owner.h };
+    }
     this.interiorId = id;
     const geo = ROOM_GEO[id];
     this.px = ((geo?.w ?? ROOM_W) / 2) * 32;
@@ -1065,7 +1072,7 @@ export class GameCanvas {
   }
 
   /** the world object whose interior we're inside (for safe exit placement) */
-  private enteredFrom: { x: number; y: number; w: number; h: number } | null = null;
+  private enteredFrom: { id?: string; x: number; y: number; w: number; h: number } | null = null;
 
   exitInterior() {
     if (!this.interiorId) return;
@@ -1076,7 +1083,16 @@ export class GameCanvas {
     if (this.exitPos) {
       let placed = false;
       if (this.enteredFrom) {
-        const spot = this.findWalkableExitSpot(this.enteredFrom);
+        const spot = this.findWalkableExitSpot(this.enteredFrom, this.enteredFrom.id);
+        if (spot) {
+          this.px = spot.x;
+          this.py = spot.y;
+          placed = true;
+        }
+      }
+      if (!placed && this.enteredFrom) {
+        // spiral out from the den's south face (in front of its door)
+        const spot = this.nearestFreeSpot(this.enteredFrom.x, this.enteredFrom.y + this.enteredFrom.h / 2 + 12, 480);
         if (spot) {
           this.px = spot.x;
           this.py = spot.y;
@@ -1084,15 +1100,12 @@ export class GameCanvas {
         }
       }
       if (!placed) {
-        // fallback: below the entry point, verified walkable
-        let y = this.exitPos.y + 24;
-        for (let i = 0; i < 10 && !placed; i++) {
-          if (!this.solidAt(this.exitPos.x, y)) {
-            this.px = this.exitPos.x;
-            this.py = y;
-            placed = true;
-          }
-          y += 16;
+        // guaranteed: spiral out from wherever we entered, however far it takes
+        const spot = this.nearestFreeSpot(this.exitPos.x, this.exitPos.y, 800);
+        if (spot) {
+          this.px = spot.x;
+          this.py = spot.y;
+          placed = true;
         }
       }
       if (!placed) {
@@ -1109,36 +1122,65 @@ export class GameCanvas {
     this.cb.onInteriorChange(null);
   }
 
-  /** First free point on a ring just outside the entrance's collision box. */
-  private findWalkableExitSpot(box: { x: number; y: number; w: number; h: number }): { x: number; y: number } | null {
-    const candidates: { x: number; y: number }[] = [];
-    // south (in front of the door), then east, west, north — in steps outward
-    for (const [dx, dy] of [
-      [0, 1], [1, 0], [-1, 0], [0, -1],
-    ] as const) {
-      for (let d = 1; d <= 4; d++) {
-        candidates.push({
-          x: box.x + dx * (box.w / 2 + d * 14),
-          y: box.y + dy * (box.h / 2 + d * 14),
-        });
-      }
+  /** True when the player's full body (half extents) fits at this point. */
+  private bodyFitsAt(x: number, y: number): boolean {
+    return (
+      !isSolidPoint(x - PLAYER_HALF_W, y - PLAYER_HALF_H) &&
+      !isSolidPoint(x + PLAYER_HALF_W, y - PLAYER_HALF_H) &&
+      !isSolidPoint(x - PLAYER_HALF_W, y + PLAYER_HALF_H) &&
+      !isSolidPoint(x + PLAYER_HALF_W, y + PLAYER_HALF_H)
+    );
+  }
+
+  /** True when this point sits in ANOTHER entrance's walk-in trigger. */
+  private nearOtherDoor(c: { x: number; y: number }, selfId?: string): boolean {
+    for (const o of allObjects) {
+      if (!o.interior || !o.doorAt) continue;
+      if (selfId && o.id === selfId) continue; // our own door is fine to stand at
+      const dxp = o.x + o.doorAt.dx * 32;
+      const dyp = o.y + o.h / 2 + o.doorAt.dy * 32;
+      const th = o.solid ? Math.max(30, o.w * 0.28) : Math.max(20, o.w * 0.16);
+      if (Math.hypot(dxp - c.x, dyp - c.y) < th + 12) return true;
     }
-    for (const c of candidates) {
-      if (this.solidAt(c.x, c.y)) continue;
-      // never place the player inside ANOTHER entrance's trigger radius —
-      // that would instantly re-enter a room after leaving one
-      let nearAnyDoor = false;
-      for (const o of allObjects) {
-        if (!o.interior || !o.doorAt) continue;
-        const dxp = o.x + o.doorAt.dx * 32;
-        const dyp = o.y + o.h / 2 + o.doorAt.dy * 32;
-        const th = o.solid ? Math.max(30, o.w * 0.28) : Math.max(20, o.w * 0.16);
-        if (Math.hypot(dxp - c.x, dyp - c.y) < th + 12) {
-          nearAnyDoor = true;
-          break;
+    return false;
+  }
+
+  /**
+   * First free point on expanding rings around the entrance: south face (the
+   * door) first, then the object center. Rings cover every direction so dens
+   * hemmed in by walls/brambles still get a walkable exit on some side.
+   */
+  private findWalkableExitSpot(
+    box: { x: number; y: number; w: number; h: number },
+    selfId?: string,
+  ): { x: number; y: number } | null {
+    const origins = [
+      { x: box.x, y: box.y + box.h / 2 }, // the doorway (south face)
+      { x: box.x, y: box.y }, // the object center
+    ];
+    for (const org of origins) {
+      for (let ring = 1; ring <= 12; ring++) {
+        const rad = ring * 14;
+        for (let a = 0; a < 16; a++) {
+          const ang = (a / 16) * Math.PI * 2;
+          const c = { x: org.x + Math.cos(ang) * rad, y: org.y + Math.sin(ang) * rad };
+          if (this.bodyFitsAt(c.x, c.y) && !this.nearOtherDoor(c, selfId)) return c;
         }
       }
-      if (!nearAnyDoor) return c;
+    }
+    return null;
+  }
+
+  /** Spiral search for the nearest point where the player body fits. */
+  private nearestFreeSpot(x: number, y: number, maxR: number): { x: number; y: number } | null {
+    if (this.bodyFitsAt(x, y) && !this.nearOtherDoor({ x, y })) return { x, y };
+    for (let r = 10; r <= maxR; r += 10) {
+      const steps = Math.max(8, Math.round((r / 10) * 4));
+      for (let a = 0; a < steps; a++) {
+        const ang = (a / steps) * Math.PI * 2;
+        const c = { x: x + Math.cos(ang) * r, y: y + Math.sin(ang) * r };
+        if (this.bodyFitsAt(c.x, c.y) && !this.nearOtherDoor(c)) return c;
+      }
     }
     return null;
   }
@@ -1229,9 +1271,16 @@ export class GameCanvas {
   } {
     // velocity > threshold => moving (spec: animation derives from movement)
     const moving = this.pSpeed > 8;
-    const movementState: MovementState = moving ? (this.pSpeed > 205 ? "run" : "walk") : "idle";
+    const movementState: MovementState = moving
+      ? this.sneaking
+        ? "crouch" // synchronized crouch: remote cats see the crouch pose
+        : this.pSpeed > 205
+          ? "run"
+          : "walk"
+      : "idle";
     const animationState: CatPose =
-      !moving && this.time > this.poseUntil && this.pPose !== "walk" ? this.pPose : moving ? "walk" : "sit";
+      moving ? (this.sneaking ? "crouch" : "walk")
+        : !moving && this.time > this.poseUntil && this.pPose !== "walk" ? this.pPose : "sit";
     return {
       x: this.px,
       y: this.py,
@@ -1457,8 +1506,15 @@ export class GameCanvas {
       this.pPose = "walk";
       this.poseUntil = 0;
     }
-    this.pPose = movingNow && this.pPose === "walk" ? "walk" : this.pPose;
-    if (movingNow && this.pPose === "walk") {
+    // animation derives from movement (spec): sneak = CROUCH
+    if (movingNow) {
+      if (this.sneaking && this.pPose !== "crouch") this.pPose = "crouch";
+      else if (!this.sneaking && this.pPose === "crouch") this.pPose = "walk";
+    } else if (this.pPose === "crouch") {
+      this.pPose = "sit"; // stopped: settle into the idle sit pose
+    }
+    this.pPose = movingNow && (this.pPose === "walk" || this.pPose === "crouch") ? this.pPose : this.pPose;
+    if (movingNow && (this.pPose === "walk" || this.pPose === "crouch")) {
       const len = Math.hypot(dx, dy);
       dx = (dx / len) * speed * dt;
       dy = (dy / len) * speed * dt;
@@ -1717,7 +1773,7 @@ export class GameCanvas {
         );
         this.enterInterior(
           nearDoor,
-          doorObj ? { x: doorObj.x, y: doorObj.y, w: doorObj.w, h: doorObj.h } : undefined,
+          doorObj ? { id: doorObj.id, x: doorObj.x, y: doorObj.y, w: doorObj.w, h: doorObj.h } : undefined,
         );
       } else if (!this.doorArmed && this.time > this.doorCooldownUntil + 1.4) {
         // standing at a doorway for a moment re-arms it — predictable re-entry
