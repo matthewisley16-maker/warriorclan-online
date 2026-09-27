@@ -18,6 +18,7 @@ import {
   npcs,
   preyZones,
   trees,
+  type GroundKind,
   WORLD_H,
   WORLD_W,
   type InteractableKind,
@@ -285,6 +286,11 @@ const ROOM_GEO: Record<string, RoomGeo> = {
   "house-c":          { w: 18, h: 13, cave: false, floor: ["#8c6844", "#805f3e", "#987250"], wall: ["#b4a484", "#c4b494"] },
   "house-d":          { w: 20, h: 15, cave: false, floor: ["#b48454", "#a87a4e", "#c0905e"], wall: ["#d4c4a4", "#e2d4b6"] },
   "house-e":          { w: 21, h: 15, cave: false, floor: ["#ae8052", "#a2764c", "#ba8c5c"], wall: ["#d2c2a2", "#e0d2b4"] },
+  "rusty-living":     { w: 26, h: 19, cave: false, floor: ["#b08258", "#a4764c", "#bc8e60"], wall: ["#d8c8ac", "#e8dcc2"] },
+  "house-f":          { w: 22, h: 16, cave: false, floor: ["#a87c50", "#9c724a", "#b4865a"], wall: ["#cec0a2", "#ded2b6"] },
+  "house-g":          { w: 22, h: 17, cave: false, floor: ["#b08454", "#a47a4c", "#bc8e5e"], wall: ["#d4c4a4", "#e2d4b6"] },
+  "house-h":          { w: 22, h: 15, cave: false, floor: ["#cfc7b8", "#c3bbaa", "#dbd3c4"], wall: ["#d0c0a0", "#ded0b2"] },
+  "house-i":          { w: 20, h: 15, cave: false, floor: ["#a2764a", "#966e44", "#ae8256"], wall: ["#c6b694", "#d6c8a8"] },
   "barn":             { w: 24, h: 18, cave: false, floor: ["#96703f", "#8a6639", "#a27a46"], wall: ["#8a5a3a", "#9c6a46"] },
   "moonstone-cave":   { w: 15, h: 12, cave: true,  floor: ["#5c5e66", "#50525a", "#686a72"], wall: ["#33343c", "#43454f"] },
 };
@@ -828,6 +834,81 @@ export const interiors: Record<string, InteriorDef> = {
     desc: "A bright nest with a glass sunroom. Dust motes drift over two bedrooms and a warm hallway.",
     npcs: [],
   },
+  // --- Twoleg interiors added in the world-scale upgrade: every house on
+  // Smudge's street now has its own intentional floor plan (props are on the
+  // 24x18 design grid and remap proportionally per room). ---
+  "rusty-living": {
+    id: "rusty-living",
+    name: "Rusty's Front Room",
+    desc: "Sunlight through lace curtains, a worn armchair, and a curled mat by the door.",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "rl-carpet", x: 11, y: 9, label: "Worn rug by the fire", style: "carpet" },
+      { id: "rl-sofa", x: 5, y: 6, label: "Twoleg sleeping-soft (sofa)", style: "sofa" },
+      { id: "rl-chair", x: 8, y: 5, label: "Twoleg perch", style: "chair" },
+      { id: "rl-table", x: 12, y: 5, label: "Twoleg eating-table", style: "table" },
+      { id: "rl-cabinet", x: 17, y: 4, label: "Tall cabinet", style: "cabinet" },
+      { id: "rl-lamp", x: 21, y: 5, label: "Glowing lamp", style: "lamp" },
+      { id: "rl-blanket", x: 9, y: 14, label: "A curled sleeping mat", style: "blanket" },
+      { id: "rl-toy", x: 15, y: 15, label: "A woolly mouse toy", style: "toy" },
+      { id: "rl-bowl", x: 19, y: 13, label: "Food bowl", style: "bowl" },
+      { id: "rl-plant", x: 22, y: 12, label: "Houseplant", style: "plant" },
+    ],
+  },
+  "house-f": {
+    id: "house-f",
+    name: "Twoleg Living Room",
+    desc: "A soft sofa faces a flickering box, and a rug warms the wooden floor.",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "hf-sofa", x: 4, y: 6, label: "Soft sofa", style: "sofa" },
+      { id: "hf-carpet", x: 10, y: 8, label: "Patterned rug", style: "carpet" },
+      { id: "hf-lamp", x: 16, y: 4, label: "Standing lamp", style: "lamp" },
+      { id: "hf-shelf", x: 20, y: 7, label: "Bookshelf", style: "shelf" },
+      { id: "hf-box", x: 7, y: 12, label: "Cardboard box", style: "box" },
+      { id: "hf-plant", x: 21, y: 13, label: "Houseplant", style: "plant" },
+    ],
+  },
+  "house-g": {
+    id: "house-g",
+    name: "Twoleg Bedroom",
+    desc: "A tall bed, a snoring Twoleg shape under blankets, and a wardrobe to hide behind.",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "hg-bed", x: 4, y: 4, label: "Twoleg sleeping-nest", style: "bed" },
+      { id: "hg-cabinet", x: 17, y: 4, label: "Wardrobe", style: "cabinet" },
+      { id: "hg-lamp", x: 11, y: 13, label: "Bedside lamp", style: "lamp" },
+      { id: "hg-box", x: 6, y: 14, label: "Storage box", style: "box" },
+      { id: "hg-plant", x: 19, y: 12, label: "Houseplant", style: "plant" },
+    ],
+  },
+  "house-h": {
+    id: "house-h",
+    name: "Twoleg Kitchen",
+    desc: "Cold floor tiles, a towering cold box, and a bowl that smells faintly of fish.",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "hh-cabinet-1", x: 3, y: 4, label: "Kitchen counter", style: "cabinet" },
+      { id: "hh-cabinet-2", x: 9, y: 4, label: "Kitchen counter", style: "cabinet" },
+      { id: "hh-coldbox", x: 18, y: 4, label: "The humming cold box", style: "cabinet" },
+      { id: "hh-bowl-1", x: 12, y: 9, label: "Water bowl", style: "bowl" },
+      { id: "hh-bowl-2", x: 20, y: 12, label: "Food bowl", style: "bowl" },
+      { id: "hh-plant", x: 4, y: 12, label: "Window plant", style: "plant" },
+    ],
+  },
+  "house-i": {
+    id: "house-i",
+    name: "Twoleg Study",
+    desc: "Tall shelves of paper-filled leaves and a warm lamp burning late.",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      { id: "hi-shelf-1", x: 3, y: 4, label: "Tall bookshelf", style: "shelf" },
+      { id: "hi-shelf-2", x: 9, y: 4, label: "Tall bookshelf", style: "shelf" },
+      { id: "hi-books", x: 15, y: 5, label: "Stack of books", style: "books" },
+      { id: "hi-chair", x: 10, y: 10, label: "Reading chair", style: "chair" },
+      { id: "hi-lamp", x: 17, y: 12, label: "Desk lamp", style: "lamp" },
+    ],
+  },
   barn: {
     id: "barn",
     name: "The Farm Barn",
@@ -915,6 +996,45 @@ function scheduleTarget(def: NPCDef, hour: number): { x: number; y: number } | n
 
 const PLAYER_HALF_W = 11;
 const PLAYER_HALF_H = 8;
+
+// --- environmental upgrades -------------------------------------------------
+// Ground detail scatter (deterministic): litter, stones, soil patches and
+// wildflowers sampled from the GROUND map, drawn under everything.
+type GroundDecoKind = "litter" | "stone" | "soil" | "flower";
+const groundDeco: { x: number; y: number; kind: GroundDecoKind; a: number; s: number }[] = [];
+const GROUND_KIND_LABELS: Record<number, GroundKind> = {
+  0: "grass", 1: "sand", 2: "water", 3: "stone", 4: "paved", 5: "pine",
+  6: "dirt", 7: "moor", 8: "marsh", 9: "riverbank", 10: "reeds",
+};
+function groundKindAtIdx(idx: number): GroundKind {
+  return GROUND_KIND_LABELS[idx] ?? "grass";
+}
+(function buildGroundDeco() {
+  if (groundDeco.length) return;
+  let seed = 1234567;
+  const rnd = () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return (seed >>> 0) / 4294967296;
+  };
+  for (let i = 0; i < 9000; i++) {
+    const x = rnd() * WORLD_W;
+    const y = rnd() * WORLD_H;
+    const kind = groundKindAtIdx(groundMap[Math.floor(y / GROUND_CELL) * GROUND_COLS + Math.floor(x / GROUND_CELL)] ?? 0);
+    if (kind === "water" || kind === "paved") continue;
+    const r = rnd();
+    const decoKind: GroundDecoKind = kind === "stone" ? (r < 0.7 ? "stone" : "litter")
+      : r < 0.46 ? "litter" : r < 0.72 ? "soil" : r < 0.88 ? "stone" : "flower";
+    groundDeco.push({ x, y, kind: decoKind, a: rnd() * Math.PI * 2, s: 0.6 + rnd() * 0.8 });
+  }
+})();
+
+// --- swimming ---------------------------------------------------------------
+// Deep water replaces walking with a swim state: different speed, bobbing
+// sprite, ripple rings — no invisible walls at intended swim entrances.
+const SWIM_SPEED = 88; // px/s: between walk (165) and sneak (80)
+const SWIM_BOB_HZ = 2.1;
 const WALK_SPEED = 165;
 const RUN_SPEED = 250;
 const SNEAK_SPEED = 80;
@@ -944,6 +1064,7 @@ export class GameCanvas {
   private poseUntil = 0;
   private pEmote: string | null = null;
   private emoteUntil = 0;
+  private swimming = false; // deep-water movement state
 
   private camX = 0;
   private camY = 0;
@@ -1046,7 +1167,12 @@ export class GameCanvas {
 
   setPaused(p: boolean) {
     this.paused = p;
-    if (p) this.keys.clear();
+    if (p) {
+      this.keys.clear();
+      this.touchDx = 0;
+      this.touchDy = 0;
+      this.crouchHeld = false;
+    }
   }
 
   /** Camera zoom, exposed so Settings can change view distance. */
@@ -1074,6 +1200,12 @@ export class GameCanvas {
   private startHop() {
     if (this.paused || this.hopT >= 0) return;
     this.hopT = 0;
+  }
+
+  /** Deep-water check at a world position (drives swim visuals/depth). */
+  private waterAt(x: number, y: number): boolean {
+    if (this.interiorId) return false;
+    return groundKindAtIdx(groundMap[Math.floor(y / GROUND_CELL) * GROUND_COLS + Math.floor(x / GROUND_CELL)] ?? 0) === "water";
   }
 
   /** Mid-hop sprite lift in px (0 when grounded). */
@@ -1322,6 +1454,17 @@ export class GameCanvas {
   } {
     // velocity > threshold => moving (spec: animation derives from movement)
     const moving = this.pSpeed > 8;
+    if (this.swimming && moving) {
+      // swimming is a first-class movement state (synced like walk/crouch)
+      return {
+        x: this.px,
+        y: this.py,
+        facing: this.pxFacing,
+        moving: true,
+        movementState: "walk",
+        animationState: "swim",
+      };
+    }
     const movementState: MovementState = moving
       ? this.sneaking
         ? "crouch" // synchronized crouch: remote cats see the crouch pose
@@ -1560,7 +1703,10 @@ export class GameCanvas {
     this.sneaking = this.keys.has("control") || this.keys.has("c") || this.crouchHeld;
     const running = this.keys.has("shift");
     this.running = running;
-    const speed = this.sneaking ? SNEAK_SPEED : running ? RUN_SPEED : WALK_SPEED;
+    // deep water (swimming) is slower than walking; shallow water stays walkable
+    const swimmingNow = !this.interiorId && groundKindAtIdx(groundMap[Math.floor(this.py / GROUND_CELL) * GROUND_COLS + Math.floor(this.px / GROUND_CELL)] ?? 0) === "water";
+    this.swimming = swimmingNow;
+    const speed = swimmingNow ? SWIM_SPEED : this.sneaking ? SNEAK_SPEED : running ? RUN_SPEED : WALK_SPEED;
 
     if (this.time > this.poseUntil && this.pPose !== "walk") this.pPose = "walk";
 
@@ -1570,6 +1716,13 @@ export class GameCanvas {
     if (movingNow && this.pPose !== "walk") {
       this.pPose = "walk";
       this.poseUntil = 0;
+    }
+    // Swimming overrides land poses (its visual is drawn from pPose = "swim")
+    if (this.swimming && movingNow && this.pPose !== "swim") {
+      this.pPose = "swim";
+      this.poseUntil = 0;
+    } else if (!this.swimming && this.pPose === "swim") {
+      this.pPose = "walk"; // smooth back to land movement on exit
     }
     // animation derives from movement (spec): sneak = CROUCH
     if (movingNow) {
@@ -1603,12 +1756,17 @@ export class GameCanvas {
         // walk-out: step into the doorway gap at the bottom wall to leave —
         // no key press needed (mirrors the walk-in entrances outside)
         if (
-          this.py > ((geo?.h ?? ROOM_H) - 2.1) * 32 &&
-          Math.abs(this.px - gw / 2) < 40
+          this.py > ((geo?.h ?? ROOM_H) - 2.1) * 32 + (this.swimming ? 90 : 0) &&
+          Math.abs(this.px - gw / 2) < (this.swimming ? 100 : 40)
         ) {
           this.exitInterior();
           this.doorCooldownUntil = this.time + 1.2;
         }
+      } else if (this.swimming) {
+        // deep water: swim through (no land-collision checks), keep inside
+        // the world bounds
+        this.px = Math.max(8, Math.min(WORLD_W - 8, this.px + dx));
+        this.py = Math.max(8, Math.min(WORLD_H - 8, this.py + dy));
       } else {
         if (this.canMoveTo(this.px + dx, this.py)) this.px += dx;
         if (this.canMoveTo(this.px, this.py + dy)) this.py += dy;
@@ -2318,7 +2476,10 @@ export class GameCanvas {
     const viewB = this.camY + halfH + 80;
 
     this.drawGround(viewL, viewT, viewR, viewB);
+    this.drawGroundDeco(viewL, viewT, viewR, viewB);
     this.drawFlora(viewL, viewT, viewR, viewB);
+    this.drawFallingLeaves(viewL, viewT, viewR, viewB);
+    this.drawDepthBand(ctx, viewL, viewT, viewR, viewB);
     this.drawCloudShadows();
 
     type Entity = { y: number; draw: () => void };
@@ -2462,7 +2623,7 @@ export class GameCanvas {
             ctx,
             { ...r.appearance },
             rp.x,
-            rp.y,
+            rp.y - (this.waterAt(rp.x, rp.y) ? 4 + Math.sin(this.time * SWIM_BOB_HZ * Math.PI * 2 + (r.userId.charCodeAt(0) % 10)) * 2 : 0),
             (rp.facing >= 0 ? 1 : -1) as 1 | -1,
             rp.pose,
             this.time,
@@ -2491,7 +2652,32 @@ export class GameCanvas {
     ents.push({
       y: this.py,
       draw: () => {
-        drawCat(ctx, { ...this.playerSkin(), size: (this.playerSkin().size ?? 1) * 1.05 }, this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.time, 0);
+        // player (lifted mid-hop; the cat sprite itself is unchanged). In water
+    // the cat sits lower (only head/back above the surface) with ripple rings.
+    const pw = this.waterAt(this.px, this.py);
+    if (pw) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(viewL - 4, viewT - 4, viewR - viewL + 8, viewB - viewT + 8);
+      ctx.clip();
+      ctx.strokeStyle = "rgba(214, 236, 248, 0.5)";
+      ctx.lineWidth = 1.4;
+      const rr = 13 + Math.sin(this.time * SWIM_BOB_HZ * Math.PI * 2) * 2;
+      ctx.beginPath();
+      ctx.ellipse(this.px, this.py + 2, rr, rr * 0.45, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    drawCat(
+      ctx,
+      { ...this.playerSkin(), size: (this.playerSkin().size ?? 1) * 1.05 },
+      this.px,
+      this.py - this.hopLiftPx() - (pw ? 4 + Math.sin(this.time * SWIM_BOB_HZ * Math.PI * 2) * 2 : 0),
+      this.pxFacing,
+      this.pPose,
+      this.time,
+      0,
+    );
         if (this.pEmote) {
           ctx.font = "18px system-ui, sans-serif";
           ctx.textAlign = "center";
@@ -2622,6 +2808,26 @@ export class GameCanvas {
           const bandY = r * GROUND_CELL + ((Math.sin(this.time * 1.3 + c * 0.9 + r * 0.4) * 0.5 + 0.5) * GROUND_CELL);
           ctx.fillStyle = `rgba(190, 225, 245, ${0.14 + shimmer})`;
           ctx.fillRect(c * GROUND_CELL, bandY, GROUND_CELL + 0.5, 2);
+          // flow streaks: highlights drift consistently downstream (west->east)
+          const flow = ((this.time * 14 + c * GROUND_CELL) % 96) / 96;
+          ctx.fillStyle = "rgba(210, 236, 250, 0.13)";
+          ctx.fillRect(c * GROUND_CELL + flow * GROUND_CELL, r * GROUND_CELL + 3, 5, 1.4);
+          ctx.fillRect(c * GROUND_CELL + ((flow + 0.45) % 1) * GROUND_CELL, r * GROUND_CELL + GROUND_CELL - 5, 4, 1.2);
+          // shoreline: soft sand lip + shallow rim where water meets land
+          const above = groundMap[(r - 1) * GROUND_COLS + c] !== undefined ? groundMap[(r - 1) * GROUND_COLS + c] : 0;
+          const below = groundMap[(r + 1) * GROUND_COLS + c] !== undefined ? groundMap[(r + 1) * GROUND_COLS + c] : 0;
+          if (above !== 2) {
+            ctx.fillStyle = "rgba(186, 200, 148, 0.5)";
+            ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL, GROUND_CELL + 0.5, 2.4);
+            ctx.fillStyle = "rgba(226, 240, 248, 0.3)";
+            ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL + 2.4, GROUND_CELL + 0.5, 1.2);
+          }
+          if (below !== 2) {
+            ctx.fillStyle = "rgba(186, 200, 148, 0.5)";
+            ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL + GROUND_CELL - 2.4, GROUND_CELL + 0.5, 2.4);
+            ctx.fillStyle = "rgba(226, 240, 248, 0.3)";
+            ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL + GROUND_CELL - 3.6, GROUND_CELL + 0.5, 1.2);
+          }
           // sparkle
           if (h > 0.93) {
             ctx.fillStyle = "rgba(235, 248, 255, 0.5)";
@@ -2673,6 +2879,97 @@ export class GameCanvas {
   }
 
   /** Soft cloud shadows drifting across the world (world-space). */
+  /** Forest-floor litter: leaves, stones, soil patches, tiny flowers. */
+  private drawGroundDeco(viewL: number, viewT: number, viewR: number, viewB: number) {
+    const ctx = this.ctx;
+    for (const d of groundDeco) {
+      if (d.x < viewL - 12 || d.x > viewR + 12 || d.y < viewT - 12 || d.y > viewB + 12) continue;
+      const kind = d.kind;
+      const a = d.a;
+      if (kind === "litter") {
+        const tints = ["rgba(122, 96, 46, 0.55)", "rgba(150, 116, 58, 0.5)", "rgba(96, 118, 52, 0.45)"];
+        ctx.fillStyle = tints[Math.floor(a * 3) % 3];
+        ctx.save();
+        ctx.translate(d.x, d.y);
+        ctx.rotate(a);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 3.2 * d.s, 1.7 * d.s, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      } else if (kind === "stone") {
+        ctx.fillStyle = "rgba(128, 128, 124, 0.6)";
+        ctx.beginPath();
+        ctx.ellipse(d.x, d.y, 2.6 * d.s, 1.9 * d.s, a, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.18)";
+        ctx.beginPath();
+        ctx.ellipse(d.x - d.s * 0.7, d.y - d.s * 0.5, d.s * 0.9, d.s * 0.5, a, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (kind === "soil") {
+        ctx.fillStyle = "rgba(92, 72, 46, 0.22)";
+        ctx.beginPath();
+        ctx.ellipse(d.x, d.y, 9 * d.s, 5.5 * d.s, a, 0, Math.PI * 2);
+        ctx.fill();
+        if (d.s > 1.05) {
+          ctx.fillStyle = "rgba(70, 54, 34, 0.3)";
+          for (let i = 0; i < 3; i++) {
+            ctx.fillRect(d.x + (i - 1) * 3.5 * d.s, d.y + (i % 2 ? 2 : -2) * d.s, 1.4, 1.4);
+          }
+        }
+      } else {
+        const petals = ["#e8dd8f", "#d8a2c8", "#eef2f4"][Math.floor(a * 3) % 3];
+        ctx.fillStyle = petals;
+        for (let i = 0; i < 4; i++) {
+          const ang = a + (i * Math.PI) / 2;
+          ctx.beginPath();
+          ctx.arc(d.x + Math.cos(ang) * 1.8 * d.s, d.y + Math.sin(ang) * 1.8 * d.s, 1.3 * d.s, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = "#c9a227";
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, 1 * d.s, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  /** Forest-depth band: darker, bluer background trees far above the camera. */
+  private drawDepthBand(ctx: CanvasRenderingContext2D, viewL: number, viewT: number, viewR: number, viewB: number) {
+    if (viewT > 520) return; // camera far from the top edge: nothing to draw
+    const a = Math.min(0.45, Math.max(0.1, (520 - viewT) / 420));
+    for (let x = Math.floor(viewL / 90) * 90; x < viewR + 90; x += 90) {
+      const seed = hash2(x, 77);
+      const tx = x + seed * 40;
+      const th = 90 + seed * 80;
+      const ty = viewT + 20 - th * (0.55 + seed * 0.4);
+      ctx.fillStyle = "rgba(20, 42, 26, " + a.toFixed(3) + ")";
+      ctx.beginPath();
+      ctx.moveTo(tx - 26, viewT + 30);
+      ctx.quadraticCurveTo(tx - 20, ty + th * 0.4, tx, ty);
+      ctx.quadraticCurveTo(tx + 20, ty + th * 0.4, tx + 26, viewT + 30);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  /** Occasional falling leaves near the camera (world-space, sparse). */
+  private drawFallingLeaves(viewL: number, viewT: number, viewR: number, viewB: number) {
+    const ctx = this.ctx;
+    for (let i = 0; i < 10; i++) {
+      const seed = hash2(i, 999);
+      const px = viewL + ((seed * 9973 + this.time * (9 + seed * 8)) % (viewR - viewL));
+      const py = viewT + ((seed * 6151 + this.time * (16 + seed * 12)) % (viewB - viewT));
+      ctx.fillStyle = seed > 0.5 ? "rgba(150, 116, 58, 0.75)" : "rgba(96, 118, 52, 0.7)";
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(Math.sin(this.time * 2 + i * 2.1) * 0.8 + seed * 3);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 2.6, 1.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   private drawCloudShadows() {
     // Only genuinely overcast skies cast cloud shadows — never a clear day
     // or a clear night (env.dark rises at night, so gate on the weather kind,
@@ -3099,7 +3396,9 @@ export class GameCanvas {
     }
 
     ctx.save();
-    ctx.translate(sway, 0);
+    // layered sway: the canopy drifts a little further than the trunk's
+    // lean, so trees bend subtly instead of rigidly sliding sideways
+    ctx.translate(sway, Math.sin(this.time * 1.1 + x * 0.03 + 1.3) * 0.4 * (1 + this.env.wind * 2));
     if (species === "pine") {
       // layered boughs, darkest at the bottom
       const layers = 4;

@@ -74,7 +74,7 @@ const LAYERS: Record<AmbienceLayerId, LayerSpec> = {
 
 export type SfxName =
   | "ui_click" | "ui_open" | "ui_move" | "ui_confirm" | "ui_cancel"
-  | "collect" | "door" | "jump" | "land" | "hunt_pounce" | "hunt_rustle"
+  | "collect" | "door" | "jump" | "land" | "hunt_pounce" | "hunt_rustle" | "swim"
   | "quest_done" | "rank_up" | "clan_join"
   | "cat_mew" | "cat_mew2" | "cat_purr";
 
@@ -90,6 +90,7 @@ const SFX_FILES: Record<SfxName, string> = {
   land: "sfx/land.wav",
   hunt_pounce: "sfx/hunt_pounce.wav",
   hunt_rustle: "steps/grass/2.ogg", // soft forest-floor rustle (reuses a footstep)
+  swim: "steps/water/0.ogg", // paddling strokes (reuses water footsteps)
   quest_done: "sfx/quest_done.wav",
   rank_up: "sfx/rank_up.wav",
   clan_join: "sfx/clan_join.wav",

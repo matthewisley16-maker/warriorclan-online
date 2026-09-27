@@ -617,8 +617,14 @@ export default function Game() {
       const g = gameRef.current;
       if (!g) return;
       const s = g.engineState();
+      const swimmingNow = s.animationState === "swim";
       const moving = s.moving && (s.movementState === "walk" || s.movementState === "run" || s.movementState === "crouch");
-      if (moving) {
+      if (swimmingNow) {
+        if (performance.now() - lastStepRef.current >= 420) {
+          lastStepRef.current = performance.now();
+          audio().playSfx("swim", { volume: 0.8, throttleMs: 200 });
+        }
+      } else if (moving) {
         const px = s.x, py = s.y;
         const kind = stepKindFor(posAreaIdRef.current, !!interiorRef.current, groundIndexAt(px, py));
         const cadence = s.movementState === "run" ? 260 : s.movementState === "crouch" ? 460 : 340;
@@ -998,7 +1004,10 @@ export default function Game() {
             </span>
             <span className="hidden text-[9px] font-bold uppercase text-muted-foreground sm:inline">{connQuality}</span>
           </div>
-          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => setActiveUI((u) => (u === "chat" ? "gameplay" : "chat"))}>
+          <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onPointerDown={(e) => { (e.currentTarget as HTMLElement).style.transform = "scale(0.96)"; }}
+            onPointerUp={(e) => { (e.currentTarget as HTMLElement).style.transform = ""; }}
+            onPointerLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = ""; }}
+            onClick={() => setActiveUI((u) => (u === "chat" ? "gameplay" : "chat"))}>
             <MessageCircle className="size-3.5" /> Chat
           </Button>
           <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => { audio().playSfx("ui_open"); setActiveUI("map"); }}>

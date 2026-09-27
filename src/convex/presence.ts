@@ -8,7 +8,7 @@ const STALE_MS = 20_000;
 // movement-state sync: the authoritative movement vocabulary (mirrors engine)
 const MOVEMENT_STATES = new Set(["idle", "walk", "run", "crouch"]);
 // animation states mirror the engine's CatPose vocabulary
-const ANIM_STATES = new Set(["walk", "sit", "sleep", "crouch", "groom", "stretch"]);
+const ANIM_STATES = new Set(["walk", "sit", "sleep", "crouch", "groom", "stretch", "swim"]);
 
 // server speed authority: clamp generously above RUN_SPEED (250 px/s) so
 // lag spikes never rubber-band honest clients, but impossible jumps

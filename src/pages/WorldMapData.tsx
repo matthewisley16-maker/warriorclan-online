@@ -44,10 +44,12 @@ export const MAP_SPOTS: MapSpot[] = [
 
 /** Territory shading + border lines in world tiles (x, y, w, h / polylines). */
 export const TERRITORIES: { id: string; name: string; color: string; rect: [number, number, number, number] }[] = [
-  { id: "windclan", name: "WindClan", color: "#88b15c", rect: [0, 40, 48, 136] },
+  { id: "windclan", name: "WindClan", color: "#88b15c", rect: [0, 40, 48, 180] },
   { id: "shadowclan", name: "ShadowClan", color: "#356840", rect: [46, 0, 100, 40] },
-  { id: "riverclan", name: "RiverClan", color: "#3d6f9e", rect: [152, 40, 40, 136] },
+  { id: "riverclan", name: "RiverClan", color: "#3d6f9e", rect: [152, 40, 40, 180] },
   { id: "thunderclan", name: "ThunderClan", color: "#4a8a4c", rect: [48, 40, 104, 88] },
+  { id: "wilds", name: "Unclaimed Wilds", color: "#3f7d43", rect: [192, 0, 48, 220] },
+  { id: "wilds-south", name: "Unclaimed Wilds", color: "#3f7d43", rect: [48, 176, 144, 44] },
 ];
 
 const KIND_COLORS: Record<SpotKind, string> = {
@@ -94,10 +96,10 @@ export function WorldMapCanvas({
   size?: number;
   className?: string;
 }) {
-  // All coordinates are tiles of the real 192x176 world.
-  const tx = (v: number) => (v / 192) * size;
-  const ty = (v: number) => (v / 176) * size;
-  const aspect = 176 / 192;
+  // All coordinates are tiles of the real 240x220 world.
+  const tx = (v: number) => (v / 240) * size;
+  const ty = (v: number) => (v / 220) * size;
+  const aspect = 220 / 240;
 
   const myTerritory = TERRITORIES.find((t) => {
     const [x, y, w, h] = t.rect;
@@ -107,7 +109,7 @@ export function WorldMapCanvas({
   return (
     <div className={cn("relative select-none", className)} style={{ width: size, height: size * aspect }}>
       <svg
-        viewBox="0 0 192 176"
+        viewBox="0 0 240 220"
         className="h-full w-full rounded-lg bg-[#33532e]"
         onClick={() => onPickSpot?.(null)}
       >
@@ -134,7 +136,7 @@ export function WorldMapCanvas({
         <rect x={0} y={68} width={4} height={108} fill="url(#riverGrad)" />
         <rect x={144} y={48} width={8} height={128} fill="url(#riverGrad)" />
         {/* Thunderpath */}
-        <rect x={0} y={42} width={192} height={4} fill="#3a3d42" />
+        <rect x={0} y={42} width={240} height={4} fill="#3a3d42" />
         {/* pines / moor textures */}
         <rect x={46} y={0} width={100} height={40} fill="#234024" opacity={0.55} />
         <rect x={108} y={6} width={34} height={30} fill="#3c5a44" opacity={0.5} />
@@ -145,9 +147,10 @@ export function WorldMapCanvas({
         <circle cx={170} cy={96} r={8} fill="#cbb27e" opacity={0.75} />
         <circle cx={96} cy={20} r={8} fill="#cbb27e" opacity={0.75} />
         {/* territory border lines */}
-        <line x1={48} y1={0} x2={48} y2={176} stroke="#f5efdd" strokeWidth={0.5} strokeDasharray="3 2.5" opacity={0.35} />
-        <line x1={0} y1={40} x2={192} y2={40} stroke="#f5efdd" strokeWidth={0.5} strokeDasharray="3 2.5" opacity={0.35} />
-        <line x1={152} y1={40} x2={152} y2={176} stroke="#f5efdd" strokeWidth={0.5} strokeDasharray="3 2.5" opacity={0.35} />
+        <line x1={48} y1={0} x2={48} y2={220} stroke="#f5efdd" strokeWidth={0.5} strokeDasharray="3 2.5" opacity={0.35} />
+        <line x1={0} y1={40} x2={240} y2={40} stroke="#f5efdd" strokeWidth={0.5} strokeDasharray="3 2.5" opacity={0.35} />
+        <line x1={152} y1={40} x2={152} y2={220} stroke="#f5efdd" strokeWidth={0.5} strokeDasharray="3 2.5" opacity={0.35} />
+        <line x1={0} y1={176} x2={240} y2={176} stroke="#f5efdd" strokeWidth={0.5} strokeDasharray="3 2.5" opacity={0.28} />
         {/* spots */}
         {MAP_SPOTS.map((s) => {
           const found = !discovered || discovered.includes(s.id);

@@ -4,10 +4,10 @@
 // and the farm sit south; Fourtrees and Highstones are shared ground.
 
 export const TILE = 32;
-export const MAP_W = 192; // tiles
-export const MAP_H = 176; // tiles
-export const WORLD_W = MAP_W * TILE; // 6144
-export const WORLD_H = MAP_H * TILE; // 5632
+export const MAP_W = 240; // tiles
+export const MAP_H = 220; // tiles
+export const WORLD_W = MAP_W * TILE; // 7680
+export const WORLD_H = MAP_H * TILE; // 7040
 
 export type Vec2 = { x: number; y: number };
 export type Rect = { x: number; y: number; w: number; h: number };
@@ -99,7 +99,7 @@ function shiftRect(r: Rect): Rect {
 // ---------------------------------------------------------------------------
 
 export const CAMP_CENTER: Vec2 = { x: t(41) + TC_OX, y: t(46) + TC_OY };
-export const CAMP_RADIUS = t(12.5);
+export const CAMP_RADIUS = t(17); // large settlement, room for many cats
 
 /**
  * Default spawn — Rusty's garden in Twolegplace, next to Smudge's home.
@@ -716,7 +716,7 @@ function seedScatter() {
 
   // ThunderClan forest — dense broadleaf
   let count = 0, attempts = 0;
-  while (count < 220 && attempts < 8000) {
+  while (count < 380 && attempts < 12000) {
     attempts++;
     const x = t(48) + rand() * t(96);
     const y = t(46) + rand() * t(100);
@@ -728,7 +728,7 @@ function seedScatter() {
   }
   // ShadowClan pines + marsh scrub
   count = 0; attempts = 0;
-  while (count < 200 && attempts < 8000) {
+  while (count < 320 && attempts < 12000) {
     attempts++;
     const x = t(46) + rand() * t(100);
     const y = rand() * t(40);
@@ -739,7 +739,7 @@ function seedScatter() {
   }
   // WindClan — sparse wind-stunted trees only near the river
   count = 0; attempts = 0;
-  while (count < 40 && attempts < 4000) {
+  while (count < 70 && attempts < 6000) {
     attempts++;
     const x = rand() * t(48);
     const y = t(40) + rand() * (WORLD_H - t(40));
@@ -750,7 +750,7 @@ function seedScatter() {
   }
   // RiverClan — soft willow-ish clusters
   count = 0; attempts = 0;
-  while (count < 90 && attempts < 5000) {
+  while (count < 150 && attempts < 8000) {
     attempts++;
     const x = t(152) + rand() * t(40);
     const y = t(40) + rand() * (WORLD_H - t(40));
@@ -763,7 +763,7 @@ function seedScatter() {
   // Flora everywhere — forest floor ecosystem: ferns, tufts, flowers,
   // mushrooms, leaf litter, root flares, fallen logs, stone clusters.
   attempts = 0; count = 0;
-  while (count < 1250 && attempts < 20000) {
+  while (count < 2200 && attempts < 26000) {
     attempts++;
     const x = rand() * WORLD_W;
     const y = rand() * WORLD_H;
@@ -1493,9 +1493,117 @@ export const lore: Record<InteractableKind, { title: string; text: string }> = {
 };
 
 // ---------------------------------------------------------------------------
+// Town detail & Clan identity (built after collision, before first query)
+// ---------------------------------------------------------------------------
+
+function buildTownDetail() {
+  // ---- Twolegplace lawns & drives (ground paint) ----
+  groundRegions.push(
+    { kind: "grass", rect: { x: t(46), y: t(132), w: t(58), h: t(14) } },   // front lawns
+    { kind: "grass", rect: { x: t(46), y: t(162), w: t(58), h: t(12) } },   // back lawns
+    { kind: "dirt", rect: { x: t(61.4), y: t(143.2), w: t(3.2), h: t(4.8) } },  // driveway A
+    { kind: "dirt", rect: { x: t(83.4), y: t(137), w: t(3.2), h: t(3) } },      // driveway B
+    { kind: "dirt", rect: { x: t(56.2), y: t(161.2), w: t(3.4), h: t(3) } },    // driveway C
+    { kind: "dirt", rect: { x: t(87.8), y: t(161.2), w: t(3.4), h: t(3) } },    // driveway D
+  );
+
+  // ---- Front-yard detail: porches, lamps, mailboxes, flowers, hedges ----
+  const fronts = [
+    { x: t(77.2), y: t(143.6), w: t(4.2), h: t(1.1) },   // Rusty's porch
+    { x: t(62.4), y: t(141.6), w: t(3.6), h: t(1) },     // house-2 porch
+    { x: t(91.6), y: t(141.2), w: t(3.6), h: t(1) },     // house-3 porch
+    { x: t(69.2), y: t(137.4), w: t(3.6), h: t(1) },     // house-4 porch
+    { x: t(84.2), y: t(137.4), w: t(3.6), h: t(1) },     // house-5 porch
+  ];
+  fronts.forEach((r, i) => {
+    allObjects.push({ id: "porch-" + i, x: r.x, y: r.y, w: r.w, h: r.h, label: "Porch", style: "plank" });
+    allObjects.push({ id: "porch-lamp-" + i, x: r.x + r.w - t(0.5), y: r.y - t(0.7), w: t(0.5), h: t(0.7), label: "Porch lamp", style: "lamp" });
+    allObjects.push({
+      id: "mailbox-" + i, x: r.x + t(0.2), y: r.y + r.h + t(0.4), w: t(0.5), h: t(0.8),
+      label: "Mailbox", style: "plank",
+    });
+  });
+  allObjects.push(
+    { id: "tp-hedge-1", x: t(65.4), y: t(143), w: t(4), h: t(1), label: "Hedge", style: "bush", solid: true },
+    { id: "tp-hedge-2", x: t(87), y: t(143), w: t(4), h: t(1), label: "Hedge", style: "bush", solid: true },
+    { id: "tp-bed-2", x: t(64.6), y: t(144.2), w: t(1.6), h: t(1.2), label: "Flowerbed", style: "flowerbed" },
+    { id: "tp-bed-3", x: t(88.4), y: t(144.2), w: t(1.6), h: t(1.2), label: "Flowerbed", style: "flowerbed" },
+    { id: "tp-bed-4", x: t(74.2), y: t(145.6), w: t(1.4), h: t(1), label: "Flowerbed", style: "flowerbed" },
+    { id: "tp-yardtree-1", x: t(66.8), y: t(148), w: t(1.4), h: t(1.4), label: "Backyard tree", style: "tree", solid: true },
+    { id: "tp-yardtree-2", x: t(90.4), y: t(166), w: t(1.6), h: t(1.6), label: "Backyard tree", style: "tree", solid: true },
+    { id: "tp-toy-1", x: t(72.6), y: t(146.2), w: t(0.8), h: t(0.8), label: "Lost ball", style: "toy" },
+  );
+  // low garden fences framing two backyards (gaps left at the paths)
+  allObjects.push(
+    { id: "tp-fence-b1", x: t(55), y: t(162.8), w: t(4), h: t(0.4), label: "Fence", style: "fence" },
+    { id: "tp-fence-b2", x: t(62.6), y: t(162.8), w: t(4), h: t(0.4), label: "Fence", style: "fence" },
+    { id: "tp-fence-b3", x: t(84), y: t(162.8), w: t(4), h: t(0.4), label: "Fence", style: "fence" },
+  );
+
+  // ---- Per-Clan identity props (camps stay canon-shaped, richer dressing) ----
+  // WindClan: open moor — heather sweeps, wind-clipped gorse corners
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + 0.35;
+    allObjects.push({
+      id: "wc-heather-ring-" + i,
+      x: wc.x + Math.cos(a) * t(13.5), y: wc.y + Math.sin(a) * t(13.5),
+      w: t(1.6), h: t(1.1), label: "Heather", style: "flowerbed",
+    });
+  }
+  // RiverClan: water everywhere — reed curtains and wet stepping stones
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 + 0.8;
+    allObjects.push({
+      id: "rc-reed-ring-" + i,
+      x: rc.x + Math.cos(a) * t(13.8), y: rc.y + Math.sin(a) * t(13.8),
+      w: t(1.4), h: t(1), label: "Reeds", style: "reeds",
+    });
+  }
+  allObjects.push(
+    { id: "rc-stone-path-1", x: rc.x - t(4.6), y: rc.y + t(7.6), w: t(1.2), h: t(0.9), label: "Wet stone", style: "stone" },
+    { id: "rc-stone-path-2", x: rc.x - t(2.8), y: rc.y + t(9.4), w: t(1.2), h: t(0.9), label: "Wet stone", style: "stone" },
+  );
+  // ShadowClan: mud, stumps, bramble ridges
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 + 0.2;
+    allObjects.push({
+      id: "sc-bramble-ring-" + i,
+      x: sc.x + Math.cos(a) * t(13.6), y: sc.y + Math.sin(a) * t(13.6),
+      w: t(1.8), h: t(1.2), label: "Tangled bramble", style: "bramble",
+    });
+  }
+  allObjects.push(
+    { id: "sc-mud-2", x: sc.x + t(5.2), y: sc.y - t(6.4), w: t(2.2), h: t(1.5), label: "Mud patch", style: "mudpatch" },
+    { id: "sc-stump-2", x: sc.x - t(7.8), y: sc.y - t(4.2), w: t(1.4), h: t(1.1), label: "Pine stump", style: "stump" },
+  );
+  // ThunderClan: fern-filled bramble corners by the wall
+  allObjects.push(
+    { id: "cc-fern-corner-1", x: cc.x - t(12.6), y: cc.y + t(10.2), w: t(2), h: t(1.4), label: "Ferns", style: "bush" },
+    { id: "cc-fern-corner-2", x: cc.x + t(11.4), y: cc.y + t(11), w: t(1.8), h: t(1.3), label: "Ferns", style: "bush" },
+    { id: "cc-log-bench", x: cc.x + t(6.8), y: cc.y - t(9.4), w: t(2.2), h: t(1), label: "Fallen branch", style: "log" },
+  );
+
+  // ---- Distinct Twoleg interiors: the five rooms themselves live in
+  // engine.ts (InteriorDef/ROOM_GEO schema); here we wire each house to its
+  // new private room so "house-6..9" no longer share floor plans. ----
+  const rewire: Record<string, string> = {
+    "rusty-house": "rusty-living",
+    "house-6": "house-f",
+    "house-7": "house-g",
+    "house-8": "house-h",
+    "house-9": "house-i",
+  };
+  for (const o of allObjects) {
+    if (rewire[o.id]) o.interior = rewire[o.id];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Build once
 // ---------------------------------------------------------------------------
 
 seedScatter();
 buildGroundMap();
 buildCollision();
+buildTownDetail();
+buildGroundMap(); // repaint: town lawns/drives were added above (idempotent, one-time)

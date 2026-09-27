@@ -14,7 +14,7 @@ export interface CatSkin {
   scar?: boolean;
 }
 
-export type CatPose = "walk" | "sit" | "sleep" | "crouch" | "groom" | "stretch";
+export type CatPose = "walk" | "sit" | "sleep" | "crouch" | "groom" | "stretch" | "swim";
 
 /** Dark outline derived from the pelt so sprites read crisply on any ground. */
 function outlineOf(skin: CatSkin): string {
@@ -42,10 +42,14 @@ export function drawCat(
   phase: number,
 ) {
   const size = skin.size ?? 1;
-  const moving = pose === "walk";
+  const moving = pose === "walk" || pose === "swim";
+  const SWIM_BOB_HZ = 1.1;
   const bob = moving
     ? Math.abs(Math.sin(time * 9 + phase)) * 1.6
     : Math.sin(time * 1.4 + phase) * 0.5;
+  const swimBob = pose === "swim"
+    ? Math.sin(time * SWIM_BOB_HZ * Math.PI * 2 + phase) * 1.8
+    : 0;
 
   // shadow
   ctx.fillStyle = "rgba(0,0,0,0.22)";
@@ -56,7 +60,11 @@ export function drawCat(
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(facing * size, size);
-  ctx.translate(0, -bob);
+  ctx.translate(0, -bob + swimBob);
+  if (pose === "swim") {
+    // lower body: only head/back/tail stay above the surface line
+    ctx.translate(0, 2.5);
+  }
 
   const tail = skin.tail ?? "normal";
   const tailLen = tail === "short" ? 0.5 : tail === "bob" ? 0.3 : 1;
@@ -68,7 +76,11 @@ export function drawCat(
   ctx.lineWidth = tailW;
   ctx.lineCap = "round";
   ctx.beginPath();
-  if (pose === "sit") {
+  if (pose === "swim") {
+    // tail streams behind, tip above the wake
+    ctx.moveTo(-11, -5);
+    ctx.quadraticCurveTo(-20 * tailLen, -6 + tailSway * 0.3, -26 * tailLen, -12 + tailSway * 0.6);
+  } else if (pose === "sit") {
     ctx.moveTo(-10, -4);
     ctx.quadraticCurveTo(-18 * tailLen, -2, -16 * tailLen, 6);
   } else if (pose === "sleep") {
@@ -85,7 +97,10 @@ export function drawCat(
   ctx.strokeStyle = outlineOf(skin);
   ctx.lineWidth = 1;
   ctx.beginPath();
-  if (pose === "sit") {
+  if (pose === "swim") {
+    // stretched, streamlined body half-submerged
+    ctx.ellipse(0, -4.5, 12.5, 5.2, 0, 0, Math.PI * 2);
+  } else if (pose === "sit") {
     ctx.ellipse(0, -7, 9, 11, 0, 0, Math.PI * 2);
   } else if (pose === "sleep") {
     ctx.ellipse(0, -5, 12, 6, 0, 0, Math.PI * 2);
@@ -133,7 +148,14 @@ export function drawCat(
   }
 
   // legs
-  if (pose === "walk") {
+  if (pose === "swim") {
+    // paddling paws just under the surface: quick small strokes
+    const paddle = Math.sin(time * SWIM_BOB_HZ * Math.PI * 4 + phase);
+    ctx.fillStyle = skin.furDark;
+    ctx.fillRect(-9, -3 + paddle * 1.6, 4, 4.5);
+    ctx.fillStyle = skin.fur;
+    ctx.fillRect(5, -3 - paddle * 1.6, 4, 4.5);
+  } else if (pose === "walk") {
     ctx.fillStyle = skin.furDark;
     ctx.fillRect(-9, -4 + Math.sin(time * 9 + phase) * 2.5, 4, 7);
     ctx.fillStyle = skin.fur;
@@ -159,7 +181,7 @@ export function drawCat(
   const groomDip = pose === "groom" ? Math.max(0, Math.sin(time * 5.5)) : 0;
   const headX = (pose === "sit" || pose === "groom" ? 4 : 9) - groomDip * 1.5;
   const headY =
-    (pose === "sit" ? -16 : pose === "sleep" ? -8 : pose === "crouch" ? -8 : -11) + groomDip * 5;
+    (pose === "swim" ? -8 : pose === "sit" ? -16 : pose === "sleep" ? -8 : pose === "crouch" ? -8 : -11) + groomDip * 5;
   ctx.fillStyle = skin.fur;
   ctx.strokeStyle = outlineOf(skin);
   ctx.lineWidth = 1;
