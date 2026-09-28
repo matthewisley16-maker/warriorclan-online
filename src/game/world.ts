@@ -829,18 +829,15 @@ function unblockRect(r: Rect) {
 }
 
 function buildCollision() {
-  // West river (WindClan border)
-  blockRect({ x: 0, y: t(68), w: t(4), h: WORLD_H - t(68) });
-  // East river (RiverClan border)
-  blockRect({ x: t(144), y: t(48), w: t(8), h: WORLD_H - t(48) });
-  // Thunderpath center line is fine to walk; block nothing on it.
-  // Map borders
+  // Rivers are SWIMMABLE (deep water uses the swim movement state) — they
+  // are NOT blocked: shallow edges are walkable, deep channels are swum.
+  // (The old blockRects here made swimming impossible — cats could never
+  // reach the water.)
+  // Map borders (still seal the world edges)
   blockRect({ x: 0, y: 0, w: t(2), h: WORLD_H });
   blockRect({ x: 0, y: 0, w: WORLD_W, h: t(2) });
   blockRect({ x: WORLD_W - t(2), y: 0, w: t(2), h: WORLD_H });
   blockRect({ x: 0, y: WORLD_H - t(2), w: WORLD_W, h: t(2) });
-  // Deep border forest walls (outside the walkable ring)
-  blockRect({ x: 0, y: t(40), w: t(4), h: WORLD_H - t(40) });
 
   // ThunderClan camp wall ring (gap at south entrance)
   const steps = 72;

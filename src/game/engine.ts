@@ -1647,6 +1647,8 @@ export class GameCanvas {
       const x = zone.rect.x + Math.random() * zone.rect.w;
       const y = zone.rect.y + Math.random() * zone.rect.h;
       if (isSolidPoint(x, y)) continue;
+      // rivers/ponds are swimmable, not solid — keep prey on dry land
+      if (groundKindAtIdx(groundMap[Math.floor(y / GROUND_CELL) * GROUND_COLS + Math.floor(x / GROUND_CELL)] ?? 0) === "water") continue;
       if (this.inCampExclusion(x, y)) continue;
       this.prey.push({
         id: `prey-${created}-${Date.now()}`,
@@ -1801,7 +1803,7 @@ export class GameCanvas {
     }
 
     // --- contextual idle: shake off water/snow, occasionally ---
-    if (!this.paused && !this.dead && !this.swimming && this.pPose !== "walk" && this.pPose !== "crouch") {
+    if (!this.paused && !this.dead && !this.swimming && this.pPose !== "walk" && this.pPose !== "crouch" && this.pPose !== "swim") {
       const nowPm = performance.now();
       const wet = nowPm < this.wetnessUntil;
       const snowy = this.weather === "snow";
@@ -1867,14 +1869,15 @@ export class GameCanvas {
       this.pPose = "walk"; // smooth back to land movement on exit
     }
     // animation derives from movement (spec): sneak = CROUCH
-    if (movingNow) {
+    // (swim pose is managed above and never overridden by land poses)
+    if (movingNow && !this.swimming) {
       if (this.sneaking && this.pPose !== "crouch") this.pPose = "crouch";
       else if (!this.sneaking && this.pPose === "crouch") this.pPose = "walk";
-    } else if (this.pPose === "crouch") {
+    } else if (!this.swimming && this.pPose === "crouch") {
       this.pPose = "sit"; // stopped: settle into the idle sit pose
     }
     this.pPose = movingNow && (this.pPose === "walk" || this.pPose === "crouch") ? this.pPose : this.pPose;
-    if (movingNow && (this.pPose === "walk" || this.pPose === "crouch")) {
+    if (movingNow && (this.pPose === "walk" || this.pPose === "crouch" || this.swimming)) {
       const len = Math.hypot(dx, dy);
       dx = (dx / len) * speed * dt;
       dy = (dy / len) * speed * dt;
@@ -1914,8 +1917,8 @@ export class GameCanvas {
         if (this.canMoveTo(this.px, this.py + dy)) this.py += dy;
       }
     } else if (!movingNow && this.time > this.poseUntil) {
-      // idle behaviors
-      if (Math.random() < 0.001) this.pPose = "sit";
+      // idle behaviors (never while floating in water — keep the swim pose)
+      if (!this.swimming && Math.random() < 0.001) this.pPose = "sit";
     }
 
     // real velocity this frame: stop => idle pose (never walk-in-place)
@@ -2049,7 +2052,7 @@ export class GameCanvas {
     if (!this.paused && !this.dead) {
       this.needs.drain(dt, this.sneaking, running, swimmingNow);
       if (this.needs.hunger <= 0) {
-        this.needs.health = Math.max(0, this.needs.health - dt * 0.5);
+        this.needs.health = Math.max(0, this.needs.health - dt * 0.35);
       } else if (this.needs.hunger > 60 && this.needs.health < 100) {
         this.needs.health = Math.min(100, this.needs.health + dt * 0.4);
       }
@@ -4478,10 +4481,13 @@ class SurvivalNeeds {
   energy = 90;
   health = 100;
   drain(dt: number, sneaking: boolean, running: boolean, swimming: boolean) {
-    // rates per second — tuned to be noticeable over a session, never nagging
-    this.hunger -= dt * (running ? 0.35 : swimming ? 0.3 : sneaking ? 0.1 : 0.18);
-    this.energy -= dt * (running ? 0.7 : swimming ? 0.5 : sneaking ? 0.15 : 0.1);
-    if (this.energy < 15) this.health -= dt * 0.12;
+    // rates per second — gentle by design: from a full bar, hunger/energy last
+    // well over an in-game DAY (600s) of resting (roughly 4-8 days idle), so
+    // they matter over a session without ever nagging. Running/swimming drain
+    // faster but still leave plenty of room.
+    this.hunger -= dt * (running ? 0.1 : swimming ? 0.08 : sneaking ? 0.02 : 0.028);
+    this.energy -= dt * (running ? 0.22 : swimming ? 0.15 : sneaking ? 0.02 : 0.018);
+    if (this.energy < 15) this.health -= dt * 0.05;
     this.hunger = Math.max(0, this.hunger);
     this.energy = Math.max(0, this.energy);
     this.health = Math.max(0, this.health);
