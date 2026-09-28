@@ -106,6 +106,26 @@ function groundIndexAt(x: number, y: number): number {
   return groundMap[r * GROUND_COLS + c] ?? 0;
 }
 
+/**
+ * How close the cat is to river water (0..1): 1 at the bank, fading to 0
+ * about 1200px away. Samples the GROUND map in a widening ring so the river
+ * ambience is spatial — loud at the water, a hush inland, silent far off.
+ */
+function riverClosenessAt(x: number, y: number): number {
+  const probe = (px: number, py: number) => groundIndexAt(px, py) === 2;
+  if (probe(x, y)) return 1;
+  for (let d = 64; d <= 1200; d += 64) {
+    let hit = 0;
+    const rays = 8;
+    for (let i = 0; i < rays; i++) {
+      const a = (i / rays) * Math.PI * 2;
+      if (probe(x + Math.cos(a) * d, y + Math.sin(a) * d)) hit++;
+    }
+    if (hit > 0) return 1 - (d - 64) / 1200;
+  }
+  return 0;
+}
+
 /** real movement state of the local cat, sampled straight from the engine */
 export function movementSample(g: { engineState?: () => MovementSnapshot } | null) {
   if (g?.engineState) {
@@ -723,6 +743,7 @@ export default function Game() {
       weather,
       clock,
       mode,
+      riverCloseness: interior ? 0 : riverClosenessRef.current,
     };
     audio().setAmbience(computeAmbience(scene));
     audio().setMusic(computeMusic(scene));
@@ -737,6 +758,8 @@ export default function Game() {
       const g = gameRef.current;
       if (!g) return;
       const s = g.engineState();
+      // keep the river ambience spatial (sampled a few times a second)
+      riverClosenessRef.current = riverClosenessAt(s.x, s.y);
       const swimmingNow = s.animationState === "swim";
       const moving = s.moving && (s.movementState === "walk" || s.movementState === "run" || s.movementState === "crouch");
       if (swimmingNow) {
@@ -1036,6 +1059,8 @@ export default function Game() {
   areaAtRef.current = areaName;
   const posAreaIdRef = useRef<string>("");
   const lastStepRef = useRef(0);
+  // mirrors the cat's distance to river water for the ambience mixer
+  const riverClosenessRef = useRef(1);
   const deathRef = useRef<{ cause: string; respawn: { x: number; y: number }; phase: string } | null>(null);
   deathRef.current = death;
   const hoppingRef = useRef(false);

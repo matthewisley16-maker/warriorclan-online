@@ -470,28 +470,152 @@ export function drawPrey(
 // Props
 // ---------------------------------------------------------------------------
 
+/**
+ * Deterministic house variation from position: two nearby houses never look
+ * identical. Used for silhouette, roof color and trim — Pokémon-style cozy
+ * variety without any randomness frame to frame.
+ */
+function houseVariant(x: number, y: number): number {
+  let h = (Math.floor(x) * 73856093) ^ (Math.floor(y) * 19349663);
+  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
+  return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+}
+
+const HOUSE_WALLS = ["#e8d9b8", "#e2c9a2", "#f0e0c8", "#dcc5a5", "#eadcc0", "#d9c19b"];
+const HOUSE_ROOFS = ["#b0563f", "#7a5232", "#5d7a8c", "#5e7d52", "#a8683a", "#8a5a44", "#6e5a7d"];
+const HOUSE_TRIMS = ["#8c4a38", "#5c4328", "#44607a", "#4a6a40", "#8a5430", "#6a4534"];
+
 export function drawHouse(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, opts?: { doorway?: boolean }) {
+  const v = houseVariant(x, y);
+  const twoStory = v > 0.78;      // a few tall houses anchor the street
+  const sideWing = v > 0.42 && v <= 0.58; // attached side extension
+  const dormer = v > 0.58 && v <= 0.7;    // dormer window in the roof
+  const roofStyle = v > 0.2 ? (v < 0.5 ? "gable" : "hip") : "flat"; // varied silhouettes
+  const wall = HOUSE_WALLS[Math.floor(v * 6) % 6];
+  const roof = HOUSE_ROOFS[Math.floor(v * 97) % 7];
+  const trim = HOUSE_TRIMS[Math.floor(v * 53) % 6];
+
+  // yard shadow
   ctx.fillStyle = "rgba(0,0,0,0.2)";
   ctx.beginPath();
   ctx.ellipse(x, y + h * 0.42, w * 0.55, h * 0.22, 0, 0, Math.PI * 2);
   ctx.fill();
-  // walls
-  ctx.fillStyle = "#c9b8a0";
+
+  // side wing (gives some houses an L-shape)
+  if (sideWing) {
+    ctx.fillStyle = wall;
+    ctx.fillRect(x + w * 0.42, y - h * 0.1, w * 0.22, h * 0.5);
+    ctx.fillStyle = roof;
+    ctx.fillRect(x + w * 0.42, y - h * 0.22, w * 0.22, h * 0.14);
+    // wing window
+    ctx.fillStyle = "#87b7d9";
+    ctx.fillRect(x + w * 0.47, y + h * 0.06, w * 0.1, h * 0.14);
+  }
+
+  // walls (main block)
+  ctx.fillStyle = wall;
   ctx.fillRect(x - w * 0.42, y - h * 0.4, w * 0.84, h * 0.78);
-  // roof
-  ctx.fillStyle = "#8a5a44";
+  // second-floor band on two-story houses
+  if (twoStory) {
+    ctx.fillStyle = "rgba(0,0,0,0.06)";
+    ctx.fillRect(x - w * 0.42, y - h * 0.4, w * 0.84, h * 0.1);
+  }
+  // corner trim (clean readable edges)
+  ctx.strokeStyle = "rgba(90,60,30,0.35)";
+  ctx.lineWidth = Math.max(1, w * 0.02);
+  ctx.strokeRect(x - w * 0.42, y - h * 0.4, w * 0.84, h * 0.78);
+
+  // roof — three silhouettes, warm residential palette
+  ctx.fillStyle = roof;
+  if (roofStyle === "gable") {
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.5, y - h * 0.35);
+    ctx.lineTo(x, y - (twoStory ? h * 1.0 : h * 0.85));
+    ctx.lineTo(x + w * 0.5, y - h * 0.35);
+    ctx.closePath();
+    ctx.fill();
+  } else if (roofStyle === "hip") {
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.5, y - h * 0.35);
+    ctx.lineTo(x - w * 0.2, y - (twoStory ? h * 0.95 : h * 0.8));
+    ctx.lineTo(x + w * 0.2, y - (twoStory ? h * 0.95 : h * 0.8));
+    ctx.lineTo(x + w * 0.5, y - h * 0.35);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    // gentle terraced flat roof with a parapet — colorful town style
+    ctx.fillRect(x - w * 0.52, y - h * 0.52, w * 1.04, h * 0.18);
+    ctx.fillStyle = trim;
+    ctx.fillRect(x - w * 0.52, y - h * 0.38, w * 1.04, h * 0.05);
+  }
+  // roof shading + ridge highlight
+  ctx.fillStyle = "rgba(0,0,0,0.14)";
   ctx.beginPath();
-  ctx.moveTo(x - w * 0.5, y - h * 0.35);
-  ctx.lineTo(x, y - h * 0.85);
+  ctx.moveTo(x + w * 0.08, y - h * 0.42);
   ctx.lineTo(x + w * 0.5, y - h * 0.35);
+  ctx.lineTo(x + w * 0.08, y - h * 0.35);
   ctx.closePath();
   ctx.fill();
-  // windows
-  ctx.fillStyle = "#7fa8c9";
-  ctx.fillRect(x - w * 0.32, y - h * 0.28, w * 0.14, h * 0.16);
-  ctx.fillRect(x + w * 0.18, y - h * 0.28, w * 0.14, h * 0.16);
+
+  // dormer window
+  if (dormer) {
+    ctx.fillStyle = wall;
+    ctx.fillRect(x + w * 0.14, y - h * 0.62, w * 0.16, h * 0.2);
+    ctx.fillStyle = roof;
+    ctx.beginPath();
+    ctx.moveTo(x + w * 0.11, y - h * 0.62);
+    ctx.lineTo(x + w * 0.22, y - h * 0.74);
+    ctx.lineTo(x + w * 0.33, y - h * 0.62);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#87b7d9";
+    ctx.fillRect(x + w * 0.18, y - h * 0.58, w * 0.08, h * 0.1);
+  }
+
+  // chimney on some houses
+  if (v > 0.33 && v <= 0.58) {
+    ctx.fillStyle = "#9a5a48";
+    ctx.fillRect(x - w * 0.3, y - h * 0.78, w * 0.09, h * 0.3);
+    ctx.fillStyle = "#7a4438";
+    ctx.fillRect(x - w * 0.31, y - h * 0.82, w * 0.11, h * 0.06);
+  }
+
+  // windows: frames + shutters + sills, symmetric
+  const winY = y - h * 0.24;
+  const winW = w * 0.14;
+  const winH = h * 0.16;
+  const drawWindow = (wx: number, shutters: boolean) => {
+    ctx.fillStyle = trim;
+    ctx.fillRect(wx - winW * 0.65, winY - winH * 0.18, winW * 1.3, winH * 1.36);
+    ctx.fillStyle = "#87b7d9";
+    ctx.fillRect(wx - winW * 0.5, winY - winH * 0.06, winW, winH);
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.fillRect(wx - winW * 0.5, winY - winH * 0.06, winW, winH * 0.35);
+    ctx.fillStyle = trim;
+    ctx.fillRect(wx - winW * 0.05, winY - winH * 0.06, winW * 0.1, winH); // mullion
+    if (shutters) {
+      ctx.fillStyle = trim;
+      ctx.fillRect(wx - winW * 0.95, winY - winH * 0.06, winW * 0.4, winH);
+      ctx.fillRect(wx + winW * 0.55, winY - winH * 0.06, winW * 0.4, winH);
+    }
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.fillRect(wx - winW * 0.65, winY + winH * 1.18, winW * 1.3, winH * 0.14); // sill
+  };
+  drawWindow(x - w * 0.26, v > 0.1);
+  drawWindow(x + w * 0.26, v > 0.1);
+  if (twoStory) {
+    // upper row
+    ctx.fillStyle = "#87b7d9";
+    ctx.fillRect(x - w * 0.3, y - h * 0.66, winW, winH * 0.8);
+    ctx.fillRect(x + w * 0.16, y - h * 0.66, winW, winH * 0.8);
+    ctx.fillStyle = trim;
+    ctx.fillRect(x - w * 0.32, y - h * 0.68, winW * 1.2, winH * 0.1);
+    ctx.fillRect(x + w * 0.14, y - h * 0.68, winW * 1.2, winH * 0.1);
+  }
+
   if (opts?.doorway) {
-    // Pokemon-style open doorway: a black rounded-top gap set into the facade
+    // open doorway: a dark rounded-top gap set into the facade with a warm
+    // welcome glow — the ONE door, part of the wall itself
     const dw = Math.max(14, w * 0.17);
     ctx.fillStyle = "#0a0a0c";
     ctx.beginPath();
@@ -501,7 +625,11 @@ export function drawHouse(ctx: CanvasRenderingContext2D, x: number, y: number, w
     ctx.lineTo(x + dw / 2, y + h * 0.38);
     ctx.closePath();
     ctx.fill();
-    // warm light spilling out of the open door
+    // door frame
+    ctx.strokeStyle = trim;
+    ctx.lineWidth = Math.max(1.2, w * 0.025);
+    ctx.stroke();
+    // welcome mat + warm light spilling out
     const g = ctx.createRadialGradient(x, y + h * 0.3, 2, x, y + h * 0.3, dw * 1.5);
     g.addColorStop(0, "rgba(255, 214, 140, 0.35)");
     g.addColorStop(1, "rgba(255, 214, 140, 0)");
@@ -510,9 +638,30 @@ export function drawHouse(ctx: CanvasRenderingContext2D, x: number, y: number, w
     ctx.ellipse(x, y + h * 0.38, dw * 1.2, h * 0.13, 0, 0, Math.PI * 2);
     ctx.fill();
   } else {
-    // closed door (non-enterable nests)
+    // closed front door with frame and round handle
+    ctx.fillStyle = trim;
+    ctx.fillRect(x - w * 0.09, y - h * 0.14, w * 0.18, h * 0.52);
     ctx.fillStyle = "#6a4a34";
     ctx.fillRect(x - w * 0.07, y - h * 0.12, w * 0.14, h * 0.5);
+    ctx.fillStyle = "#e8c76a";
+    ctx.beginPath();
+    ctx.arc(x + w * 0.045, y + h * 0.12, Math.max(1, w * 0.016), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // flower box under one window (cozy touch on ~half the houses)
+  if (v > 0.62) {
+    const bx = x - w * 0.26;
+    ctx.fillStyle = trim;
+    ctx.fillRect(bx - winW * 0.55, winY + winH * 1.0, winW * 1.1, winH * 0.16);
+    ctx.fillStyle = "#d97a8a";
+    ctx.beginPath();
+    ctx.arc(bx - winW * 0.3, winY + winH * 0.98, winW * 0.14, 0, Math.PI * 2);
+    ctx.arc(bx, winY + winH * 0.98, winW * 0.14, 0, Math.PI * 2);
+    ctx.arc(bx + winW * 0.3, winY + winH * 0.98, winW * 0.14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#6fae5c";
+    ctx.fillRect(bx - winW * 0.5, winY + winH * 0.94, winW, winH * 0.05);
   }
 }
 

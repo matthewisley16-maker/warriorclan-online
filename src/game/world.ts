@@ -956,6 +956,71 @@ export const areas: AreaDef[] = [
   { id: "mossy-hollow", name: "Mossy Hollow", rect: { x: t(196), y: t(60), w: t(24), h: t(18) } },
 ];
 
+// ---------------------------------------------------------------------------
+// NPC territory zones — soft behavioral borders, not walls. Lore layout:
+// four Clan territories around the center, with UNCLAIMED land on BOTH sides
+// (the west moor/river edge beyond WindClan, and the east wilds past
+// RiverClan's river) plus the neutral Thunderpath, Fourtrees and Highstones.
+// ---------------------------------------------------------------------------
+
+export type TerritoryId =
+  | "thunderclan" | "windclan" | "riverclan" | "shadowclan"
+  | "kittypet" | "rogue" | "unclaimed";
+
+export interface TerritoryZone {
+  id: TerritoryId;
+  rect: Rect;
+}
+
+// Checked top-to-bottom: ShadowClan (north of Thunderpath), then Thunderpath
+// strip, then the south map. ThunderClan's territory sits between the rivers
+// (x 48..152, y 44..128); Twolegplace/Tallpines' south edge is kittypet
+// ground; everything past RiverClan's river or west of the moor edge is
+// unclaimed wilderness (book lore: the forest is ringed by neutral land).
+export const territoryZones: TerritoryZone[] = [
+  // --- north: ShadowClan (pine forest above the Thunderpath) ---
+  { id: "shadowclan", rect: { x: t(46), y: 0, w: t(146), h: t(42) } },
+  // --- the Thunderpath strip itself is no-cat's land ---
+  { id: "unclaimed", rect: { x: 0, y: t(42), w: WORLD_W, h: t(4) } },
+  // --- south of the Thunderpath ---
+  // WindClan: the open moor west of the river (lore: WindClan runs the moor)
+  { id: "windclan", rect: { x: 0, y: t(46), w: t(48), h: WORLD_H - t(46) } },
+  // RiverClan: east of the river (lore: RiverClan owns the river and its banks)
+  { id: "riverclan", rect: { x: t(152), y: t(46), w: WORLD_W - t(152), h: t(130) } },
+  // Twolegplace + farm: kittypet ground (Smudge, Princess, the barn)
+  { id: "kittypet", rect: { x: t(46), y: t(128), w: t(58), h: WORLD_H - t(128) } },
+  { id: "kittypet", rect: { x: t(104), y: t(136), w: t(40), h: t(36) } },
+  // ThunderClan: the forest between the rivers, south to Twolegplace's edge
+  { id: "thunderclan", rect: { x: t(48), y: t(46), w: t(104), h: t(82) } },
+  // --- unclaimed wilderness on BOTH sides of Clan land ---
+  // the far eastern wilds past RiverClan's river (reed pond, mossy hollow)
+  { id: "unclaimed", rect: { x: t(192), y: 0, w: WORLD_W - t(192), h: WORLD_H } },
+  // the deep south below the kittypet streets (silent woods and abandoned fields)
+  { id: "unclaimed", rect: { x: t(46), y: t(176), w: t(146), h: WORLD_H - t(176) } },
+  // remaining pockets: far-south moor edge & below Highstones' slopes are
+  // covered by the windclan/thunderclan zones above; stray gaps default to
+  // "unclaimed" in territoryAt().
+];
+
+/** Which territory a point belongs to (defaults to unclaimed wilderness). */
+export function territoryAt(x: number, y: number): TerritoryId {
+  for (const z of territoryZones) {
+    if (x >= z.rect.x && x < z.rect.x + z.rect.w && y >= z.rect.y && y < z.rect.y + z.rect.h) return z.id;
+  }
+  return "unclaimed";
+}
+
+/** Territory label for HUD/minimap (canon names only; wilds stay neutral). */
+export const TERRITORY_LABELS: Record<TerritoryId, string> = {
+  thunderclan: "ThunderClan",
+  windclan: "WindClan",
+  riverclan: "RiverClan",
+  shadowclan: "ShadowClan",
+  kittypet: "Twolegplace",
+  rogue: "Rogue Grounds",
+  unclaimed: "Unclaimed Wilds",
+};
+
 export function areaAt(x: number, y: number): AreaDef | null {
   // prefer the most specific (smallest) matching area
   let best: AreaDef | null = null;

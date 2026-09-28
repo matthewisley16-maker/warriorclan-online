@@ -16,6 +16,9 @@ import {
   groundMap,
   isSolidPoint,
   npcs,
+  territoryAt,
+  TERRITORY_LABELS,
+  type TerritoryId,
   preyZones,
   trees,
   type GroundKind,
@@ -265,7 +268,53 @@ export type WeatherKind =
   | "clear" | "cloudy" | "rain" | "heavy-rain" | "fog" | "storm" | "wind" | "snow";
 
 const WEATHERS: WeatherKind[] = ["clear", "cloudy", "rain", "heavy-rain", "fog", "storm", "wind", "snow"];
-const WEATHER_WEIGHTS: number[] = [26, 16, 12, 6, 8, 4, 16, 3];
+// Clear/sunny skies are the NORMAL state (~63% clear + ~12% breezy sun = 75%),
+// so unusual weather feels special: rain is uncommon, snow/storms are rare.
+const WEATHER_WEIGHTS: number[] = [63, 15, 4, 1, 3, 1, 12, 1];
+
+/** How long a weather state lasts (engine seconds) once picked. */
+function weatherDuration(w: WeatherKind): number {
+  switch (w) {
+    case "clear":
+    case "wind":
+      return 150 + Math.random() * 150; // long sunny stretches
+    case "cloudy":
+    case "fog":
+      return 70 + Math.random() * 80;
+    case "rain":
+    case "heavy-rain":
+      return 60 + Math.random() * 70;
+    case "snow":
+      return 55 + Math.random() * 50;
+    case "storm":
+      return 40 + Math.random() * 45;
+  }
+}
+
+/**
+ * Weather follows natural transitions instead of jumping:
+ * clear skies never snap straight into a storm, and after any spell of bad
+ * weather the sky usually breaks back to sun — clear is the world's default.
+ */
+function pickWeather(prev: WeatherKind): WeatherKind {
+  // after rain/snow/storm: strongly favor the sky clearing up
+  if (prev !== "clear" && prev !== "wind" && Math.random() < 0.55) return "clear";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const total = WEATHER_WEIGHTS.reduce((a, b) => a + b, 0);
+    let r = Math.random() * total;
+    let pick: WeatherKind = "clear";
+    for (let i = 0; i < WEATHERS.length; i++) {
+      r -= WEATHER_WEIGHTS[i];
+      if (r <= 0) { pick = WEATHERS[i]; break; }
+    }
+    // soften abrupt jumps: bright sky ramps through cloud cover first
+    if ((prev === "clear" || prev === "wind") && (pick === "storm" || pick === "heavy-rain" || pick === "snow")) {
+      pick = "cloudy";
+    }
+    if (pick !== prev || attempt === 3) return pick;
+  }
+  return "clear";
+}
 
 // Ground palettes: [base, alt] per kind index, and night-dark multiplier.
 const GROUND_COLORS: Record<number, [string, string]> = {
@@ -305,16 +354,6 @@ function tintHex(hex: string, f: number): string {
 
 interface EnvParticle {
   x: number; y: number; vx: number; vy: number; r: number; seed: number;
-}
-
-function pickWeather(): WeatherKind {
-  const total = WEATHER_WEIGHTS.reduce((a, b) => a + b, 0);
-  let r = Math.random() * total;
-  for (let i = 0; i < WEATHERS.length; i++) {
-    r -= WEATHER_WEIGHTS[i];
-    if (r <= 0) return WEATHERS[i];
-  }
-  return "clear";
 }
 
 // ---------------------------------------------------------------------------
@@ -1131,6 +1170,10 @@ interface NPCState {
   lastStuckY: number;
   sidestepUntil: number; // engine time until a sidestep waypoint is tried
   sidestepPt: { x: number; y: number } | null;
+  // --- territory: every cat belongs somewhere (book lore) and roams a ---
+  // --- leash around home; wanderers outside their zone walk home ---
+  homeTerritory: TerritoryId;
+  territoryLeash: number;
   // --- den entry: seat booking so two NPCs never collide in one doorway ---
   denId: string | null;
   denSeat: number;
@@ -1151,6 +1194,81 @@ function denSeatsFor(o: WorldObject): { x: number; y: number }[] {
     });
   }
   return seats;
+}
+
+// --- territory helpers (Warriors lore: each cat belongs to its own ground) ---
+
+/** The territory a cat's HOME point sits in (seeded from def.clan + role). */
+function homeTerritoryFor(def: { id: string; clan: string; role: string }): TerritoryId {
+  const n = territoryFindNearest(def.id);
+  if (n) return n;
+  const clan = def.clan;
+  if (clan === "thunderclan" || clan === "windclan" || clan === "riverclan" || clan === "shadowclan") return clan;
+  if (clan === "kittypet") return "kittypet";
+  if (clan === "rogue") return "rogue";
+  // story cats with odd clans (e.g. Yellowfang) follow their listed clan
+  return territoryAt(npcs.find((x) => x.id === def.id)?.home.x ?? CAMP_CENTER.x, npcs.find((x) => x.id === def.id)?.home.y ?? CAMP_CENTER.y) as TerritoryId;
+}
+
+/** Home coords for a cat id (def list lookup). */
+function territoryFindNearest(id: string): TerritoryId | null {
+  const def = npcs.find((d) => d.id === id);
+  if (!def) return null;
+  return territoryAt(def.home.x, def.home.y) as TerritoryId | null;
+}
+
+/** How far a cat may roam from home (px). Kits/elders/queens stay close. */
+function territoryLeashFor(clan: string, role: string): number {
+  const r = role.toLowerCase();
+  if (r.includes("kit")) return 260;
+  if (r.includes("elder")) return 220;
+  if (r.includes("queen")) return 300;
+  if (r.includes("medicine")) return 700;
+  if (clan === "kittypet") return 340;
+  if (clan === "rogue") return 600;
+  if (r.includes("deputy") || r.includes("leader")) return 1000;
+  return 850; // warriors/apprentices patrol widely but never across the map
+}
+
+/**
+ * Clamp a wander/hunt/patrol target into the cat's own ground: if the raw
+ * target falls outside its territory, pull it back toward home until it is
+ * inside. Territories are soft — the cat simply never CHOOSES to cross.
+ */
+function clampTerritoryTarget(
+  def: NPCDef,
+  homeTerr: TerritoryId,
+  leash: number,
+  tx: number,
+  ty: number,
+): { x: number; y: number } {
+  const home = def.home;
+  // territory first: never target another Clan's ground — binary-search the
+  // furthest point along the home->target ray that stays in home territory
+  if (territoryAt(tx, ty) !== homeTerr) {
+    // bisect along the FIXED unit direction home->target (normalized once so
+    // the shrinking upper bound can never skew the sample points)
+    const rlen = Math.hypot(tx - home.x, ty - home.y) || 1;
+    const ux = (tx - home.x) / rlen;
+    const uy = (ty - home.y) / rlen;
+    let lo = 0;
+    let hi = rlen;
+    for (let i = 0; i < 14; i++) {
+      const mid = (lo + hi) / 2;
+      if (territoryAt(home.x + ux * mid, home.y + uy * mid) === homeTerr) lo = mid;
+      else hi = mid;
+    }
+    const d = lo * 0.92;
+    tx = home.x + ux * d;
+    ty = home.y + uy * d;
+  }
+  // leash second (kits, elders, kittypets stay near their dens/houses)
+  const dHome = Math.hypot(tx - home.x, ty - home.y) || 1;
+  if (dHome > leash) {
+    tx = home.x + ((tx - home.x) / dHome) * leash;
+    ty = home.y + ((ty - home.y) / dHome) * leash;
+  }
+  return { x: tx, y: ty };
 }
 
 function scheduleTarget(def: NPCDef, hour: number): { x: number; y: number } | null {
@@ -1367,6 +1485,8 @@ export class GameCanvas {
       lastScheduleHour: -1,
       // deterministic personality from the cat's id
       trait: TRAITS[(n.id.charCodeAt(0) + n.id.length) % TRAITS.length],
+      homeTerritory: homeTerritoryFor({ id: n.id, clan: n.clan, role: n.role }),
+      territoryLeash: territoryLeashFor(n.clan, n.role),
       activity: "settling in",
       ai: "idle" as NpcAiMode,
       preyId: null,
@@ -2106,8 +2226,8 @@ export class GameCanvas {
       this.cb.onClock(hr);
     }
     if (this.time > this.weatherUntil) {
-      this.weather = pickWeather();
-      this.weatherUntil = this.time + 50 + Math.random() * 70;
+      this.weather = pickWeather(this.weather);
+      this.weatherUntil = this.time + weatherDuration(this.weather);
       this.cb.onWeatherChange(this.weather);
     }
 
@@ -2302,7 +2422,18 @@ export class GameCanvas {
       const cadence = dPlayer < 700 ? 1.2 : 4;
       if (!this.paused && !this.dead && this.time >= n.aiThinkAt && !n.convoActive) {
         n.aiThinkAt = this.time + cadence * (0.8 + Math.random() * 0.5);
-        this.npcThink(n, hr, night);
+        // territory watchdog FIRST: a cat displaced out of its home ground
+        // (chase gone wrong, rescue nudge, story teleport) stops everything
+        // and walks home before resuming normal life. Never a teleport.
+        const here = territoryAt(n.x, n.y);
+        const idleish = n.ai === "idle" || n.ai === "wander" || n.ai === "return_home";
+        if (idleish && here !== n.homeTerritory && here !== "unclaimed") {
+          n.ai = "return_home";
+          n.activity = "heading home";
+          n.preyId = null;
+        } else {
+          this.npcThink(n, hr, night);
+        }
       }
       // stuck detection: a moving AI cat that makes no progress for ~1.4s
       // tries a sidestep waypoint; only a genuinely trapped cat (>8s) gets an
@@ -4928,9 +5059,17 @@ export class GameCanvas {
     return bestD < 3000 ? best : null;
   }
 
-  private campEntranceFor(_n: NPCState): { x: number; y: number } {
-    const entrance = allObjects.find((o) => o.id === "entrance");
+  /** The walk-in mouth of the cat's OWN clan camp (patrols arrive/leave here). */
+  private campEntranceFor(n: NPCState): { x: number; y: number } {
+    const id = n.homeTerritory === "windclan" ? "wc-entrance" : "entrance";
+    const entrance = allObjects.find((o) => o.id === id);
     if (entrance) return { x: entrance.x, y: entrance.y + 30 };
+    // RiverClan / ShadowClan camps have no door object: derive the south
+    // mouth from their camp area rect (center bottom + a step outside)
+    const areaId = n.homeTerritory === "riverclan" ? "riverclan-camp"
+      : n.homeTerritory === "shadowclan" ? "shadowclan-camp" : null;
+    const a = areaId ? areas.find((ar) => ar.id === areaId) : null;
+    if (a) return { x: a.rect.x + a.rect.w / 2, y: a.rect.y + a.rect.h / 2 + 30 };
     return { x: CAMP_CENTER.x, y: CAMP_CENTER.y + CAMP_RADIUS };
   }
 
@@ -4972,10 +5111,13 @@ export class GameCanvas {
     if (roll < 0.22) {
       const spot = this.nearestWaterEdge(n.x, n.y);
       if (spot) {
+        // drink INSIDE home ground: the clamp keeps riverbank trips on the
+        // cat's own side of the water (RiverClan fishes its own river)
+        const dp = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, spot.x, spot.y);
         n.ai = "go_drink";
         n.activity = "going to drink";
-        n.tx = spot.x;
-        n.ty = spot.y;
+        n.tx = dp.x;
+        n.ty = dp.y;
         return;
       }
     }
@@ -4984,20 +5126,20 @@ export class GameCanvas {
       n.activity = "hunting";
       const ang = Math.random() * Math.PI * 2;
       const rad = 300 + Math.random() * 800;
-      n.tx = n.def.home.x + Math.cos(ang) * rad;
-      n.ty = n.def.home.y + Math.sin(ang) * rad;
+      const huntPt = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, n.def.home.x + Math.cos(ang) * rad, n.def.home.y + Math.sin(ang) * rad);
+      n.tx = huntPt.x;
+      n.ty = huntPt.y;
       return;
     }
     if (outdoor && roll < 0.58) {
       const e = this.campEntranceFor(n);
       n.ai = "patrol";
       n.activity = "patrolling";
-      n.patrolPoints = [
-        e,
-        { x: n.def.home.x + 380, y: n.def.home.y - 90 },
-        { x: n.def.home.x + 620, y: n.def.home.y + 180 },
-        { x: n.def.home.x + 300, y: n.def.home.y + 390 },
-      ];
+      const clamp = (x: number, y: number) => clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, x, y);
+      const c1 = clamp(n.def.home.x + 380, n.def.home.y - 90);
+      const c2 = clamp(n.def.home.x + 620, n.def.home.y + 180);
+      const c3 = clamp(n.def.home.x + 300, n.def.home.y + 390);
+      n.patrolPoints = [e, c1, c2, c3];
       n.patrolIdx = 0;
       n.tx = e.x;
       n.ty = e.y;
@@ -5014,8 +5156,9 @@ export class GameCanvas {
     if (t === "curious" && roll < 0.75) {
       n.ai = "wander";
       n.activity = "exploring camp";
-      n.tx = n.def.home.x + (Math.random() - 0.5) * 220;
-      n.ty = n.def.home.y + (Math.random() - 0.5) * 160;
+      const wp = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, n.def.home.x + (Math.random() - 0.5) * 220, n.def.home.y + (Math.random() - 0.5) * 160);
+      n.tx = wp.x;
+      n.ty = wp.y;
       return;
     }
     n.pose = (["stretch", "groom", "sit", "sit"] as CatPose[])[Math.floor(Math.random() * 4)];
@@ -5107,8 +5250,9 @@ export class GameCanvas {
           } else {
             const ang = Math.random() * Math.PI * 2;
             const rad = 180 + Math.random() * 480;
-            n.tx = n.def.home.x + Math.cos(ang) * rad;
-            n.ty = n.def.home.y + Math.sin(ang) * rad;
+            const rp = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, n.def.home.x + Math.cos(ang) * rad, n.def.home.y + Math.sin(ang) * rad);
+            n.tx = rp.x;
+            n.ty = rp.y;
           }
         }
         break;

@@ -94,20 +94,38 @@ export const tickWorld = mutation({
     let weatherStartedAt = row.weatherStartedAt;
     let weatherDurationMs = row.weatherDurationMs;
     if (now - weatherStartedAt > weatherDurationMs) {
-      // weighted picker: clear skies dominate, storms are rare (mirrors the
-      // client's local weights so the shared weather feels natural)
+      // Clear/sunny skies are the NORMAL state (~75% with breezy weather);
+      // rain is uncommon, snow/storms are rare treats. After bad weather the
+      // sky usually breaks straight back to sun, and bright skies ramp through
+      // cloud cover instead of snapping into a storm.
       const options = ["clear", "cloudy", "rain", "fog", "wind", "storm", "snow"] as const;
-      const weights = [38, 20, 12, 7, 15, 4, 4];
-      let r = Math.random() * weights.reduce((a, b) => a + b, 0);
-      let idx = 0;
-      for (let i = 0; i < options.length; i++) {
-        r -= weights[i];
-        if (r <= 0) { idx = i; break; }
+      const weights = [63, 15, 4, 3, 12, 1.5, 1.5];
+      const prev = row.weather as (typeof options)[number];
+      let pick: (typeof options)[number] = "clear";
+      for (let attempt = 0; attempt < 4; attempt++) {
+        let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+        pick = "clear";
+        for (let i = 0; i < options.length; i++) {
+          r -= weights[i];
+          if (r <= 0) { pick = options[i]; break; }
+        }
+        if (prev !== "clear" && prev !== "wind" && Math.random() < 0.55) {
+          pick = "clear"; // bad spell over: back to sun
+        }
+        if ((prev === "clear" || prev === "wind") && (pick === "storm" || pick === "snow")) {
+          pick = "cloudy"; // smooth transition
+        }
+        if (pick !== prev || attempt === 3) break;
       }
-      weather = options[idx];
+      weather = pick;
       weatherIntensity = weather === "storm" ? 1 : weather === "rain" ? 0.6 : 0.3;
       weatherStartedAt = now;
-      weatherDurationMs = 60_000 + Math.random() * 120_000;
+      // clear spells LAST (it's the normal condition); unsettled weather is shorter
+      weatherDurationMs =
+        weather === "clear" || weather === "wind" ? 240_000 + Math.random() * 240_000
+        : weather === "cloudy" || weather === "fog" ? 110_000 + Math.random() * 120_000
+        : weather === "storm" ? 70_000 + Math.random() * 60_000
+        : 90_000 + Math.random() * 90_000;
     }
     await ctx.db.patch(row._id, {
       serverTick: now,

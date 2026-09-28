@@ -69,7 +69,9 @@ const LAYERS: Record<AmbienceLayerId, LayerSpec> = {
   rainHeavy: { src: "ambience/rain_heavy.mp3", loop: true, gain: 0.85 },
   storm: { src: "ambience/storm.ogg", loop: true, gain: 0.95 },
   wind: { src: "ambience/wind.ogg", loop: true, gain: 0.9 },
-  river: { src: "ambience/river.mp3", loop: true, gain: 0.85 },
+  // river bed: kept BELOW dialogue/mews/footsteps — closer to the water it
+  // gets louder (see computeAmbience's riverCloseness), but never drowns cats
+  river: { src: "ambience/river.mp3", loop: true, gain: 0.55 },
 };
 
 export type SfxName =
@@ -138,6 +140,9 @@ export type SceneInput = {
   weather: string; // WeatherKind from the engine
   clock: number; // 0..23
   mode: string; // GameMode
+  /** 0..1 — how close the cat is to river water (1 = at the bank). Drives
+   *  the river layer's volume so the flow is spatial, not a flat loop. */
+  riverCloseness?: number;
 };
 
 /** Biome base layer for an area id. */
@@ -165,9 +170,19 @@ export function computeAmbience(input: SceneInput): Partial<Record<AmbienceLayer
   const out: Partial<Record<AmbienceLayerId, number>> = {};
 
   const biome = biomeLayer(input.areaId);
-  if (biome === "river") out.river = 0.85;
-  else if (biome === "wind") out.wind = 0.8;
-  else if (biome === "forestDay") out.forestDay = 0.65;
+  // river volume: distance-based + capped so it sits UNDER dialogue, mews and
+  // footsteps. At the bank it's clearly audible; a few hundred paces in it's
+  // a quiet wash; deep in the territory it fades to nearly nothing.
+  const closeness = Math.max(0, Math.min(1, input.riverCloseness ?? 1));
+  if (biome === "river") {
+    out.river = 0.4 + 0.55 * closeness;
+  } else if (biome === "wind") out.wind = 0.8;
+  else {
+    out.forestDay = 0.65;
+    // even outside RiverClan land, standing near a riverbank deserves a
+    // faint water hush (west river borders ThunderClan territory)
+    if (closeness > 0.55) out.river = 0.3 * ((closeness - 0.55) / 0.45);
+  }
 
   const twoleg = input.areaId === "twolegplace" || input.areaId === "farm";
   const birdBase = twoleg ? 0.25 : biome === "forestDay" ? 0.5 : 0.3;
@@ -456,15 +471,50 @@ export class AudioEngine {
     }
   }
 
-  /** Randomized cat vocalization: mews vary in file + pitch per call. */
-  playMew(kind: "talk" | "ambient" = "talk") {
-    const pool: SfxName[] = kind === "ambient"
-      ? ["cat_mew", "cat_mew2", "cat_mew3", "cat_mew4", "cat_purr"]
-      : ["cat_mew", "cat_mew2", "cat_mew3", "cat_mew4"];
-    const name = pool[Math.floor(Math.random() * pool.length)];
+  /** A question mew: a short natural-sounding rising tone layered over the
+   *  sampled mew so the ending clearly lifts ("mew-up?"). Soft, not cartoon. */
+  playMewQuestion() {
+    this.playMew("question");
+    if (!this.started || this.settings.muteSfx || this.settings.sfx <= 0.001 || this.settings.master <= 0.001) return;
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime + 0.12; // rises just after the sampled mew starts
+    const vol = this.settings.sfx * this.settings.master * 0.1;
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(620, t0);
+    osc.frequency.exponentialRampToValueAtTime(1150, t0 + 0.16);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
+    osc.connect(g).connect(this.sfxGain);
+    osc.start(t0);
+    osc.stop(t0 + 0.22);
+  }
+
+  /** Randomized cat vocalization: mews vary in file + pitch per call.
+   *  Context kinds shape the voice: greetings are short and bright, questions
+   *  rise at the end, kittens/young cats sound smaller, and idle chatter is
+   *  soft. Every call re-rolls the sample + pitch so nothing sounds canned. */
+  playMew(kind: "talk" | "ambient" | "greeting" | "question" | "young" | "idle" = "talk") {
+    const profile: Record<string, { pool: SfxName[]; rate: [number, number]; vol: [number, number] }> = {
+      talk: { pool: ["cat_mew", "cat_mew2", "cat_mew3", "cat_mew4"], rate: [0.85, 1.25], vol: [0.55, 0.75] },
+      ambient: { pool: ["cat_mew", "cat_mew2", "cat_mew3", "cat_mew4", "cat_purr"], rate: [0.85, 1.25], vol: [0.5, 0.7] },
+      // greeting: quick, cheerful, slightly higher
+      greeting: { pool: ["cat_mew2", "cat_mew4", "cat_mew"], rate: [1.15, 1.45], vol: [0.55, 0.7] },
+      // question: rising intonation — pitch sweeps up across the mew
+      question: { pool: ["cat_mew2", "cat_mew3", "cat_mew"], rate: [1.0, 1.2], vol: [0.5, 0.65] },
+      // young cats: smaller, softer, faster
+      young: { pool: ["cat_mew2", "cat_mew3", "cat_mew4"], rate: [1.3, 1.6], vol: [0.42, 0.58] },
+      // quiet idle chatter
+      idle: { pool: ["cat_mew", "cat_mew2", "cat_mew3", "cat_mew4", "cat_purr"], rate: [0.9, 1.2], vol: [0.32, 0.48] },
+    };
+    const p = profile[kind] ?? profile.talk;
+    const name = p.pool[Math.floor(Math.random() * p.pool.length)];
     this.playSfx(name, {
-      volume: 0.55 + Math.random() * 0.2,
-      rate: 0.85 + Math.random() * 0.4,
+      volume: p.vol[0] + Math.random() * (p.vol[1] - p.vol[0]),
+      rate: p.rate[0] + Math.random() * (p.rate[1] - p.rate[0]),
       throttleMs: 220,
     });
   }
