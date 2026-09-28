@@ -79,7 +79,7 @@ export type SfxName =
   | "cat_mew" | "cat_mew2" | "cat_mew3" | "cat_mew4" | "cat_purr"
   | "splash" | "eat" | "herb" | "drink" | "hit" | "shake";
 /** Engine-side sfx names (engine.ts) -> audio slots. */
-export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit";
+export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit" | "npcstep";
 
 const SFX_FILES: Record<SfxName, string> = {
   ui_click: "sfx/ui_click.wav",
@@ -335,6 +335,8 @@ export class AudioEngine {
   /** One-shot pooled SFX. Throttled to avoid machine-gun stacking. */
   playSfx(name: SfxName, opts: { volume?: number; rate?: number; throttleMs?: number } = {}) {
     if (!this.started || this.settings.muteSfx || this.settings.sfx <= 0.001 || this.settings.master <= 0.001) return;
+    // a suspended context would silently eat every one-shot; nudge it awake
+    if (this.ctx && this.ctx.state === "suspended") void this.ctx.resume();
     const now = performance.now();
     const throttle = opts.throttleMs ?? 90;
     if (throttle > 0 && now - (this.lastSfx.get(name) ?? 0) < throttle) return;
@@ -342,9 +344,9 @@ export class AudioEngine {
     const vol = (opts.volume ?? 1) * (SFX_GAIN[name] ?? 0.5) * this.settings.sfx * this.settings.master;
     if (vol <= 0.001) return;
     const buf = this.getBuffer(name);
-    if (!buf) return;
+    if (buf === "failed") return;
     if (this.ctx && this.sfxGain) {
-      if (buf === "loading" || buf === "failed") return;
+      if (buf === "loading" || buf === null) return;
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
       src.playbackRate.value = opts.rate ?? 1;
@@ -361,6 +363,99 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * Synthesized vocalizations for sounds we have no asset for (hiss, growl,
+   * chirp, trill). Short, quiet, throttled — real WebAudio, no placeholders.
+   */
+  playVocal(kind: "hiss" | "growl" | "chirp" | "trill") {
+    if (!this.started || this.settings.muteSfx || this.settings.sfx <= 0.001 || this.settings.master <= 0.001) return;
+    if (this.ctx && this.ctx.state === "suspended") void this.ctx.resume();
+    if (!this.ctx || !this.sfxGain) return;
+    const now = performance.now();
+    if (now - (this.lastSfx.get("vocal-" + kind) ?? 0) < 250) return;
+    this.lastSfx.set("vocal-" + kind, now);
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    const vol = this.settings.sfx * this.settings.master * 0.5;
+    const out = ctx.createGain();
+    out.gain.value = vol;
+    out.connect(this.sfxGain);
+    if (kind === "hiss") {
+      // band-passed noise burst with a fast attack and slow tail
+      const len = 0.5;
+      const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * len), ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 5200;
+      bp.Q.value = 0.8;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + len);
+      src.connect(bp).connect(g).connect(out);
+      src.start(t0);
+      src.stop(t0 + len);
+    } else if (kind === "growl") {
+      // low sawtooth with a slow amplitude wobble
+      const osc = ctx.createOscillator();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(82, t0);
+      osc.frequency.linearRampToValueAtTime(64, t0 + 0.55);
+      const lp = ctx.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 320;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.4, t0 + 0.06);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.6);
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 11;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0.12;
+      lfo.connect(lfoGain).connect(g.gain);
+      osc.connect(lp).connect(g).connect(out);
+      osc.start(t0); lfo.start(t0);
+      osc.stop(t0 + 0.65); lfo.stop(t0 + 0.65);
+    } else if (kind === "chirp") {
+      // two quick rising chirps (bird-like chattering)
+      for (let i = 0; i < 2; i++) {
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        const st = t0 + i * 0.11;
+        osc.frequency.setValueAtTime(1500, st);
+        osc.frequency.exponentialRampToValueAtTime(2400, st + 0.08);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, st);
+        g.gain.exponentialRampToValueAtTime(0.35, st + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, st + 0.09);
+        osc.connect(g).connect(out);
+        osc.start(st);
+        osc.stop(st + 0.1);
+      }
+    } else {
+      // trill: a soft sine warbled at ~20 Hz
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      const am = ctx.createOscillator();
+      am.frequency.value = 19;
+      const amGain = ctx.createGain();
+      amGain.gain.value = 220;
+      am.connect(amGain).connect(osc.frequency);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.42);
+      osc.connect(g).connect(out);
+      osc.start(t0); am.start(t0);
+      osc.stop(t0 + 0.45); am.stop(t0 + 0.45);
+    }
+  }
+
   /** Randomized cat vocalization: mews vary in file + pitch per call. */
   playMew(kind: "talk" | "ambient" = "talk") {
     const pool: SfxName[] = kind === "ambient"
@@ -374,12 +469,12 @@ export class AudioEngine {
     });
   }
 
-  /** Random footstep with pitch variation. */
-  playStep(kind: StepKind) {
+  /** Random footstep with pitch variation (mult scales walk/run/crouch). */
+  playStep(kind: StepKind, mult = 1) {
     const files = STEP_FILES[kind];
     const name = files[Math.floor(Math.random() * files.length)];
     if (!this.started || this.settings.muteSfx) return;
-    const vol = 0.35 * this.settings.sfx * this.settings.master;
+    const vol = 0.35 * mult * this.settings.sfx * this.settings.master;
     if (vol <= 0.001) return;
     if (this.ctx && this.sfxGain) {
       this.loadBufferUrl(BASE + name, (buf) => {
@@ -479,9 +574,10 @@ export class AudioEngine {
 
   private getBuffer(name: SfxName): AudioBuffer | "loading" | "failed" | null {
     const url = BASE + SFX_FILES[name];
-    if (!this.ctx) return null;
     const cached = this.buffers.get(url);
     if (cached) return cached;
+    // kick off the fetch even without a ctx: the AudioContext can appear
+    // later (first user gesture) and the buffer will already be warm
     this.loadBufferUrl(url);
     return "loading";
   }
@@ -493,7 +589,7 @@ export class AudioEngine {
       return;
     }
     if (cached === "failed") { onReady?.(null); return; }
-    if (!this.ctx) { onReady?.(null); return; }
+    if (this.ctx === null) { this.buffers.set(url, "failed"); onReady?.(null); return; }
     this.buffers.set(url, "loading");
     void fetch(url)
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))

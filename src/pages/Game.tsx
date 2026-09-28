@@ -33,8 +33,8 @@ import { WorldMapCanvas, MapLegend, WorldMapOverlay, MAP_SPOTS } from "./WorldMa
 import {
   ChatPanel,
   CodexPanel,
-  EMOTES,
   EmoteBar,
+  type AnimAction,
   TouchControls,
   CLANS,
   formatHour,
@@ -310,6 +310,11 @@ export default function Game() {
       },
       onSfx: (name, opts) => {
         if (name === "mew") audio().playMew("ambient");
+        else if (name === "npcstep") {
+          const pos = gameRef.current?.engineState();
+          const st = stepKindFor(posAreaIdRef.current, false, groundIndexAt(pos?.x ?? 0, pos?.y ?? 0));
+          audio().playStep(st, opts.volume ?? 0.4);
+        }
         else audio().playSfx(name, opts);
       },
       onDeath: (cause, respawn) => {
@@ -662,11 +667,14 @@ export default function Game() {
       } else if (moving) {
         const px = s.x, py = s.y;
         const kind = stepKindFor(posAreaIdRef.current, !!interiorRef.current, groundIndexAt(px, py));
-        const cadence = s.movementState === "run" ? 260 : s.movementState === "crouch" ? 460 : 340;
+        // cadence + volume follow the gait: run = fast & noticeable,
+        // walk = even, crouch/sneak = slow & quiet (stealth matters for prey)
+        const cadence = s.movementState === "run" ? 230 : s.movementState === "crouch" ? 460 : 340;
+        const mult = s.movementState === "run" ? 1.5 : s.movementState === "crouch" ? 0.45 : 1;
         const last = lastStepRef.current;
         if (performance.now() - last >= cadence) {
           lastStepRef.current = performance.now();
-          audio().playStep(kind);
+          audio().playStep(kind, mult);
         }
       }
     }, 120);
@@ -1003,19 +1011,24 @@ export default function Game() {
   );
 
   const handleEmote = useCallback(
-    (e: (typeof EMOTES)[number]) => {
+    (e: AnimAction) => {
       const g = gameRef.current;
       if (!g) return;
       if (e.kind === "pose") {
-        g.setPose(e.label.toLowerCase() as "sit" | "sleep" | "groom" | "crouch", 5);
-        if (e.label.toLowerCase() === "sleep") {
+        g.setPose(e.pose, 5);
+        if (e.pose === "sleep") {
           g.rest(55);
           audio().playSfx("ui_confirm", { volume: 0.4, throttleMs: 500 });
           setDialogue({ name: "Rest", text: "You curl up and drift off. You wake feeling rested. (+energy)" });
           window.setTimeout(() => setDialogue((d) => (d && d.name === "Rest" ? null : d)), 4000);
         }
-      } else {
+      } else if (e.kind === "vocal") {
+        // real audio: sampled mews (randomized) or synthesized hiss/growl/chirp/trill
+        if (e.vocal === "meow") audio().playMew("talk");
+        else audio().playVocal(e.vocal);
         g.setEmote(e.icon);
+      } else {
+        g.setEmote(e.emote);
       }
     },
     [],
@@ -1277,7 +1290,7 @@ export default function Game() {
       </AnimatePresence>
 
       {/* Emote bar */}
-      <EmoteBar onEmote={handleEmote} />
+      <EmoteBar onAction={handleEmote} />
 
       {/* Touch controls — mobile/tablet only; the buttons feed the SAME
           engine input pipeline the keyboard uses (same movement code, same

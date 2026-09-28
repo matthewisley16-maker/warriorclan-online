@@ -196,34 +196,111 @@ export function ChatPanel({
 // Emote bar
 // ---------------------------------------------------------------------------
 
-export const EMOTES: { label: string; icon: string; kind: "pose" | "emote" }[] = [
-  { label: "Sit", icon: "🐱", kind: "pose" },
-  { label: "Sleep", icon: "💤", kind: "pose" },
-  { label: "Groom", icon: "🫧", kind: "pose" },
-  { label: "Crouch", icon: "🐍", kind: "pose" },
-  { label: "Meow", icon: "🗣️", kind: "emote" },
-  { label: "Purr", icon: "💛", kind: "emote" },
-  { label: "Hiss", icon: "😤", kind: "emote" },
-  { label: "Happy tail", icon: "〰️", kind: "emote" },
+export type AnimAction =
+  | { kind: "pose"; label: string; icon: string; pose: "sit" | "sleep" | "groom" | "stretch" | "crouch" }
+  | { kind: "emote"; label: string; icon: string; emote: string }
+  | { kind: "vocal"; label: string; icon: string; vocal: "meow" | "hiss" | "growl" | "chirp" | "trill" };
+
+/** Every action here is real: poses drive the sprite, emotes render over the
+ *  cat, vocalizations play actual audio (mew asset or WebAudio synthesis). */
+export const ANIM_TABS: { tab: string; icon: string; actions: AnimAction[] }[] = [
+  {
+    tab: "Social",
+    icon: "🐾",
+    actions: [
+      { kind: "pose", label: "Sit", icon: "🐱", pose: "sit" },
+      { kind: "pose", label: "Lie down", icon: "💤", pose: "sleep" },
+      { kind: "pose", label: "Groom", icon: "🫧", pose: "groom" },
+      { kind: "pose", label: "Stretch", icon: "〰️", pose: "stretch" },
+      { kind: "emote", label: "Look around", icon: "👀", emote: "..." },
+      { kind: "emote", label: "Sniff", icon: "👃", emote: "~" },
+    ],
+  },
+  {
+    tab: "Emotes",
+    icon: "😊",
+    actions: [
+      { kind: "emote", label: "Happy", icon: "😀", emote: "😊" },
+      { kind: "emote", label: "Excited", icon: "✨", emote: "✨" },
+      { kind: "emote", label: "Confused", icon: "❓", emote: "❓" },
+      { kind: "emote", label: "Surprised", icon: "❗", emote: "❗" },
+      { kind: "emote", label: "Sad", icon: "💧", emote: "💧" },
+      { kind: "emote", label: "Angry", icon: "💢", emote: "💢" },
+      { kind: "emote", label: "Scared", icon: "🙀", emote: "🙀" },
+      { kind: "emote", label: "Proud", icon: "👑", emote: "👑" },
+      { kind: "emote", label: "Tired", icon: "😴", emote: "😴" },
+    ],
+  },
+  {
+    tab: "Actions",
+    icon: "⚡",
+    actions: [
+      { kind: "pose", label: "Crouch", icon: "🐍", pose: "crouch" },
+      { kind: "emote", label: "Scratch", icon: "🪵", emote: "🪵" },
+      { kind: "emote", label: "Dig", icon: "🕳️", emote: "🕳️" },
+      { kind: "emote", label: "Play", icon: "🧶", emote: "🧶" },
+      { kind: "emote", label: "Shake fur", icon: "💨", emote: "💨" },
+      { kind: "emote", label: "Wag tail", icon: "〰️", emote: "〰️" },
+    ],
+  },
+  {
+    tab: "Voice",
+    icon: "🗣️",
+    actions: [
+      { kind: "vocal", label: "Meow", icon: "🗣️", vocal: "meow" },
+      { kind: "vocal", label: "Hiss", icon: "😤", vocal: "hiss" },
+      { kind: "vocal", label: "Growl", icon: "😾", vocal: "growl" },
+      { kind: "vocal", label: "Chirp", icon: "🐦", vocal: "chirp" },
+      { kind: "vocal", label: "Trill", icon: "🎵", vocal: "trill" },
+    ],
+  },
 ];
 
-export function EmoteBar({ onEmote }: { onEmote: (e: (typeof EMOTES)[number]) => void }) {
+export function EmoteBar({
+  onAction,
+}: {
+  onAction: (a: AnimAction) => void;
+}) {
+  const [tab, setTab] = useState(0);
+  const current = ANIM_TABS[tab];
   return (
-    <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 gap-1 rounded-2xl border border-border/60 bg-card/90 p-1.5 shadow-lg backdrop-blur-sm">
-      {EMOTES.map((e) => (
-        <button
-          key={e.label}
-          title={e.label}
-          // Don't steal keyboard focus on click, so Space/Enter keep
-          // driving the game instead of re-triggering the emote.
-          onMouseDown={(ev) => ev.preventDefault()}
-          onClick={() => onEmote(e)}
-          className="flex size-9 flex-col items-center justify-center rounded-xl text-base transition-colors hover:bg-muted"
-        >
-          <span>{e.icon}</span>
-        </button>
-      ))}
-    </div>
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-2xl border border-border/60 bg-card/95 p-1.5 shadow-lg backdrop-blur-md"
+    >
+      <div className="flex items-center gap-1 px-1 pb-1">
+        {ANIM_TABS.map((t, i) => (
+          <button
+            key={t.tab}
+            onClick={() => setTab(i)}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors",
+              i === tab ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+            )}
+          >
+            <span className="mr-1">{t.icon}</span>
+            {t.tab}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-1 border-t border-border/60 pt-1">
+        {current.actions.map((e) => (
+          <button
+            key={e.label}
+            title={e.label}
+            // Don't steal keyboard focus on click, so Space/Enter keep
+            // driving the game instead of re-triggering the animation.
+            onMouseDown={(ev) => ev.preventDefault()}
+            onClick={() => onAction(e)}
+            className="flex size-9 flex-col items-center justify-center rounded-xl text-base transition-colors hover:bg-muted active:scale-90"
+          >
+            <span>{e.icon}</span>
+            <span className="sr-only">{e.label}</span>
+          </button>
+        ))}
+      </div>
+    </motion.div>
   );
 }
 

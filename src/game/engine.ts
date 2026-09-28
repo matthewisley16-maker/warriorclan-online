@@ -983,6 +983,10 @@ const PREY_MAX = 38;
 // NPC schedule resolution
 // ---------------------------------------------------------------------------
 
+type NpcAiMode =
+  | "idle" | "wander" | "patrol" | "hunt_stalk" | "hunt_chase"
+  | "carry_home" | "deliver" | "return_home";
+
 interface NPCState {
   def: NPCDef;
   x: number;
@@ -994,6 +998,16 @@ interface NPCState {
   waitUntil: number;
   phase: number;
   lastScheduleHour: number;
+  // --- lightweight personality + life sim (behavior modifiers, not a new AI) ---
+  trait: "brave" | "cautious" | "curious" | "social" | "quiet" | "playful" | "lazy";
+  activity: string;
+  ai: NpcAiMode;
+  preyId: string | null;
+  patrolPoints: { x: number; y: number }[];
+  patrolIdx: number;
+  aiThinkAt: number;
+  mewAt: number;
+  stepAt: number; // last audible footstep (performance.now ms)
 }
 
 function scheduleTarget(def: NPCDef, hour: number): { x: number; y: number } | null {
@@ -1089,6 +1103,10 @@ export class GameCanvas {
   private _needs = new SurvivalNeeds();
   /** ambient NPC mew throttle */
   private lastNpcMewAt = 0;
+  /** cached fresh-kill pile spot (resolved lazily) */
+  private campFreshKill: { x: number; y: number } | null = null;
+  /** prey deposited by NPC hunters this session (pile grows visually) */
+  private campPreyBonus = new Map<string, number>();
 
   private camX = 0;
   private camY = 0;
@@ -1167,6 +1185,7 @@ export class GameCanvas {
     this.py = spawn.y;
     this.camX = spawn.x;
     this.camY = spawn.y;
+    const TRAITS: NPCState["trait"][] = ["brave", "cautious", "curious", "social", "quiet", "playful", "lazy"];
     this.npcStates = npcs.map((n) => ({
       def: n,
       x: n.home.x,
@@ -1178,6 +1197,16 @@ export class GameCanvas {
       waitUntil: 0,
       phase: Math.random() * Math.PI * 2,
       lastScheduleHour: -1,
+      // deterministic personality from the cat's id
+      trait: TRAITS[(n.id.charCodeAt(0) + n.id.length) % TRAITS.length],
+      activity: "settling in",
+      ai: "idle" as NpcAiMode,
+      preyId: null,
+      patrolPoints: [],
+      patrolIdx: 0,
+      aiThinkAt: Math.random() * 4,
+      mewAt: 0,
+      stepAt: 0,
     }));
     this.spawnPrey(80);
 
@@ -1944,47 +1973,39 @@ export class GameCanvas {
     this.camX += (this.px - this.camX) * lerp;
     this.camY += (this.py - this.camY) * lerp;
 
-    // --- NPC schedules + movement ---
+    // --- NPC life: schedules, personalities, patrols, hunting (throttled
+    // decisions; movement integrates every frame along the world map) ---
+    const night = this.nightAlpha() > 0.6;
     for (const n of this.npcStates) {
+      // scheduled destinations still apply (dens/night spots) when idle
       const target = scheduleTarget(n.def, hr);
-      if (target && hr !== n.lastScheduleHour) {
+      if (target && hr !== n.lastScheduleHour && n.ai === "idle" && n.def.wander) {
         n.tx = target.x;
         n.ty = target.y;
         n.lastScheduleHour = hr;
+        n.ai = "wander";
       }
-      const dist = Math.hypot(n.tx - n.x, n.ty - n.y);
-      if (n.pose !== "walk" && this.time > n.waitUntil) n.pose = "walk";
-      if (n.pose === "walk" && dist > 8) {
-        const sp = 46 * dt;
-        const ux = (n.tx - n.x) / (dist || 1);
-        const uy = (n.ty - n.y) / (dist || 1);
-        if (!isSolidPoint(n.x + ux * sp + Math.sign(ux) * 8, n.y)) n.x += ux * sp;
-        if (!isSolidPoint(n.x, n.y + uy * sp + Math.sign(uy) * 8)) n.y += uy * sp;
-        if (Math.abs(ux) > 0.2) n.facing = ux > 0 ? 1 : -1;
-      } else if (n.pose === "walk" && dist <= 8) {
-        // arrive: idle
-        n.pose = Math.random() < 0.5 ? "sit" : "groom";
-        n.waitUntil = this.time + 3 + Math.random() * 5;
-      } else if (n.pose !== "walk" && n.def.wander && this.time > n.waitUntil) {
-        const ang = Math.random() * Math.PI * 2;
-        const rad = 40 + Math.random() * 80;
-        const nx = n.def.home.x + Math.cos(ang) * rad;
-        const ny = n.def.home.y + Math.sin(ang) * rad;
-        if (!isSolidPoint(nx, ny)) {
-          n.tx = nx;
-          n.ty = ny;
-          n.pose = "walk";
-        }
+      // decision tick: distant cats think every ~4s, nearby every ~1.2s
+      const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
+      const cadence = dPlayer < 700 ? 1.2 : 4;
+      if (!this.paused && !this.dead && this.time >= n.aiThinkAt) {
+        n.aiThinkAt = this.time + cadence * (0.8 + Math.random() * 0.5);
+        this.npcThink(n, hr, night);
       }
-      // ambient chatter: an idling cat nearby occasionally speaks
+      this.npcAct(n, dt);
+      // ambient chatter + rare vocalization for nearby idlers
       if (
         this.cb.onNpcIdle &&
         n.pose !== "walk" &&
         !this.paused &&
         Math.random() < 0.0012 &&
-        Math.hypot(n.x - this.px, n.y - this.py) < 200
+        dPlayer < 200
       ) {
         this.cb.onNpcIdle(n.def.name, n.def.lines[Math.floor(Math.random() * n.def.lines.length)]);
+      }
+      if (!this.paused && dPlayer < 420 && n.pose !== "sleep" && performance.now() - n.mewAt > 14000 && Math.random() < 0.004) {
+        n.mewAt = performance.now();
+        this.engineSfx("mew", { volume: dPlayer < 200 ? 0.5 : 0.3, throttleMs: 900 });
       }
     }
 
@@ -2711,7 +2732,7 @@ export class GameCanvas {
             case "log": this.drawLog(o.x, o.y, w, h); break;
             case "rock": this.drawRock(o.x, o.y, w, h); break;
             case "stone": this.drawStone(o.x, o.y, w, h); break;
-            case "fresh-kill": drawFreshKillPile(ctx, o.x, o.y); break;
+            case "fresh-kill": drawFreshKillPile(ctx, o.x, o.y, this.campPreyBonus.get(o.id) ?? 0); break;
             case "stump": this.drawStump(o.x, o.y, w * 0.45); break;
             case "tallrock-big": drawTallRock(ctx, o.x, o.y, w, h); break;
             case "house": drawHouse(ctx, o.x, o.y, w, h, { doorway: !!o.interior }); break;
@@ -4337,6 +4358,232 @@ export class GameCanvas {
    * if the timeline is exhausted (late packet), coast briefly along the last
    * velocity, then hold position; large desyncs snap (authoritative fix).
    */
+
+  // =================== NPC life-simulation AI ===================
+  // Lightweight: personality modifies probabilities inside ONE state machine.
+  // Decisions are throttled (nearby ~1.2s, far ~4s); movement integrates
+  // every frame with collision, so no cat ever teleports.
+
+  private freshKillSpot(): { x: number; y: number } | null {
+    if (this.campFreshKill) return this.campFreshKill;
+    const pile = allObjects.find((o) => o.interact === "fresh-kill");
+    if (!pile) return null;
+    this.campFreshKill = { x: pile.x, y: pile.y };
+    return this.campFreshKill;
+  }
+
+  private campEntranceFor(_n: NPCState): { x: number; y: number } {
+    const entrance = allObjects.find((o) => o.id === "entrance");
+    if (entrance) return { x: entrance.x, y: entrance.y + 30 };
+    return { x: CAMP_CENTER.x, y: CAMP_CENTER.y + CAMP_RADIUS };
+  }
+
+  private npcThink(n: NPCState, _hr: number, night: boolean) {
+    if (n.ai !== "idle") return; // mid-activity cats finish first
+    if (this.time < n.waitUntil) return;
+    const t = n.trait;
+    const lazy = t === "lazy" ? 0.5 : 1;
+    const outdoor = /warrior|deputy|leader|apprentice|hunter|guard/i.test(n.def.role) || n.def.wander;
+    const roll = Math.random();
+    if (night && roll < 0.55 * lazy) {
+      n.ai = "wander";
+      n.activity = "curling up to sleep";
+      n.tx = n.def.home.x + (Math.random() - 0.5) * 40;
+      n.ty = n.def.home.y + (Math.random() - 0.5) * 40;
+      return;
+    }
+    if (roll < 0.16) {
+      const pile = this.freshKillSpot();
+      if (pile) {
+        n.ai = "wander";
+        n.activity = "going to eat";
+        n.tx = pile.x;
+        n.ty = pile.y + 14;
+        return;
+      }
+    }
+    if (outdoor && roll < 0.42 && (this.weather === "clear" || this.weather === "cloudy" || this.weather === "wind")) {
+      n.ai = "hunt_stalk";
+      n.activity = "hunting";
+      const ang = Math.random() * Math.PI * 2;
+      const rad = 200 + Math.random() * 500;
+      n.tx = n.def.home.x + Math.cos(ang) * rad;
+      n.ty = n.def.home.y + Math.sin(ang) * rad;
+      return;
+    }
+    if (outdoor && roll < 0.58) {
+      const e = this.campEntranceFor(n);
+      n.ai = "patrol";
+      n.activity = "patrolling";
+      n.patrolPoints = [
+        e,
+        { x: n.def.home.x + 260, y: n.def.home.y - 60 },
+        { x: n.def.home.x + 420, y: n.def.home.y + 120 },
+        { x: n.def.home.x + 200, y: n.def.home.y + 260 },
+      ];
+      n.patrolIdx = 0;
+      n.tx = e.x;
+      n.ty = e.y;
+      return;
+    }
+    const pile2 = this.freshKillSpot();
+    if (t === "social" && pile2 && roll < 0.8) {
+      n.ai = "wander";
+      n.activity = "chatting near the pile";
+      n.tx = pile2.x + (Math.random() - 0.5) * 90;
+      n.ty = pile2.y + 20 + Math.random() * 30;
+      return;
+    }
+    if (t === "curious" && roll < 0.75) {
+      n.ai = "wander";
+      n.activity = "exploring camp";
+      n.tx = n.def.home.x + (Math.random() - 0.5) * 220;
+      n.ty = n.def.home.y + (Math.random() - 0.5) * 160;
+      return;
+    }
+    n.pose = (["stretch", "groom", "sit", "sit"] as CatPose[])[Math.floor(Math.random() * 4)];
+    n.waitUntil = this.time + 2.5 + Math.random() * 4;
+  }
+
+  private npcAct(n: NPCState, dt: number) {
+    const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
+    const arrive = 10;
+    const walkSpeed = 46;
+    const runSpeed = 120;
+
+    const stepTo = (tx: number, ty: number, sp: number): number => {
+      const dist = Math.hypot(tx - n.x, ty - n.y);
+      if (dist > 0.5) {
+        const ux = (tx - n.x) / dist;
+        const uy = (ty - n.y) / dist;
+        const step = Math.min(sp * dt, dist);
+        if (!isSolidPoint(n.x + ux * step + Math.sign(ux) * 8, n.y)) n.x += ux * step;
+        if (!isSolidPoint(n.x, n.y + uy * step + Math.sign(uy) * 8)) n.y += uy * step;
+        if (Math.abs(ux) > 0.2) n.facing = ux > 0 ? 1 : -1;
+        if (n.pose !== "walk" && n.pose !== "shake" && n.pose !== "crouch") n.pose = "walk";
+        // soft pawsteps for nearby NPC movement (cadence follows gait)
+        const nowMs = performance.now();
+        if (dPlayer < 340 && nowMs - n.stepAt > (sp > 100 ? 280 : 430)) {
+          n.stepAt = nowMs;
+          this.engineSfx("npcstep", { volume: Math.max(0.15, 0.5 * (1 - dPlayer / 380)) });
+        }
+      }
+      return dist;
+    };
+
+    switch (n.ai) {
+      case "wander": {
+        const d = stepTo(n.tx, n.ty, walkSpeed);
+        if (d <= arrive) {
+          const nightNow = this.nightAlpha() > 0.6;
+          n.pose = nightNow && Math.hypot(n.x - n.def.home.x, n.y - n.def.home.y) < 60 ? "sleep" : (["sit", "groom", "stretch"] as CatPose[])[Math.floor(Math.random() * 3)];
+          n.ai = "idle";
+          n.waitUntil = this.time + 4 + Math.random() * 6;
+        }
+        break;
+      }
+      case "patrol": {
+        const pt = n.patrolPoints[n.patrolIdx];
+        if (!pt) { n.ai = "return_home"; break; }
+        const d = stepTo(pt.x, pt.y, walkSpeed);
+        if (d <= arrive) {
+          n.patrolIdx++;
+          if (n.patrolIdx >= n.patrolPoints.length) {
+            n.ai = "return_home";
+          } else {
+            n.pose = "sit";
+            n.waitUntil = this.time + 1.4 + Math.random() * 1.6;
+          }
+        }
+        break;
+      }
+      case "hunt_stalk": {
+        if (n.pose !== "crouch" && n.pose !== "walk" && n.pose !== "shake") n.pose = "crouch";
+        const d = stepTo(n.tx, n.ty, 34);
+        let prey: (typeof this.prey)[number] | null = null;
+        let best = 190;
+        for (const p of this.prey) {
+          if (p.phase !== "alive") continue;
+          const dd = Math.hypot(p.x - n.x, p.y - n.y);
+          if (dd < best) { best = dd; prey = p; }
+        }
+        if (prey) {
+          n.ai = "hunt_chase";
+          n.preyId = prey.id;
+          break;
+        }
+        if (d <= arrive) {
+          if (Math.random() < 0.35) {
+            n.ai = "return_home";
+          } else {
+            const ang = Math.random() * Math.PI * 2;
+            const rad = 120 + Math.random() * 320;
+            n.tx = n.def.home.x + Math.cos(ang) * rad;
+            n.ty = n.def.home.y + Math.sin(ang) * rad;
+          }
+        }
+        break;
+      }
+      case "hunt_chase": {
+        const prey = this.prey.find((p) => p.id === n.preyId && p.phase === "alive");
+        if (!prey) {
+          n.ai = "hunt_stalk";
+          n.preyId = null;
+          n.waitUntil = this.time + 1 + Math.random() * 2;
+          break;
+        }
+        const d = stepTo(prey.x, prey.y, runSpeed);
+        if (d < 22) {
+          prey.phase = "dying";
+          prey.deadUntil = this.time + 0.55;
+          n.ai = "carry_home";
+          this.engineSfx("mew", { volume: 0.35, throttleMs: 1200 });
+        }
+        break;
+      }
+      case "carry_home": {
+        const pile = this.freshKillSpot();
+        if (!pile) { n.ai = "return_home"; break; }
+        const d = stepTo(pile.x, pile.y, runSpeed * 0.8);
+        if (d <= 26) {
+          n.ai = "deliver";
+          n.preyId = null;
+          n.pose = "sit";
+          this.deliverFreshKill();
+          n.waitUntil = this.time + 2;
+        }
+        break;
+      }
+      case "deliver": {
+        if (this.time > n.waitUntil) {
+          n.pose = "groom";
+          n.ai = "idle";
+          n.waitUntil = this.time + 3 + Math.random() * 4;
+        }
+        break;
+      }
+      case "return_home": {
+        const d = stepTo(n.def.home.x, n.def.home.y, walkSpeed);
+        if (d <= 20) {
+          n.pose = (["sit", "groom"] as CatPose[])[Math.floor(Math.random() * 2)];
+          n.ai = "idle";
+          n.waitUntil = this.time + 3 + Math.random() * 5;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  /** A hunter deposits prey: the pile visibly grows (session-scoped). */
+  private deliverFreshKill() {
+    const pile = allObjects.find((o) => o.interact === "fresh-kill");
+    if (!pile) return;
+    const cur = this.campPreyBonus.get(pile.id) ?? 0;
+    this.campPreyBonus.set(pile.id, Math.min(6, cur + 1));
+  }
+
   private stepRemoteRender(cur: RemoteRenderState, dt: number, wallMs: number) {
     const buf = cur.buffer;
     if (buf.length === 0) return;
@@ -4474,7 +4721,7 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): st
 
 
 // --- survival needs model (engine-local simulation; React persists it) ------
-export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit";
+export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit" | "npcstep";
 
 class SurvivalNeeds {
   hunger = 80;

@@ -610,13 +610,17 @@ export function drawDenEntrance(ctx: CanvasRenderingContext2D, x: number, y: num
   ctx.fill();
 }
 
-export function drawFreshKillPile(ctx: CanvasRenderingContext2D, x: number, y: number) {
+export function drawFreshKillPile(ctx: CanvasRenderingContext2D, x: number, y: number, extra = 0) {
   const mice: [number, number, string][] = [
     [-6, 0, "#8f8f96"],
     [5, 3, "#a5764a"],
     [0, -5, "#7a7a80"],
     [-3, -8, "#9c8a6a"],
   ];
+  // NPC hunters deposit prey here: the pile visibly grows (up to +6)
+  for (let i = 0; i < extra; i++) {
+    mice.push([(i % 2 ? 10 : -11) + (i > 2 ? 3 : 0), 6 + Math.floor(i / 2) * 4, i % 2 ? "#b08a5a" : "#98a06a"]);
+  }
   for (const [dx, dy, c] of mice) {
     ctx.strokeStyle = c;
     ctx.lineWidth = 1.2;
