@@ -120,6 +120,12 @@ export const clearZones: Rect[] = [
   { x: CAMP_CENTER.x - CAMP_RADIUS, y: CAMP_CENTER.y - CAMP_RADIUS, w: CAMP_RADIUS * 2, h: CAMP_RADIUS * 2 },
   { x: t(28) + TC_OX, y: t(44) + TC_OY, w: t(14), h: t(4) },   // west trail
   { x: t(39) + TC_OX, y: t(55) + TC_OY, w: t(5), h: t(12) },   // south trail
+  // Gorse-tunnel approach: the entrance mouth sits SOUTH of the camp wall
+  // (cc.y + CAMP_RADIUS), where the square camp clearZone ends — trees were
+  // spawning across the tunnel mouth. This corridor runs from just inside
+  // the wall, through the gorse tunnel, out into the forest so patrols,
+  // hunters and players walk in and out without weaving around trunks.
+  { x: CAMP_CENTER.x - t(2), y: CAMP_CENTER.y + CAMP_RADIUS - t(1.5), w: t(5), h: t(4.5) },
   { x: t(36) + TC_OX, y: t(64) + TC_OY, w: t(12), h: t(4) },   // south fork
   { x: t(41) + TC_OX, y: t(38) + TC_OY, w: t(5), h: t(9) },    // north trail
   { x: t(42) + TC_OX, y: t(31) + TC_OY, w: t(14), h: t(4) },   // NE trail
@@ -136,6 +142,7 @@ export const clearZones: Rect[] = [
   { x: t(160), y: t(86), w: t(22), h: t(20) },                 // RiverClan camp
   { x: t(86), y: t(10), w: t(20), h: t(18) },                  // ShadowClan camp
   { x: t(58), y: t(128), w: t(40), h: t(40) },                 // Twolegplace
+  { x: t(20) - t(2.4), y: t(84) + t(19), w: t(6), h: t(5) },   // WindClan gorse-tunnel approach
   { x: t(104), y: t(136), w: t(40), h: t(36) },                // Farm
   { x: t(18), y: t(38), w: t(16), h: t(10) },                  // Highstones
   { x: t(140), y: t(64), w: t(16), h: t(6) },                  // east river crossing approach
@@ -767,6 +774,39 @@ function seedScatter() {
     if (waterAndRoad(x, y)) continue;
     trees.push({ x, y, r: 22 + rand() * 9, pine: false, tint: rand() });
     count++;
+  }
+
+  // --- ENTRANCE CLEARING: trees must never sit in a camp's gorse-tunnel
+  // mouth. The scatter avoid-zones end at the wall ring, so trunks could
+  // (and did) spawn right across the entrance gap. These corridors are the
+  // real walk-in routes for players, NPCs, patrols and returning hunters —
+  // any tree that landed inside one is MOVED (never deleted) to a nearby
+  // free spot, so the forest still crowds in around every entrance.
+  const entranceCorridors: Rect[] = [
+    // ThunderClan: the tunnel mouth south of the wall + the walk-in inside
+    { x: cc.x - t(2.5), y: CAMP_CENTER.y + CAMP_RADIUS - t(2), w: t(6), h: t(5) },
+    // WindClan: tunnel mouth south of the wall + the walk-in inside
+    { x: wc.x - t(2.5), y: wc.y + t(19.5), w: t(6), h: t(5) },
+    // RiverClan / ShadowClan entrances (same south-gap layout)
+    { x: rc.x - t(2.5), y: rc.y + CAMP_RADIUS - t(2), w: t(6), h: t(5) },
+    { x: sc.x - t(2.5), y: sc.y + CAMP_RADIUS - t(2), w: t(6), h: t(5) },
+  ];
+  let movedTrees = 0;
+  for (let i = 0; i < trees.length && movedTrees < 400; i++) {
+    const tr = trees[i];
+    if (!inAnyRect(tr.x, tr.y, entranceCorridors)) continue;
+    // slide the trunk outward until it clears the walkway (same species),
+    // keeping the forest crowding in around the entrance mouth
+    let nx = tr.x;
+    let ny = tr.y;
+    let tries = 0;
+    while (tries++ < 40) {
+      nx += (rand() - 0.5) * 26;
+      ny += tr.y > wc.y ? 14 + rand() * 18 : -(14 + rand() * 18);
+      if (!inAnyRect(nx, ny, entranceCorridors) && !inAnyRect(nx, ny, avoid) && !waterAndRoad(nx, ny)) break;
+    }
+    trees[i] = { ...tr, x: nx, y: ny };
+    movedTrees++;
   }
 
   // Flora everywhere — forest floor ecosystem: ferns, tufts, flowers,

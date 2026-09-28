@@ -91,6 +91,8 @@ const schema = defineSchema(
       facing: v.number(),
       moving: v.boolean(),
       emote: v.optional(v.string()),
+      vocal: v.optional(v.string()),
+      action: v.optional(v.string()),
       mode: v.union(v.literal("story"), v.literal("open")),
       updatedAt: v.number(),
       // server authority: ordering + staleness rejection (see presence.ts)

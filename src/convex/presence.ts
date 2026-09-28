@@ -9,6 +9,26 @@ const STALE_MS = 20_000;
 const MOVEMENT_STATES = new Set(["idle", "walk", "run", "crouch"]);
 // animation states mirror the engine's CatPose vocabulary
 const ANIM_STATES = new Set(["walk", "sit", "sleep", "crouch", "groom", "stretch", "swim", "shake"]);
+// vocal actions ride the same channel as emotes (synced through the
+// presence row): each vocal is a short one-shot the receiver plays locally.
+const VOCALS = new Set(["meow", "hiss", "growl", "chirp", "trill"]);
+
+/** Helper for string-array membership tests with plain objects (convex v). */
+function oneOf(set: Set<string>, v: string | undefined): string | undefined {
+  return v && set.has(v) ? v : undefined;
+}
+
+/** tiny JSON guard for the (rare) extended action payloads */
+function jsonOrNull(v: string | undefined): string | undefined {
+  if (!v) return undefined;
+  if (v.length > 220) return undefined;
+  try {
+    JSON.parse(v);
+    return v;
+  } catch {
+    return undefined;
+  }
+}
 
 // server speed authority: clamp generously above RUN_SPEED (250 px/s) so
 // lag spikes never rubber-band honest clients, but impossible jumps
@@ -32,6 +52,8 @@ export const heartbeat = mutation({
     facing: v.number(),
     moving: v.boolean(),
     emote: v.optional(v.string()),
+    vocal: v.optional(v.string()),
+    action: v.optional(v.string()),
     mode: v.union(v.literal("story"), v.literal("open")),
     catName: v.string(),
     clan: v.optional(v.string()),
@@ -60,6 +82,9 @@ export const heartbeat = mutation({
       args.movementState && MOVEMENT_STATES.has(args.movementState) ? args.movementState : undefined;
     const animationState =
       args.animationState && ANIM_STATES.has(args.animationState) ? args.animationState : undefined;
+    const vocal = oneOf(VOCALS, args.vocal);
+    // one-shot social action payload (JSON) — validated, size-capped
+    const action = jsonOrNull(args.action);
 
     // ---- position + speed authority (the SERVER wins on impossible moves) --
     let x = args.x;
@@ -85,6 +110,8 @@ export const heartbeat = mutation({
         facing,
         moving,
         emote: args.emote,
+        vocal,
+        action,
         mode: args.mode,
         catName: args.catName,
         clan: args.clan,
@@ -106,6 +133,8 @@ export const heartbeat = mutation({
       facing,
       moving,
       emote: args.emote,
+      vocal,
+      action,
       mode: args.mode,
       catName: args.catName,
       clan: args.clan,
@@ -143,6 +172,8 @@ export const listOnline = query({
         facing: r.facing,
         moving: r.moving,
         emote: r.emote,
+        vocal: r.vocal,
+        action: r.action,
         movementState: r.movementState,
         animationState: r.animationState,
         serverTick: r.serverTick,
