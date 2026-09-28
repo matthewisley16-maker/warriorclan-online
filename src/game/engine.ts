@@ -173,6 +173,7 @@ const GROUND_COLORS: Record<number, [string, string]> = {
   8: ["#4a6350", "#526d59"], // marsh
   9: ["#b3a37c", "#bcaa86"], // riverbank
   10: ["#5c7d4a", "#648753"], // reeds
+  11: ["#7fae58", "#89b862"], // grassy swell (hill tops catch light)
 };
 
 function hash2(x: number, y: number): number {
@@ -1033,7 +1034,7 @@ type GroundDecoKind = "litter" | "stone" | "soil" | "flower";
 const groundDeco: { x: number; y: number; kind: GroundDecoKind; a: number; s: number }[] = [];
 const GROUND_KIND_LABELS: Record<number, GroundKind> = {
   0: "grass", 1: "sand", 2: "water", 3: "stone", 4: "paved", 5: "pine",
-  6: "dirt", 7: "moor", 8: "marsh", 9: "riverbank", 10: "reeds",
+  6: "dirt", 7: "moor", 8: "marsh", 9: "riverbank", 10: "reeds", 11: "hillock",
 };
 function groundKindAtIdx(idx: number): GroundKind {
   return GROUND_KIND_LABELS[idx] ?? "grass";
@@ -4406,7 +4407,7 @@ export class GameCanvas {
       n.ai = "hunt_stalk";
       n.activity = "hunting";
       const ang = Math.random() * Math.PI * 2;
-      const rad = 200 + Math.random() * 500;
+      const rad = 300 + Math.random() * 800;
       n.tx = n.def.home.x + Math.cos(ang) * rad;
       n.ty = n.def.home.y + Math.sin(ang) * rad;
       return;
@@ -4417,9 +4418,9 @@ export class GameCanvas {
       n.activity = "patrolling";
       n.patrolPoints = [
         e,
-        { x: n.def.home.x + 260, y: n.def.home.y - 60 },
-        { x: n.def.home.x + 420, y: n.def.home.y + 120 },
-        { x: n.def.home.x + 200, y: n.def.home.y + 260 },
+        { x: n.def.home.x + 380, y: n.def.home.y - 90 },
+        { x: n.def.home.x + 620, y: n.def.home.y + 180 },
+        { x: n.def.home.x + 300, y: n.def.home.y + 390 },
       ];
       n.patrolIdx = 0;
       n.tx = e.x;
@@ -4517,7 +4518,7 @@ export class GameCanvas {
             n.ai = "return_home";
           } else {
             const ang = Math.random() * Math.PI * 2;
-            const rad = 120 + Math.random() * 320;
+            const rad = 180 + Math.random() * 480;
             n.tx = n.def.home.x + Math.cos(ang) * rad;
             n.ty = n.def.home.y + Math.sin(ang) * rad;
           }

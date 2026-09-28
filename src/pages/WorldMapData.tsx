@@ -40,6 +40,9 @@ export const MAP_SPOTS: MapSpot[] = [
   // Twoleg areas
   { id: "twolegplace", x: 75, y: 146, label: "Twolegplace", kind: "twoleg", info: "The kittypet neighborhood where Rusty and Smudge live." },
   { id: "farm", x: 124, y: 154, label: "The Farm", kind: "twoleg", info: "A red barn full of hay — and plentiful barn mice." },
+  // Unclaimed wilds (world expansion)
+  { id: "east-pond", x: 213, y: 162, label: "Reed Pond", kind: "landmark", info: "A reed-fringed pond in the unclaimed wilds. Quiet, fishy, and far from every camp." },
+  { id: "mossy-hollow", x: 208, y: 69, label: "Mossy Hollow", kind: "landmark", info: "A fern-draped dip between old oaks, soft with moss." },
 ];
 
 /** Territory shading + border lines in world tiles (x, y, w, h / polylines). */

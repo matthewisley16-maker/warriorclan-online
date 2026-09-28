@@ -17,7 +17,7 @@ export type InteractableKind =
   | "nursery" | "elders-den" | "fresh-kill" | "tallrock" | "entrance"
   | "training-hollow" | "sunningrocks" | "owltree" | "snakerocks"
   | "fourtrees" | "sycamore" | "tallpines" | "thunderpath" | "river"
-  | "moonstone" | "twolegplace" | "farm" | "windclan-camp"
+  | "moonstone" | "twolegplace" | "farm" | "windclan-camp" | "east-pond" | "mossy-hollow"
   | "riverclan-camp" | "shadowclan-camp" | "highstones" | "lilypool"
   | "border-marker" | "herbs";
 
@@ -99,7 +99,7 @@ function shiftRect(r: Rect): Rect {
 // ---------------------------------------------------------------------------
 
 export const CAMP_CENTER: Vec2 = { x: t(41) + TC_OX, y: t(46) + TC_OY };
-export const CAMP_RADIUS = t(17); // large settlement, room for many cats
+export const CAMP_RADIUS = t(22); // large settlement, room for many cats
 
 /**
  * Default spawn — Rusty's garden in Twolegplace, next to Smudge's home.
@@ -147,7 +147,7 @@ export const clearZones: Rect[] = [
 
 export type GroundKind =
   | "grass" | "sand" | "water" | "stone" | "paved" | "pine" | "dirt"
-  | "moor" | "marsh" | "riverbank" | "reeds";
+  | "moor" | "marsh" | "riverbank" | "reeds" | "hillock";
 
 export const GROUND_CELL = 8;
 export const GROUND_COLS = WORLD_W / GROUND_CELL;
@@ -167,6 +167,8 @@ export const groundRegions: { kind: GroundKind; rect: Rect }[] = [
   // --- ShadowClan (north of the Thunderpath) ---
   { kind: "pine", rect: { x: t(46), y: 0, w: t(100), h: t(40) } },
   { kind: "marsh", rect: { x: t(108), y: t(6), w: t(34), h: t(30) } }, // marshes east
+  { kind: "dirt", rect: { x: t(46), y: t(8), w: t(14), h: t(20) } },   // boggy fringes west of the marshes
+  { kind: "dirt", rect: { x: t(152), y: t(44), w: t(10), h: t(30) } }, // muddy river flats
   { kind: "sand", rect: { x: t(88), y: t(14), w: t(16), h: t(12) } }, // ShadowClan camp floor
   // --- WindClan (west moor) ---
   { kind: "moor", rect: { x: 0, y: t(40), w: t(48), h: WORLD_H - t(40) } },
@@ -186,6 +188,11 @@ export const groundRegions: { kind: GroundKind; rect: Rect }[] = [
   { kind: "dirt", rect: { x: t(104), y: t(136), w: t(40), h: t(36) } },
   // --- Highstones ---
   { kind: "stone", rect: { x: t(18), y: t(38), w: t(16), h: t(10) } },
+  // Gentle grassy swells: WindClan ridges and a forest knoll (visual relief)
+  { kind: "hillock", rect: { x: t(6), y: t(96), w: t(26), h: t(14) } },
+  { kind: "hillock", rect: { x: t(16), y: t(124), w: t(20), h: t(12) } },
+  { kind: "hillock", rect: { x: t(8), y: t(64), w: t(18), h: t(10) } },
+  { kind: "hillock", rect: { x: t(58), y: t(88), w: t(20), h: t(12) } },
 ];
 
 /** Trails — painted as dirt over everything. */
@@ -211,11 +218,13 @@ export const trailRects: Rect[] = [
   { x: t(46), y: t(148), w: t(60), h: t(3) },      // main street
   { x: t(104), y: t(150), w: t(24), h: t(3) },     // road -> farm
   { x: t(26), y: t(46), w: t(3), h: t(12) },       // Fourtrees path north to Highstones
+  { x: t(148), y: t(88), w: t(48), h: t(3) },      // east trail: river crossing -> the wilds
+  { x: t(193), y: t(88), w: t(3), h: t(64) },      // trail south to Reed Pond
 ];
 
 const KIND_INDEX: Record<GroundKind, number> = {
   grass: 0, sand: 1, water: 2, stone: 3, paved: 4, pine: 5, dirt: 6,
-  moor: 7, marsh: 8, riverbank: 9, reeds: 10,
+  moor: 7, marsh: 8, riverbank: 9, reeds: 10, hillock: 11,
 };
 
 export const groundMap: Uint8Array = new Uint8Array(GROUND_COLS * GROUND_ROWS);
@@ -329,7 +338,7 @@ const tcCampObjects: WorldObject[] = [
   { id: "nesting-cache", x: cc.x + t(3), y: cc.y + t(7.4), w: t(1.4), h: t(1), style: "mossball", detail: true },
   {
     id: "entrance",
-    x: cc.x - t(0.5), y: cc.y + t(11.4), w: t(2.4), h: t(2),
+    x: cc.x - t(0.5), y: cc.y + CAMP_RADIUS + t(0.6), w: t(2.6), h: t(2.2),
     label: "Gorse tunnel", interact: "entrance", style: "bramble", scale: 1.2,
   },
   // Lived-in details: resting stones, moss patches, fallen branches
@@ -461,7 +470,7 @@ const otherClanObjects: WorldObject[] = [
   { id: "wc-nursery", x: wc.x - t(5.4), y: wc.y + t(2.6), w: t(3.4), h: t(2.6), label: "WindClan nursery", interact: "nursery", style: "bramble", interior: "wc-nursery-room", solid: true, doorAt: { dx: 0, dy: 0 }},
   { id: "wc-elders", x: wc.x + t(5.2), y: wc.y - t(0.4), w: t(3.6), h: t(2.2), label: "WindClan elders' den", interact: "elders-den", style: "log", interior: "wc-elders-room", solid: true, doorAt: { dx: 0, dy: 0 }},
   { id: "wc-freshkill", x: wc.x - t(1), y: wc.y + t(1.4), w: t(1.8), h: t(1.4), label: "Fresh-kill pile", interact: "fresh-kill", style: "fresh-kill" },
-  { id: "wc-entrance", x: wc.x, y: wc.y + t(6.4), w: t(2.2), h: t(1.8), label: "Gorse tunnel", style: "bramble" },
+  { id: "wc-entrance", x: wc.x - t(1.1), y: wc.y + CAMP_RADIUS + t(0.5), w: t(2.2), h: t(1.8), label: "Gorse tunnel", style: "bramble" },
   // RiverClan — a gravel hollow behind reed beds
   { id: "rc-rock", x: rc.x, y: rc.y - t(5.2), w: t(4), h: t(3), label: "RiverClan meeting rock", interact: "riverclan-camp", style: "rock", solid: true, scale: 1.4 },
   { id: "rc-nursery", x: rc.x - t(5.4), y: rc.y + t(2.4), w: t(3.4), h: t(2.6), label: "RiverClan nursery", interact: "nursery", style: "bramble", interior: "rc-nursery-room", solid: true, doorAt: { dx: 0, dy: 0 }},
@@ -716,7 +725,7 @@ function seedScatter() {
 
   // ThunderClan forest — dense broadleaf
   let count = 0, attempts = 0;
-  while (count < 380 && attempts < 12000) {
+  while (count < 560 && attempts < 14000) {
     attempts++;
     const x = t(48) + rand() * t(96);
     const y = t(46) + rand() * t(100);
@@ -728,7 +737,7 @@ function seedScatter() {
   }
   // ShadowClan pines + marsh scrub
   count = 0; attempts = 0;
-  while (count < 320 && attempts < 12000) {
+  while (count < 470 && attempts < 14000) {
     attempts++;
     const x = t(46) + rand() * t(100);
     const y = rand() * t(40);
@@ -739,7 +748,7 @@ function seedScatter() {
   }
   // WindClan — sparse wind-stunted trees only near the river
   count = 0; attempts = 0;
-  while (count < 70 && attempts < 6000) {
+  while (count < 110 && attempts < 8000) {
     attempts++;
     const x = rand() * t(48);
     const y = t(40) + rand() * (WORLD_H - t(40));
@@ -750,7 +759,7 @@ function seedScatter() {
   }
   // RiverClan — soft willow-ish clusters
   count = 0; attempts = 0;
-  while (count < 150 && attempts < 8000) {
+  while (count < 230 && attempts < 10000) {
     attempts++;
     const x = t(152) + rand() * t(40);
     const y = t(40) + rand() * (WORLD_H - t(40));
@@ -763,7 +772,7 @@ function seedScatter() {
   // Flora everywhere — forest floor ecosystem: ferns, tufts, flowers,
   // mushrooms, leaf litter, root flares, fallen logs, stone clusters.
   attempts = 0; count = 0;
-  while (count < 2200 && attempts < 26000) {
+  while (count < 3400 && attempts < 30000) {
     attempts++;
     const x = rand() * WORLD_W;
     const y = rand() * WORLD_H;
@@ -901,6 +910,9 @@ export const areas: AreaDef[] = [
   { id: "twolegplace", name: "Twolegplace", rect: { x: t(46), y: t(128), w: t(58), h: WORLD_H - t(128) } },
   { id: "farm", name: "The Farm", rect: { x: t(104), y: t(136), w: t(40), h: t(36) } },
   { id: "highstones", name: "Highstones", rect: { x: t(18), y: t(38), w: t(16), h: t(10) } },
+  // Unclaimed wilds east of RiverClan (added with the world expansion)
+  { id: "east-pond", name: "Reed Pond", rect: { x: t(198), y: t(150), w: t(30), h: t(24) } },
+  { id: "mossy-hollow", name: "Mossy Hollow", rect: { x: t(196), y: t(60), w: t(24), h: t(18) } },
 ];
 
 export function areaAt(x: number, y: number): AreaDef | null {
@@ -1361,10 +1373,13 @@ export const playerDef = {
 export type PreyKind = "mouse" | "rabbit" | "squirrel" | "bird" | "fish" | "frog";
 
 export const preyZones: { kind: PreyKind; rect: Rect; density: number }[] = [
-  { kind: "mouse", rect: { x: t(50), y: t(46), w: t(92), h: t(96) }, density: 10 },
-  { kind: "squirrel", rect: { x: t(52), y: t(48), w: t(88), h: t(60) }, density: 6 },
-  { kind: "bird", rect: { x: t(50), y: t(44), w: t(94), h: t(100) }, density: 5 },
-  { kind: "rabbit", rect: { x: 0, y: t(40), w: t(48), h: WORLD_H - t(40) }, density: 10 },
+  { kind: "mouse", rect: { x: t(50), y: t(46), w: t(138), h: t(126) }, density: 12 },
+  { kind: "squirrel", rect: { x: t(52), y: t(48), w: t(132), h: t(64) }, density: 8 },
+  { kind: "bird", rect: { x: t(50), y: t(44), w: t(138), h: t(128) }, density: 6 },
+  { kind: "rabbit", rect: { x: 0, y: t(40), w: t(48), h: WORLD_H - t(40) }, density: 12 },
+  { kind: "mouse", rect: { x: t(192), y: t(40), w: t(48), h: t(136) }, density: 8 },
+  { kind: "bird", rect: { x: t(192), y: t(40), w: t(48), h: t(136) }, density: 5 },
+  { kind: "frog", rect: { x: t(198), y: t(150), w: t(30), h: t(24) }, density: 5 },
   { kind: "fish", rect: { x: t(144), y: t(48), w: t(48), h: WORLD_H - t(48) }, density: 8 },
   { kind: "frog", rect: { x: t(108), y: t(6), w: t(36), h: t(30) }, density: 7 },
   { kind: "mouse", rect: { x: t(104), y: t(136), w: t(40), h: t(36) }, density: 4 },
@@ -1483,6 +1498,14 @@ export const lore: Record<InteractableKind, { title: string; text: string }> = {
     title: "Border Marker",
     text: "A scent-marked stone that tells every passing cat: this is Clan land. Patrols renew the scent at sunhigh and moonhigh.",
   },
+  "east-pond": {
+    title: "Reed Pond",
+    text: "A quiet reed-fringed pond in the unclaimed wilds. Fish rise to the surface at dawn — good hunting, if any Clan claims it.",
+  },
+  "mossy-hollow": {
+    title: "Mossy Hollow",
+    text: "A fern-draped dip between old oaks, soft with moss. A hidden spot few cats ever find.",
+  },
   herbs: {
     title: "Growing Herbs",
     text: "Leaves bright with health. A medicine cat could never have too many of these.",
@@ -1578,6 +1601,21 @@ function buildTownDetail() {
     { id: "cc-fern-corner-1", x: cc.x - t(12.6), y: cc.y + t(10.2), w: t(2), h: t(1.4), label: "Ferns", style: "bush" },
     { id: "cc-fern-corner-2", x: cc.x + t(11.4), y: cc.y + t(11), w: t(1.8), h: t(1.3), label: "Ferns", style: "bush" },
     { id: "cc-log-bench", x: cc.x + t(6.8), y: cc.y - t(9.4), w: t(2.2), h: t(1), label: "Fallen branch", style: "log" },
+  );
+
+  // ---- Unclaimed wilds (east expansion): landmarks worth the trek ----
+  allObjects.push(
+    { id: "ew-pond-reeds-1", x: t(200), y: t(152), w: t(2), h: t(1.4), label: "Reeds", style: "reeds" },
+    { id: "ew-pond-reeds-2", x: t(224), y: t(150), w: t(2), h: t(1.4), label: "Reeds", style: "reeds" },
+    { id: "ew-pond-reeds-3", x: t(212), y: t(172), w: t(2.2), h: t(1.4), label: "Reeds", style: "reeds" },
+    { id: "ew-pond-fishing", x: t(206), y: t(158), w: t(2.4), h: t(1.8), label: "Fishing spot", interact: "river", style: "fishing-spot" },
+    { id: "ew-pond-lore", x: t(214), y: t(146), w: t(1.6), h: t(1.4), label: "Reed Pond", interact: "east-pond", style: "stone" },
+    { id: "ew-hollow-fern-1", x: t(198), y: t(64), w: t(1.8), h: t(1.3), label: "Ferns", style: "bush" },
+    { id: "ew-hollow-fern-2", x: t(216), y: t(72), w: t(1.8), h: t(1.3), label: "Ferns", style: "bush" },
+    { id: "ew-hollow-moss", x: t(207), y: t(68), w: t(1.8), h: t(1.4), label: "Mossy Hollow", interact: "mossy-hollow", style: "mossball" },
+    { id: "ew-fallen-giant", x: t(196), y: t(110), w: t(5.5), h: t(1.6), label: "A fallen giant — an old oak bridge of a log", style: "log", solid: true },
+    { id: "ew-hidden-thicket", x: t(226), y: t(96), w: t(2.4), h: t(1.8), label: "Hidden thicket", interact: "mossy-hollow", style: "bramble" },
+    { id: "ew-hidden-clearing", x: t(220), y: t(128), w: t(2), h: t(1.6), label: "Secluded clearing", interact: "mossy-hollow", style: "flowerbed" },
   );
 
   // ---- Distinct Twoleg interiors: the five rooms themselves live in
