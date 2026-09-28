@@ -115,6 +115,7 @@ export default function Game() {
   const setStoryStep = useMutation(api.players.setStoryStep);
   const addXp = useMutation(api.players.addXp);
   const updateCat = useMutation(api.players.updateCat);
+  const updateStats = useMutation(api.players.updateStats);
   const heartbeat = useMutation(api.presence.heartbeat);
   const leavePresence = useMutation(api.presence.leave);
   const sendChat = useMutation(api.chat.send);
@@ -147,6 +148,14 @@ export default function Game() {
   const [weather, setWeather] = useState<WeatherKind>("clear");
   const [interior, setInterior] = useState<string | null>(null);
   const [myCat, setMyCat] = useState<{ name: string; clan?: string; appearance: CatSkin } | null>(null);
+  // --- survival stats (hunger/energy/health) ---
+  const [stats, setStats] = useState({ hunger: 80, energy: 90, health: 100 });
+  const statsRef = useRef(stats);
+  statsRef.current = stats;
+  /** last stats persistence write (20s throttle) */
+  const lastPersistAt = useRef(0);
+  // --- car-death flow: fade to black, then choose ---
+  const [death, setDeath] = useState<{ cause: string; respawn: { x: number; y: number }; phase: "fading" | "choice" } | null>(null);
   const [storyStep, setStoryStepLocal] = useState(0);
   const [chatFeed, setChatFeed] = useState<{ id: string; fromName: string; text: string; mine?: boolean; channel: string; x?: number; y?: number }[]>([]);
   // --- social / waypoint / network state ---
@@ -299,6 +308,16 @@ export default function Game() {
         window.setTimeout(() => audio().playSfx("collect", { volume: 0.7, throttleMs: 300 }), 500); // prey claimed
         addXp({ amount: 4 }).catch(() => undefined);
       },
+      onSfx: (name, opts) => {
+        if (name === "mew") audio().playMew("ambient");
+        else audio().playSfx(name, opts);
+      },
+      onDeath: (cause, respawn) => {
+        setDeath({ cause, respawn, phase: "fading" });
+        window.setTimeout(() => {
+          setDeath((d) => (d ? { ...d, phase: "choice" } : d));
+        }, 1500);
+      },
       onClock: (h) => setClock(h),
       onWeatherChange: (w) => setWeather(w),
       onInteriorChange: (id) => {
@@ -318,6 +337,13 @@ export default function Game() {
     // Audio unlock: entering the game follows the Play click (user gesture),
     // which satisfies browser autoplay policies.
     audio().start();
+    // restore saved survival stats into the engine model
+    if (player?.stats) {
+      game.needs.hunger = player.stats.hunger;
+      game.needs.energy = player.stats.energy;
+      game.needs.health = player.stats.health;
+      setStats({ hunger: player.stats.hunger, energy: player.stats.energy, health: player.stats.health });
+    }
     if (myCat?.appearance) game.mySkin = { ...myCat.appearance, furDark: myCat.appearance.furDark || "#5a3a20" };
 
     // presence heartbeat (open world only)
@@ -661,6 +687,32 @@ export default function Game() {
     return () => window.clearInterval(t);
   }, [phase]);
 
+  // --- survival: mirror engine drain into the HUD; persist changes only ---
+  useEffect(() => {
+    if (phase !== "playing") return;
+    const lastSent = { v: "" };
+    const t = window.setInterval(() => {
+      const g = gameRef.current;
+      if (!g) return;
+      const n = g.needs;
+      setStats((prev) =>
+        Math.abs(prev.hunger - n.hunger) >= 1 || Math.abs(prev.energy - n.energy) >= 1 || Math.abs(prev.health - n.health) >= 1
+          ? { hunger: n.hunger, energy: n.energy, health: n.health }
+          : prev,
+      );
+      const now = Date.now();
+      if (now - lastPersistAt.current < 20000) return;
+      const sig = `${Math.round(n.hunger)}|${Math.round(n.energy)}|${Math.round(n.health)}`;
+      if (sig !== lastSent.v) {
+        lastSent.v = sig;
+        lastPersistAt.current = now;
+        updateStats({ hunger: Math.round(n.hunger), energy: Math.round(n.energy), health: Math.round(n.health) }).catch(() => undefined);
+      }
+    }, 2000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
   // Stop all audio when leaving the game (mode switch/unmount).
   useEffect(() => {
     if (phase === "playing") return;
@@ -696,6 +748,7 @@ export default function Game() {
     if (phase !== "playing") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (deathRef.current) return; // the death choice owns the screen
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       audio().playSfx("ui_move", { throttleMs: 250 }); // menu open / back / close
@@ -743,7 +796,7 @@ export default function Game() {
             setDialogue({ name: npc.name, role: npc.role, text: npc.lines[nextIdx], npcId: npc.id, lineIdx: nextIdx });
           }
         } else {
-          audio().playSfx("cat_mew2", { volume: 0.6, throttleMs: 2500 }); // a cat greets you
+          audio().playMew("talk"); // randomized greeting mew (varies per cat)
           setDialogue({ name: npc.name, role: npc.role, text: npc.lines[0], npcId: npc.id, lineIdx: 0 });
         }
         // story completion counts the first line of the conversation
@@ -788,6 +841,20 @@ export default function Game() {
         }
         if ((target.interact as string) === "exit-interior") {
           gameRef.current?.exitInterior();
+          return;
+        }
+        // fresh-kill pile: eat your fill
+        if (target.interact === "fresh-kill") {
+          gameRef.current?.eat(30);
+          audio().playSfx("eat", { throttleMs: 800 });
+          setDialogue({ name: "Fresh-kill", text: "You eat until your belly is round and warm. (+hunger)" });
+          return;
+        }
+        // fishing spot / streams: drink
+        if (target.interact === "river") {
+          gameRef.current?.drink();
+          audio().playSfx("drink", { throttleMs: 800 });
+          setDialogue({ name: "The water", text: "You lap up cool riverwater. Refreshing." });
           return;
         }
         if (target.interact && lore[target.interact]) {
@@ -836,6 +903,8 @@ export default function Game() {
   areaAtRef.current = areaName;
   const posAreaIdRef = useRef<string>("");
   const lastStepRef = useRef(0);
+  const deathRef = useRef<{ cause: string; respawn: { x: number; y: number }; phase: string } | null>(null);
+  deathRef.current = death;
   const hoppingRef = useRef(false);
   const questsDoneRef = useRef(questsDone);
   questsDoneRef.current = questsDone;
@@ -939,6 +1008,12 @@ export default function Game() {
       if (!g) return;
       if (e.kind === "pose") {
         g.setPose(e.label.toLowerCase() as "sit" | "sleep" | "groom" | "crouch", 5);
+        if (e.label.toLowerCase() === "sleep") {
+          g.rest(55);
+          audio().playSfx("ui_confirm", { volume: 0.4, throttleMs: 500 });
+          setDialogue({ name: "Rest", text: "You curl up and drift off. You wake feeling rested. (+energy)" });
+          window.setTimeout(() => setDialogue((d) => (d && d.name === "Rest" ? null : d)), 4000);
+        }
       } else {
         g.setEmote(e.icon);
       }
@@ -1348,6 +1423,77 @@ export default function Game() {
               setActiveUI("gameplay");
             }}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Survival HUD: hunger / energy / health (unobtrusive, top-left) */}
+      <div className="pointer-events-none absolute left-3 top-12 z-20 flex flex-col gap-1">
+        {([
+          ["Hunger", stats.hunger, "bg-amber-400"],
+          ["Energy", stats.energy, "bg-sky-400"],
+          ["Health", stats.health, "bg-rose-400"],
+        ] as const).map(([label, v, color]) => (
+          <div key={label} className="flex items-center gap-1.5">
+            <span className="w-12 text-right text-[9px] font-bold uppercase tracking-widest text-white/60">{label}</span>
+            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-black/45 backdrop-blur-sm">
+              <div className={`h-full rounded-full ${color} transition-[width] duration-700`} style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Car-death overlay: fade to black, then the choice */}
+      <AnimatePresence>
+        {death && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: death.phase === "fading" ? 1.4 : 0.3 }}
+            className="absolute inset-0 z-[70] flex items-center justify-center bg-black"
+          >
+            {death.phase === "choice" && (
+              <motion.div
+                initial={{ opacity: 0, y: 14 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#120d0d]/90 p-6 text-center shadow-2xl"
+              >
+                <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-red-400/80">StarClan waits</p>
+                <p className="mt-2 text-lg font-extrabold text-white">You got hit by a car.</p>
+                <p className="mt-1 text-xs leading-relaxed text-white/60">
+                  The monster`s blow sends you to the edge of darkness. A silver pelt brushes your flank — it is not your time yet.
+                </p>
+                <div className="mt-5 space-y-2">
+                  <Button
+                    className="w-full rounded-xl"
+                    onClick={() => {
+                      const g = gameRef.current;
+                      audio().playSfx("ui_confirm");
+                      g?.respawn(death.respawn);
+                      setStats({ hunger: Math.max(statsRef.current.hunger, 45), energy: Math.max(statsRef.current.energy, 55), health: Math.max(50, statsRef.current.health) });
+                      updateStats({ hunger: Math.max(statsRef.current.hunger, 45), energy: Math.max(statsRef.current.energy, 55), health: Math.max(50, statsRef.current.health) }).catch(() => undefined);
+                      setDeath(null);
+                      setDialogue({ name: "Respawn", text: "You wake on the grassy shoulder by the Thunderpath, shaken but alive." });
+                      window.setTimeout(() => setDialogue((d) => (d && d.name === "Respawn" ? null : d)), 5000);
+                    }}
+                  >
+                    Respawn
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full rounded-xl"
+                    onClick={() => {
+                      setDeath(null);
+                      setActiveUI("gameplay");
+                      setPhase("menu");
+                    }}
+                  >
+                    Main menu
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </motion.div>
         )}
       </AnimatePresence>
 

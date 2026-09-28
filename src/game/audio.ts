@@ -76,7 +76,10 @@ export type SfxName =
   | "ui_click" | "ui_open" | "ui_move" | "ui_confirm" | "ui_cancel"
   | "collect" | "door" | "jump" | "land" | "hunt_pounce" | "hunt_rustle" | "swim"
   | "quest_done" | "rank_up" | "clan_join"
-  | "cat_mew" | "cat_mew2" | "cat_purr";
+  | "cat_mew" | "cat_mew2" | "cat_mew3" | "cat_mew4" | "cat_purr"
+  | "splash" | "eat" | "herb" | "drink" | "hit" | "shake";
+/** Engine-side sfx names (engine.ts) -> audio slots. */
+export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit";
 
 const SFX_FILES: Record<SfxName, string> = {
   ui_click: "sfx/ui_click.wav",
@@ -96,7 +99,16 @@ const SFX_FILES: Record<SfxName, string> = {
   clan_join: "sfx/clan_join.wav",
   cat_mew: "sfx/cat_mew.ogg",
   cat_mew2: "sfx/cat_mew2.wav",
+  cat_mew3: "sfx/cat_mew2.wav",
+  cat_mew4: "sfx/cat_mew.ogg",
   cat_purr: "sfx/cat_purr.wav",
+  // interaction feedback (water/food/plants/impact use fitted reuse slots)
+  splash: "steps/water/1.ogg",
+  eat: "steps/grass/2.ogg", // soft nibble/grass texture placeholder
+  herb: "steps/grass/3.ogg", // leafy pick
+  drink: "steps/water/0.ogg",
+  hit: "sfx/hunt_pounce.wav", // impact
+  shake: "steps/grass/1.ogg", // fur rustle
 };
 
 /** Artistic per-sound trim (multiplied with the sfx bus volume). */
@@ -104,7 +116,8 @@ const SFX_GAIN: Partial<Record<SfxName, number>> = {
   ui_click: 0.4, ui_open: 0.45, ui_move: 0.3, ui_confirm: 0.5, ui_cancel: 0.4,
   collect: 0.5, door: 0.5, jump: 0.35, land: 0.3, hunt_pounce: 0.7,
   hunt_rustle: 0.45, quest_done: 0.7, rank_up: 0.7, clan_join: 0.75,
-  cat_mew: 0.55, cat_mew2: 0.5, cat_purr: 0.5,
+  cat_mew: 0.55, cat_mew2: 0.5, cat_mew3: 0.5, cat_mew4: 0.55, cat_purr: 0.5,
+  splash: 0.55, eat: 0.5, herb: 0.45, drink: 0.45, hit: 0.7, shake: 0.5,
 };
 
 /** Terrain → footstep folder. */
@@ -346,6 +359,19 @@ export class AudioEngine {
       this.playEl(el);
       window.setTimeout(() => { el.pause(); el.src = ""; }, 4000);
     }
+  }
+
+  /** Randomized cat vocalization: mews vary in file + pitch per call. */
+  playMew(kind: "talk" | "ambient" = "talk") {
+    const pool: SfxName[] = kind === "ambient"
+      ? ["cat_mew", "cat_mew2", "cat_mew3", "cat_mew4", "cat_purr"]
+      : ["cat_mew", "cat_mew2", "cat_mew3", "cat_mew4"];
+    const name = pool[Math.floor(Math.random() * pool.length)];
+    this.playSfx(name, {
+      volume: 0.55 + Math.random() * 0.2,
+      rate: 0.85 + Math.random() * 0.4,
+      throttleMs: 220,
+    });
   }
 
   /** Random footstep with pitch variation. */

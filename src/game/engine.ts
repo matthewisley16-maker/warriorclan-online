@@ -25,7 +25,7 @@ import {
   type NPCDef,
   type PreyKind,
 } from "./world";
-import { TP_Y, clearTraffic, drawTunnelPortal, drawVehicle, trafficList, updateTraffic } from "./traffic";
+import { TP_Y, clearTraffic, drawTunnelPortal, drawVehicle, respawnBothDirections, trafficList, updateTraffic, vehicleLaneY } from "./traffic";
 /** Render-path traffic timestep fallback (wired from the update loop below). */
 let dt = 0.016;
 import {
@@ -36,6 +36,7 @@ import {
   drawFlowerBed,
   drawFreshKillPile,
   drawHerbPatch,
+  drawDenEntrance,
   drawHouse,
   drawPrey,
   drawReeds,
@@ -147,6 +148,10 @@ export interface GameCallbacks {
   onNpcIdle?: (name: string, line: string) => void;
   /** waypoint distance update: meters + tiles (1 tile = 6 m) + arrived flag */
   onWaypoint?: (info: { meters: number; tiles: number; arrived: boolean }) => void;
+  /** The cat died (currently: hit by a car on the Thunderpath). */
+  onDeath?: (cause: string, respawn: { x: number; y: number }) => void;
+  /** Engine-originated sound (ambient mews, shakes, splashes, hits). */
+  onSfx?: (name: import("./audio").EngineSfxName, opts: { volume?: number; throttleMs?: number }) => void;
 }
 
 export type WeatherKind =
@@ -1075,6 +1080,15 @@ export class GameCanvas {
   private pEmote: string | null = null;
   private emoteUntil = 0;
   private swimming = false; // deep-water movement state
+  /** wet-coat timer (performance.now ms) — drives shake-off animations */
+  private wetnessUntil = 0;
+  private lastShakeAt = -9999;
+  /** car-death state: input frozen while the death overlay is up */
+  private dead = false;
+  /** survival needs (hunger/energy/health) */
+  private _needs = new SurvivalNeeds();
+  /** ambient NPC mew throttle */
+  private lastNpcMewAt = 0;
 
   private camX = 0;
   private camY = 0;
@@ -1237,8 +1251,15 @@ export class GameCanvas {
     this.camY = y;
     this.interiorId = null;
     this.doorCooldownUntil = this.time + 1.2;
-    clearTraffic(); // vehicles are road-only; rebuild the fleet on arrival
+    // traffic is NOT cleared here: the fleet is world-persistent, so cars
+    // keep driving whether the player teleports, interacts or enters a den
     this.cb.onInteriorChange(null);
+  }
+
+  /** Bring the shared fleet back after a forced respawn near the road. */
+  restoreTraffic() {
+    clearTraffic();
+    respawnBothDirections(this.time);
   }
 
   enterInterior(id: string, fromObj?: { x: number; y: number; w: number; h: number; id?: string }) {
@@ -1253,7 +1274,7 @@ export class GameCanvas {
       const owner = allObjects.find((o) => o.interior === id);
       if (owner) this.enteredFrom = { id: owner.id, x: owner.x, y: owner.y, w: owner.w, h: owner.h };
     }
-    clearTraffic(); // interiors are indoors: the fleet resets on entry
+    // traffic is world-persistent: cars keep driving while the cat is indoors
     this.interiorId = id;
     const geo = ROOM_GEO[id];
     this.px = ((geo?.w ?? ROOM_W) / 2) * 32;
@@ -1458,6 +1479,80 @@ export class GameCanvas {
    * heartbeat so remote cats see real motion (never the old hardcoded
    * facing:1 / moving:false), and remote poses stay state-driven.
    */
+  /** Continuous animation clock (decoupled from pause freezes). */
+  private animClock(): number {
+    return performance.now() / 1000;
+  }
+
+  /**
+   * Engine-side SFX bus. The React layer wires cb.onSfx to the AudioEngine;
+   * if it is not connected (offline previews), this is a silent no-op.
+   */
+  engineSfx(name: EngineSfxName, opts: { volume?: number; throttleMs?: number } = {}) {
+    this.cb.onSfx?.(name, opts);
+  }
+
+  /** Survival needs (hunger/energy/health) — UI reads, actions mutate. */
+  get needs() {
+    return this._needs;
+  }
+
+  /** Restore needs: eating fresh-kill, sleeping in dens, resting. */
+  eat(amount = 30) {
+    this._needs.hunger = Math.min(100, this._needs.hunger + amount);
+    this._needs.health = Math.min(100, this._needs.health + 4);
+  }
+  drink() {
+    this._needs.hunger = Math.min(100, this._needs.hunger + 6);
+  }
+  rest(amount = 55) {
+    this._needs.energy = Math.min(100, this._needs.energy + amount);
+    this._needs.health = Math.min(100, this._needs.health + 8);
+  }
+
+  /** Where the cat wakes up after dying (edge of the Thunderpath it died on). */
+  private roadRespawnPoint(): { x: number; y: number } {
+    const baseX = Math.max(200, Math.min(WORLD_W - 200, this.px));
+    const baseY = TP_Y + 64; // south shoulder of the Thunderpath
+    // never respawn inside a tree/rock: spiral out to the nearest free tile
+    if (!isSolidPoint(baseX, baseY)) return { x: baseX, y: baseY };
+    for (let r = 1; r <= 6; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const x = baseX + dx * 32;
+          const y = baseY + dy * 32;
+          if (!isSolidPoint(x, y)) return { x, y };
+        }
+      }
+    }
+    return { x: baseX, y: baseY };
+  }
+
+  /** Car hit: freeze input, fade out, hand the choice to the UI. */
+  startDeath(cause = "car") {
+    if (this.dead) return;
+    this.dead = true;
+    this.keys.clear();
+    this.touchDx = 0;
+    this.touchDy = 0;
+    this.crouchHeld = false;
+    const respawn = this.roadRespawnPoint();
+    this.cb.onDeath?.(cause, respawn);
+  }
+
+  /** Respawn at the road edge: needs partially restored, brief invulnerability. */
+  respawn(at: { x: number; y: number }) {
+    this._needs.hunger = Math.max(this._needs.hunger, 45);
+    this._needs.energy = Math.max(this._needs.energy, 55);
+    this._needs.health = Math.max(50, this._needs.health);
+    this.dead = false;
+    this.hopT = -1;
+    this.wetnessUntil = 0;
+    this.doorCooldownUntil = this.time + 1.2;
+    this.teleport(at.x, at.y);
+    this.restoreTraffic();
+  }
+
   engineState(): {
     x: number; y: number; facing: 1 | -1; moving: boolean;
     movementState: MovementState; animationState: CatPose;
@@ -1696,10 +1791,38 @@ export class GameCanvas {
     this.env.wind += (envTarget.wind - this.env.wind) * ease;
     this.env.dark += (envTarget.dark - this.env.dark) * ease;
 
+    // --- weather on the coat: rain/storm soak, dry-off in clear weather ---
+    if (!this.interiorId) {
+      if ((this.weather === "rain" || this.weather === "heavy-rain" || this.weather === "storm") && !this.swimming) {
+        this.wetnessUntil = Math.max(this.wetnessUntil, performance.now() + 4000);
+      } else if (this.weather === "clear" && !this.swimming && performance.now() > this.wetnessUntil) {
+        // coat dries naturally; the timer only matters while wet
+      }
+    }
+
+    // --- contextual idle: shake off water/snow, occasionally ---
+    if (!this.paused && !this.dead && !this.swimming && this.pPose !== "walk" && this.pPose !== "crouch") {
+      const nowPm = performance.now();
+      const wet = nowPm < this.wetnessUntil;
+      const snowy = this.weather === "snow";
+      if (this.pSpeed <= 8 && this.time > this.poseUntil) {
+        if (wet && nowPm - this.lastShakeAt > 9000 && Math.random() < dt * 0.35) {
+          this.pPose = "shake";
+          this.poseUntil = this.time + 0.55;
+          this.lastShakeAt = nowPm;
+          this.engineSfx("shake", { volume: 0.8, throttleMs: 1500 });
+        } else if (snowy && nowPm - this.lastShakeAt > 11000 && Math.random() < dt * 0.2) {
+          this.pPose = "shake";
+          this.poseUntil = this.time + 0.45;
+          this.lastShakeAt = nowPm;
+        }
+      }
+    }
+
     // --- player movement ---
     let dx = 0;
     let dy = 0;
-    if (!this.paused) {
+    if (!this.paused && !this.dead) {
       if (this.keys.has("w") || this.keys.has("arrowup")) dy -= 1;
       if (this.keys.has("s") || this.keys.has("arrowdown")) dy += 1;
       if (this.keys.has("a") || this.keys.has("arrowleft")) dx -= 1;
@@ -1715,6 +1838,15 @@ export class GameCanvas {
     this.running = running;
     // deep water (swimming) is slower than walking; shallow water stays walkable
     const swimmingNow = !this.interiorId && groundKindAtIdx(groundMap[Math.floor(this.py / GROUND_CELL) * GROUND_COLS + Math.floor(this.px / GROUND_CELL)] ?? 0) === "water";
+    if (swimmingNow && !this.swimming) {
+      // entered water: coat gets soaked + a splash
+      this.wetnessUntil = performance.now() + 15000;
+      this.engineSfx("splash", { volume: 0.9, throttleMs: 600 });
+    } else if (!swimmingNow && this.swimming) {
+      // just left the water: guaranteed one shake-off soon
+      this.wetnessUntil = performance.now() + 15000;
+      this.lastShakeAt = -9999;
+    }
     this.swimming = swimmingNow;
     const speed = swimmingNow ? SWIM_SPEED : this.sneaking ? SNEAK_SPEED : running ? RUN_SPEED : WALK_SPEED;
 
@@ -1913,8 +2045,35 @@ export class GameCanvas {
       if (!this.remotes.has(uid)) this.remoteRender.delete(uid);
     }
 
+    // --- survival needs: slow, unobtrusive drain (paused-safe) ---
+    if (!this.paused && !this.dead) {
+      this.needs.drain(dt, this.sneaking, running, swimmingNow);
+      if (this.needs.hunger <= 0) {
+        this.needs.health = Math.max(0, this.needs.health - dt * 0.5);
+      } else if (this.needs.hunger > 60 && this.needs.health < 100) {
+        this.needs.health = Math.min(100, this.needs.health + dt * 0.4);
+      }
+      if (this.needs.energy <= 0) {
+        // exhausted: no running on an empty tank
+        this.running = false;
+      }
+    }
     // --- prey AI ---
     if (!this.paused && this.prey.length < PREY_MAX && Math.random() < 0.02) this.respawnPreyTick();
+
+    // --- Thunderpath danger: cars HURT (road is lethal, as in the books) ---
+    if (!this.paused && !this.dead && !this.interiorId && Math.abs(this.py - TP_Y) < 46 && this.pSpeed > 6) {
+      const hit = trafficList().some((v) => {
+        const vy = vehicleLaneY(v.dir);
+        if (Math.abs(this.py - vy) > 16) return false;
+        const L = v.kind === "car" ? 62 : v.kind === "truck" ? 96 : 150;
+        return Math.abs(this.px - v.x) < L / 2 + 10;
+      });
+      if (hit) {
+        this.engineSfx("hit", { volume: 1, throttleMs: 0 });
+        this.startDeath("car");
+      }
+    }
     if (!this.interiorId) {
       for (const p of this.prey) {
         if (p.phase !== "alive") continue; // dying/dead prey: AI fully stopped
@@ -2422,7 +2581,11 @@ export class GameCanvas {
       const hy = 2.5 + hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (gh2 - 6);
       const nxp = hx * 32 + 16;
       const nyp = hy * 32 + 16;
-      drawCat(ctx, n.def, nxp, nyp, n.facing, n.pose === "walk" ? "sit" : n.pose, this.time, n.phase);
+      drawCat(ctx, n.def, nxp, nyp, n.facing, n.pose === "walk" ? "sit" : n.pose, this.animClock(), n.phase);
+      if (Math.random() < 0.0015 && performance.now() - this.lastNpcMewAt > 6000) {
+        this.lastNpcMewAt = performance.now();
+        this.engineSfx("mew", { volume: 0.5, throttleMs: 400 });
+      }
       ctx.font = "600 11px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.fillStyle = "rgba(0,0,0,0.45)";
@@ -2434,7 +2597,7 @@ export class GameCanvas {
       ctx.fillText(n.def.name, nxp, nyp - 28);
     }
     // player (lifted mid-hop; the cat sprite itself is unchanged)
-    drawCat(ctx, this.playerSkin(), this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.time, 0);
+    drawCat(ctx, this.playerSkin(), this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.animClock(), 0);
     // bubbles anchored to the player are drawn indoors too
     for (const b of this.bubbles) {
       if (b.track !== "player" || Date.now() > b.until) continue;
@@ -2577,12 +2740,9 @@ export class GameCanvas {
           // Never touch the ctx.save/restore stack here: an unbalanced restore
           // pops the camera transform and vanishes the world.
           void o.detail;
-          // den entrance marker for enterable dens
+          // den entrance: an actual dark doorway arch (no floating dot)
           if (o.interior && !o.detail) {
-            ctx.fillStyle = "rgba(255,235,180,0.9)";
-            ctx.beginPath();
-            ctx.arc(o.x, o.y - h * 0.75 - 8, 3, 0, Math.PI * 2);
-            ctx.fill();
+            drawDenEntrance(ctx, o.x, o.y + h * 0.28, Math.max(26, w * 0.34));
           }
         },
       });
@@ -4307,4 +4467,23 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): st
   return lines.slice(0, 4);
 
 
+}
+
+
+// --- survival needs model (engine-local simulation; React persists it) ------
+export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit";
+
+class SurvivalNeeds {
+  hunger = 80;
+  energy = 90;
+  health = 100;
+  drain(dt: number, sneaking: boolean, running: boolean, swimming: boolean) {
+    // rates per second — tuned to be noticeable over a session, never nagging
+    this.hunger -= dt * (running ? 0.35 : swimming ? 0.3 : sneaking ? 0.1 : 0.18);
+    this.energy -= dt * (running ? 0.7 : swimming ? 0.5 : sneaking ? 0.15 : 0.1);
+    if (this.energy < 15) this.health -= dt * 0.12;
+    this.hunger = Math.max(0, this.hunger);
+    this.energy = Math.max(0, this.energy);
+    this.health = Math.max(0, this.health);
+  }
 }

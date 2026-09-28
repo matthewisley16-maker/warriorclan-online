@@ -14,7 +14,7 @@ export interface CatSkin {
   scar?: boolean;
 }
 
-export type CatPose = "walk" | "sit" | "sleep" | "crouch" | "groom" | "stretch" | "swim";
+export type CatPose = "walk" | "sit" | "sleep" | "crouch" | "groom" | "stretch" | "swim" | "shake";
 
 /** Dark outline derived from the pelt so sprites read crisply on any ground. */
 function outlineOf(skin: CatSkin): string {
@@ -580,6 +580,33 @@ export function drawCave(ctx: CanvasRenderingContext2D, x: number, y: number, w:
   ctx.fillStyle = g;
   ctx.beginPath();
   ctx.arc(x, y, w * 0.32, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/**
+ * A dark, arched den entrance drawn INTO the object's south face — reads as a
+ * real opening a cat can walk into (replaces the old floating dot marker).
+ */
+export function drawDenEntrance(ctx: CanvasRenderingContext2D, x: number, y: number, w: number) {
+  const h = w * 0.62;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
+  ctx.beginPath();
+  ctx.moveTo(x - w / 2, y);
+  ctx.lineTo(x - w / 2, y - h * 0.45);
+  ctx.quadraticCurveTo(x - w / 2 + w * 0.18, y - h, x, y - h);
+  ctx.quadraticCurveTo(x + w / 2 - w * 0.18, y - h, x + w / 2, y - h * 0.45);
+  ctx.lineTo(x + w / 2, y);
+  ctx.closePath();
+  ctx.fill();
+  // warm rim light around the mouth
+  ctx.strokeStyle = "rgba(240, 220, 170, 0.35)";
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  // subtle inner depth fade
+  const g = ctx.createLinearGradient(0, y - h, 0, y);
+  g.addColorStop(0, "rgba(60, 46, 30, 0.25)");
+  g.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = g;
   ctx.fill();
 }
 

@@ -60,6 +60,7 @@ export const ensurePlayer = mutation({
       storyStep: 0,
       questsDone: [],
       skills: { hunt: 1, fight: 1, herb: 0 },
+      stats: { hunger: 80, energy: 90, health: 100, updatedAt: now },
       createdAt: now,
       updatedAt: now,
     });
@@ -283,5 +284,39 @@ export const getMyUserId = query({
   args: {},
   handler: async (ctx) => {
     return await getAuthUserId(ctx);
+  },
+});
+
+export const updateStats = mutation({
+  args: {
+    hunger: v.optional(v.number()),
+    energy: v.optional(v.number()),
+    health: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
+    const now = Date.now();
+    const prev = p.stats ?? { hunger: 80, energy: 90, health: 100, updatedAt: now };
+    await ctx.db.patch(p._id, {
+      stats: {
+        hunger: args.hunger !== undefined ? clamp(args.hunger) : prev.hunger,
+        energy: args.energy !== undefined ? clamp(args.energy) : prev.energy,
+        health: args.health !== undefined ? clamp(args.health) : prev.health,
+        updatedAt: now,
+      },
+      updatedAt: now,
+    });
+    return {
+      hunger: args.hunger !== undefined ? clamp(args.hunger) : prev.hunger,
+      energy: args.energy !== undefined ? clamp(args.energy) : prev.energy,
+      health: args.health !== undefined ? clamp(args.health) : prev.health,
+    };
   },
 });

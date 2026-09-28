@@ -67,6 +67,14 @@ const schema = defineSchema(
         fight: v.number(),
         herb: v.number(),
       })),
+      // survival stats (hunger/energy/health, 0..100) — optional so existing
+      // saves load unchanged; defaults fill in on first write
+      stats: v.optional(v.object({
+        hunger: v.number(),
+        energy: v.number(),
+        health: v.number(),
+        updatedAt: v.number(),
+      })),
       createdAt: v.number(),
       updatedAt: v.number(),
     }).index("by_user", ["userId"]),
