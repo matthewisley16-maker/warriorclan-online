@@ -199,21 +199,26 @@ export function ChatPanel({
 export type AnimAction =
   | { kind: "pose"; label: string; icon: string; pose: "sit" | "sleep" | "groom" | "stretch" | "crouch" }
   | { kind: "emote"; label: string; icon: string; emote: string }
-  | { kind: "vocal"; label: string; icon: string; vocal: "meow" | "hiss" | "growl" | "chirp" | "trill" };
+  | { kind: "action"; label: string; icon: string; action: string }
+  | { kind: "vocal"; label: string; icon: string; vocal: "meow" | "hiss" | "growl" | "chirp" | "trill" | "purr" };
 
 /** Every action here is real: poses drive the sprite, emotes render over the
- *  cat, vocalizations play actual audio (mew asset or WebAudio synthesis). */
+ *  cat, named actions drive body-level fx (yawn/alert/tail) and sync to other
+ *  players, vocalizations play actual audio (mew asset, purr asset, or
+ *  WebAudio synthesis). No decorative buttons. */
 export const ANIM_TABS: { tab: string; icon: string; actions: AnimAction[] }[] = [
   {
     tab: "Social",
     icon: "🐾",
     actions: [
-      { kind: "pose", label: "Sit", icon: "🐱", pose: "sit" },
-      { kind: "pose", label: "Lie down", icon: "💤", pose: "sleep" },
-      { kind: "pose", label: "Groom", icon: "🫧", pose: "groom" },
-      { kind: "pose", label: "Stretch", icon: "〰️", pose: "stretch" },
-      { kind: "emote", label: "Look around", icon: "👀", emote: "..." },
-      { kind: "emote", label: "Sniff", icon: "👃", emote: "~" },
+      { kind: "action", label: "Nod", icon: "👍", action: "nod" },
+      { kind: "action", label: "Shake head", icon: "🙅", action: "shake-head" },
+      { kind: "action", label: "Bow", icon: "🙇", action: "bow" },
+      { kind: "action", label: "Greet", icon: "🐾", action: "greet" },
+      { kind: "action", label: "Invite", icon: "➡️", action: "invite" },
+      { kind: "action", label: "Comfort", icon: "🤝", action: "comfort" },
+      { kind: "action", label: "Celebrate", icon: "🎉", action: "celebrate" },
+      { kind: "action", label: "Warn", icon: "⚠️", action: "warn" },
     ],
   },
   {
@@ -235,12 +240,18 @@ export const ANIM_TABS: { tab: string; icon: string; actions: AnimAction[] }[] =
     tab: "Actions",
     icon: "⚡",
     actions: [
+      { kind: "pose", label: "Sit", icon: "🐱", pose: "sit" },
+      { kind: "pose", label: "Lie down", icon: "💤", pose: "sleep" },
+      { kind: "pose", label: "Groom", icon: "🫧", pose: "groom" },
+      { kind: "pose", label: "Stretch", icon: "〰️", pose: "stretch" },
       { kind: "pose", label: "Crouch", icon: "🐍", pose: "crouch" },
-      { kind: "emote", label: "Scratch", icon: "🪵", emote: "🪵" },
-      { kind: "emote", label: "Dig", icon: "🕳️", emote: "🕳️" },
-      { kind: "emote", label: "Play", icon: "🧶", emote: "🧶" },
+      { kind: "action", label: "Scratch", icon: "🪵", action: "scratch" },
+      { kind: "action", label: "Look around", icon: "👀", action: "look" },
+      { kind: "action", label: "Sniff", icon: "👃", action: "sniff" },
+      { kind: "action", label: "Yawn", icon: "🥱", action: "yawn" },
+      { kind: "action", label: "Alert", icon: "⚠️", action: "alert" },
+      { kind: "action", label: "Wag tail", icon: "〰️", action: "wag" },
       { kind: "emote", label: "Shake fur", icon: "💨", emote: "💨" },
-      { kind: "emote", label: "Wag tail", icon: "〰️", emote: "〰️" },
     ],
   },
   {
@@ -248,6 +259,7 @@ export const ANIM_TABS: { tab: string; icon: string; actions: AnimAction[] }[] =
     icon: "🗣️",
     actions: [
       { kind: "vocal", label: "Meow", icon: "🗣️", vocal: "meow" },
+      { kind: "vocal", label: "Purr", icon: "💗", vocal: "purr" },
       { kind: "vocal", label: "Hiss", icon: "😤", vocal: "hiss" },
       { kind: "vocal", label: "Growl", icon: "😾", vocal: "growl" },
       { kind: "vocal", label: "Chirp", icon: "🐦", vocal: "chirp" },
@@ -262,9 +274,49 @@ export function EmoteBar({
   onAction: (a: AnimAction) => void;
 }) {
   const [tab, setTab] = useState(0);
+  const [open, setOpen] = useState(true);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Esc closes the menu; clicking/tapping outside collapses it too. While
+  // closed nothing but the reopen pill is mounted — zero input blocking.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onDown = (e: PointerEvent) => {
+      const el = rootRef.current;
+      if (el && e.target instanceof Node && !el.contains(e.target)) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onDown);
+    };
+  }, [open]);
+
+  if (!open) {
+    return (
+      <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
+        <button
+          onClick={() => setOpen(true)}
+          title="Open animations"
+          className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/95 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground shadow-lg backdrop-blur-md transition-colors hover:bg-muted"
+        >
+          <span>🐾</span> Animations
+          <ChevronUp className="size-3.5" />
+        </button>
+      </div>
+    );
+  }
+
   const current = ANIM_TABS[tab];
   return (
     <motion.div
+      ref={rootRef}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-2xl border border-border/60 bg-card/95 p-1.5 shadow-lg backdrop-blur-md"
@@ -283,6 +335,14 @@ export function EmoteBar({
             {t.tab}
           </button>
         ))}
+        <span className="w-2" />
+        <button
+          onClick={() => setOpen(false)}
+          title="Close (Esc) — click outside works too"
+          className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <ChevronDown className="size-4" />
+        </button>
       </div>
       <div className="flex gap-1 border-t border-border/60 pt-1">
         {current.actions.map((e) => (

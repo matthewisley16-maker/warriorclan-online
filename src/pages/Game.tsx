@@ -17,6 +17,46 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import { GameCanvas, type MovementState, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
+type NpcConvoChoice = { label: string; reply: string; effect?: "bond" | "patrol" | "end" };
+interface NpcConvo {
+  npcId: string;
+  name: string;
+  role?: string;
+  line: string;
+  choices?: NpcConvoChoice[];
+  /** "reply" marks a closing reply: the next E press ends the conversation */
+  lineIdx?: number | string;
+}
+/** Compact conversation data — context-aware, warriors-tone dialogue. */
+function buildNpcConvo(
+  npc: { id: string; name: string; role?: string; clan?: string; lines: string[] },
+  hour: number,
+  weather: string,
+): { opening: string; choices: NpcConvoChoice[] } {
+  const isNight = hour < 6 || hour >= 21;
+  const rainy = weather === "rain" || weather === "heavy-rain" || weather === "storm";
+  const role = (npc.role ?? "").toLowerCase();
+  let opening: string;
+  if (isNight) opening = "The camp is quiet. You should be asleep in your den, too. Something troubling you?";
+  else if (rainy) opening = "Rain like this keeps the prey deep in their burrows. Best wait it out under cover.";
+  else if (role.includes("leader")) opening = "Ah — good timing. I was just thinking about the patrols for today.";
+  else if (role.includes("deputy")) opening = "The border markers need refreshing along the far edge. Heavy work, but it keeps the Clan safe.";
+  else if (role.includes("medicine")) opening = "Careful where you tread — I just dried the last of the marigold there.";
+  else if (role.includes("apprentice")) opening = "Race you to the Tallrock! ...Well? Were you scared?";
+  else if (role.includes("elder")) opening = "Come closer, young one. My joints ache, but my ears work fine.";
+  else if (role.includes("queen")) opening = "Mind the entrance — one of the kits just learned to pounce, and everything is her prey now.";
+  else opening = "Good hunting? The forest feels full of prey today.";
+  const choices: NpcConvoChoice[] = [
+    { label: "The forest is full of prey today.", reply: "That it is. StarClan provides — when we respect it.", effect: "bond" },
+    { label: "Anything I can help with?", reply: "Keep your ears sharp and your paws quiet. That helps more than you know." },
+    { label: "What's the weather doing?", reply: rainy ? "This rain won't pass before sundown. Guard your nest from the drips." : "Clear skies. A good day to be out among the trees." },
+    { label: "I should get going.", reply: "May you walk safely, wherever the trails take you.", effect: "end" },
+  ];
+  if (role.includes("deputy") || role.includes("warrior")) {
+    choices.splice(1, 1, { label: "Can I join the border patrol?", reply: "Stay close, watch the scents, and keep off the Thunderpath. Welcome aboard.", effect: "patrol" });
+  }
+  return { opening, choices };
+}
 import {
   AudioEngine,
   computeAmbience,
@@ -126,6 +166,16 @@ export default function Game() {
     npcId?: string;
     lineIdx?: number;
   } | null>(null);
+  // --- dedicated player↔NPC conversation state (separate from chatter) ---
+  const [npcConvo, setNpcConvo] = useState<NpcConvo | null>(null);
+  const npcConvoRef = useRef(npcConvo);
+  npcConvoRef.current = npcConvo;
+  const endNpcConvo = useCallback(() => {
+    const c = npcConvoRef.current;
+    if (!c) return;
+    gameRef.current?.setNpcConversation(c.npcId, false);
+    setNpcConvo(null);
+  }, []);
   // Panel visibility is derived from the single active layer.
   const codexOpen = activeUI === "codex";
   const mapOpen = activeUI === "map";
@@ -136,6 +186,11 @@ export default function Game() {
   const [pos, setPos] = useState({ x: 78 * 32, y: 146 * 32 });
   const [clock, setClock] = useState(8);
   const [weather, setWeather] = useState<WeatherKind>("clear");
+  // refs mirror the latest clock/weather for use inside stable callbacks
+  const clockRef = useRef(clock);
+  clockRef.current = clock;
+  const weatherRef = useRef(weather);
+  weatherRef.current = weather;
   const [interior, setInterior] = useState<string | null>(null);
   const [myCat, setMyCat] = useState<{ name: string; clan?: string; appearance: CatSkin } | null>(null);
   // --- survival stats (hunger/energy/health) ---
@@ -319,9 +374,19 @@ export default function Game() {
         interiorRef.current = id;
         setInterior(id);
       },
-      onNpcIdle: (name, line) => {
-        setDialogue({ name, text: line });
-        window.setTimeout(() => setDialogue((d) => (d && d.name === name && d.text === line ? null : d)), 6000);
+      onNpcIdle: undefined, // ambient NPC chatter stays NPC↔NPC; never pops at the player
+      onEmoteFx: (icon) => {
+        gameRef.current?.setEmote(icon); // vocal/action one-shots from remote cats
+      },
+      onConvoEnd: (npcId) => {
+        if (npcConvoRef.current?.npcId === npcId) setNpcConvo(null);
+      },
+      onRemoteVocal: (kind) => {
+        // a remote cat hissed/growled/chirped/trilled/purred/meowed — play the
+        // same real sound the sender heard (mew sample or WebAudio synth)
+        if (kind === "meow") audio().playMew("talk");
+        else if (kind === "purr") audio().playSfx("cat_purr", { volume: 0.4, throttleMs: 900 });
+        else if (kind === "hiss" || kind === "growl" || kind === "chirp" || kind === "trill") audio().playVocal(kind);
       },
       onWaypoint: (info) => {
         setWaypointInfo(info);
@@ -379,8 +444,22 @@ export default function Game() {
         // skip only when ALREADY stationary-and-unchanged since the last send
         // (the first packet after stopping always goes out so remotes see the
         // idle transition immediately instead of extrapolating forever)
-        if (last && stationary && !last.wasMoving && Math.hypot(s.x - last.x, s.y - last.y) < 2 && last.ms === s.movementState && last.an === s.animationState) return;
+        const hasPendingOneShot = Boolean((gameRef.current as unknown as { pAction?: string; pVocal?: string; pActionSent?: string; pVocalSent?: string } | null)?.pAction || (gameRef.current as unknown as { pVocal?: string } | null)?.pVocal);
+        if (last && stationary && !last.wasMoving && Math.hypot(s.x - last.x, s.y - last.y) < 2 && last.ms === s.movementState && last.an === s.animationState && !hasPendingOneShot) return;
         lastSyncRef.current = { x: s.x, y: s.y, ms: s.movementState, an: s.animationState, wasMoving: !stationary };
+        const engineWithActions = gameRef.current as unknown as { pAction?: string; pVocal?: string; pActionSent?: string; pVocalSent?: string } | null;
+        let sentAction: string | undefined;
+        let sentVocal: string | undefined;
+        if (engineWithActions) {
+          if (engineWithActions.pAction && engineWithActions.pAction !== engineWithActions.pActionSent) {
+            sentAction = engineWithActions.pAction;
+            engineWithActions.pActionSent = sentAction;
+          }
+          if (engineWithActions.pVocal && engineWithActions.pVocal !== engineWithActions.pVocalSent) {
+            sentVocal = engineWithActions.pVocal;
+            engineWithActions.pVocalSent = sentVocal;
+          }
+        }
         heartbeat({
           inputSequence: ++inputSeq.current,
           x: s.x,
@@ -389,6 +468,8 @@ export default function Game() {
           moving: s.moving,
           movementState: s.movementState,
           animationState: s.animationState,
+          ...(sentAction ? { action: sentAction } : {}),
+          ...(sentVocal ? { vocal: sentVocal } : {}),
           mode: "open",
           catName: myCat.name,
           clan: myCat.clan,
@@ -534,6 +615,9 @@ export default function Game() {
     return () => window.clearInterval(id);
   }, [phase]);
 
+  // last vocal|action payload seen per remote user (only queue CHANGES —
+  // presence rows persist the last one-shot, so polling would replay it)
+  const lastRemoteActionRef = useRef(new Map<string, string>());
   // Sync remotes into the engine.
   useEffect(() => {
     const g = gameRef.current;
@@ -543,6 +627,13 @@ export default function Game() {
     for (const r of remotesRaw as RemotePlayer[]) {
       seen.add(r.userId);
       map.set(r.userId, r);
+      const prevPayload = lastRemoteActionRef.current.get(r.userId) ?? "";
+      const curPayload = `${r.vocal ?? ""}|${r.action ?? ""}`;
+      if (curPayload !== prevPayload) {
+        lastRemoteActionRef.current.set(r.userId, curPayload);
+        if (r.vocal) (gameRef.current as unknown as { queueRemoteAction?: (k: "vocal", p: string) => void } | null)?.queueRemoteAction?.("vocal", r.vocal);
+        if (r.action) (gameRef.current as unknown as { queueRemoteAction?: (k: "action", p: string) => void } | null)?.queueRemoteAction?.("action", r.action);
+      }
     }
     // a player joining (or re-joining) is re-buffed by the engine from their
     // fresh authoritative snapshot — no stale interpolation state is reused
@@ -746,6 +837,7 @@ export default function Game() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (deathRef.current) return; // the death choice owns the screen
+      if (npcConvoRef.current) { endNpcConvo(); return; }
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       audio().playSfx("ui_move", { throttleMs: 250 }); // menu open / back / close
@@ -780,24 +872,37 @@ export default function Game() {
       const cur = dialogueRef.current;
       audio().resume(); // every interaction is also a valid autoplay unlock
 
-      // NPC conversations: E opens, then E continues to the next line, and
-      // closes when the lines run out.
+      // NPC conversations: E opens a real conversation — the NPC pauses its
+      // AI, faces the player, and stays put until the conversation ends.
       if (target.kind === "npc") {
         const npc = npcs.find((n) => n.id === target.npcId);
         if (!npc) return;
-        if (cur && cur.npcId === npc.id) {
-          const nextIdx = (cur.lineIdx ?? 0) + 1;
-          if (nextIdx >= npc.lines.length) {
-            setDialogue(null);
+        if (npcConvoRef.current && npcConvoRef.current.npcId === npc.id) {
+          // E advances the conversation. While choices are pending E does
+          // nothing (you must answer); after an answer E ends the exchange.
+          const c = npcConvoRef.current;
+          if (c.lineIdx === "reply" as unknown as number) {
+            endNpcConvo();
+          } else if (c.choices && c.choices.length > 0) {
+            return; // answer first
           } else {
-            setDialogue({ name: npc.name, role: npc.role, text: npc.lines[nextIdx], npcId: npc.id, lineIdx: nextIdx });
+            endNpcConvo();
           }
-        } else {
-          audio().playMew("talk"); // randomized greeting mew (varies per cat)
-          setDialogue({ name: npc.name, role: npc.role, text: npc.lines[0], npcId: npc.id, lineIdx: 0 });
+          return;
         }
+        // start: pause the NPC's AI, face the player, open the convo UI
+        // (cleanly close any previous conversation first — never two at once)
+        if (npcConvoRef.current) {
+          gameRef.current?.setNpcConversation(npcConvoRef.current.npcId, false);
+          setNpcConvo(null);
+        }
+        setDialogue(null); // the dedicated conversation UI replaces chatter panels
+        gameRef.current?.setNpcConversation(npc.id, true);
+        audio().playMew("talk");
+        const built = buildNpcConvo(npc, clockRef.current, weatherRef.current);
+        setNpcConvo({ npcId: npc.id, name: npc.name, role: npc.role, line: built.opening, choices: built.choices });
         // story completion counts the first line of the conversation
-        if (mode === "story" && !(cur && cur.npcId === npc.id)) {
+        if (mode === "story") {
           const step = storySteps[storyStepRef.current];
           if (step && step.objective.kind === "talk" && step.objective.targetNpc === npc.id) {
             advanceStory();
@@ -882,6 +987,36 @@ export default function Game() {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mode],
+  );
+
+  /** Choose a response in an NPC conversation — effects matter: bond, patrol. */
+  const handleConvoChoice = useCallback(
+    (choice: NpcConvoChoice) => {
+      const g = gameRef.current;
+      const c = npcConvoRef.current;
+      if (!g || !c) return;
+      audio().playSfx("ui_confirm", { volume: 0.35, throttleMs: 400 });
+      if (choice.effect === "bond") g.addNpcBond(c.npcId, 1);
+      if (choice.effect === "patrol") {
+        g.joinNpcPatrol(c.npcId);
+        setDialogue({ name: c.name, text: choice.reply + " — Let's move." });
+        window.setTimeout(() => setDialogue((d) => (d && d.name === c.name ? null : d)), 5000);
+        endNpcConvo();
+        return;
+      }
+      const isEnd = choice.effect === "end";
+      setNpcConvo({
+        npcId: c.npcId,
+        name: c.name,
+        role: c.role,
+        line: choice.reply,
+        // after a closing reply: E (or a click) ends the exchange cleanly;
+        // otherwise the same topics stay open so the chat can continue
+        lineIdx: isEnd ? ("reply" as unknown as number) : 0,
+        choices: isEnd ? undefined : c.choices,
+      });
+    },
+    [endNpcConvo],
   );
 
   const handleInteractRef = useRef(handleInteract);
@@ -1013,10 +1148,20 @@ export default function Game() {
           window.setTimeout(() => setDialogue((d) => (d && d.name === "Rest" ? null : d)), 4000);
         }
       } else if (e.kind === "vocal") {
-        // real audio: sampled mews (randomized) or synthesized hiss/growl/chirp/trill
-        if (e.vocal === "meow") audio().playMew("talk");
-        else audio().playVocal(e.vocal);
-        g.setEmote(e.icon);
+        // real audio: sampled mews/purr or synthesized hiss/growl/chirp/trill;
+        // engine cooldown prevents sound spam — setEmote only when it fired
+        const fired = g.doVocal(e.vocal);
+        if (fired) {
+          if (e.vocal === "meow") audio().playMew("talk");
+          else if (e.vocal === "purr") audio().playSfx("cat_purr", { volume: 0.5, throttleMs: 900 });
+          else audio().playVocal(e.vocal);
+        }
+      } else if (e.kind === "action") {
+        // named social/emote action: icon + body fx + remote one-shot sync
+        g.doAction(e.action);
+        if (e.action === "yawn") audio().playSfx("cat_mew3", { volume: 0.35, rate: 0.7, throttleMs: 800 });
+        else if (e.action === "greet") audio().playMew("talk");
+        else audio().playSfx("ui_confirm", { volume: 0.25, throttleMs: 500 });
       } else {
         g.setEmote(e.emote);
       }
@@ -1228,7 +1373,7 @@ export default function Game() {
 
       {/* Nearby prompt */}
       <AnimatePresence>
-        {nearby && !dialogue && (
+        {nearby && !dialogue && !npcConvo && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1237,11 +1382,11 @@ export default function Game() {
           >
             <div
               className="rounded-full border border-border/60 bg-card/95 px-4 py-2 shadow-xl backdrop-blur-sm"
-              onClick={isTouch ? () => handleInteract(nearby) : undefined}
+              onClick={isTouch ? () => { if (!npcConvoRef.current) handleInteract(nearby); } : undefined}
             >
               <p className="text-xs text-foreground/90">
                 <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold">E</kbd>{" "}
-                {nearby.kind === "npc" ? `Speak with ${nearby.label}` : nearby.label}
+                {nearby.kind === "npc" ? nearby.label : nearby.label}
               </p>
             </div>
           </motion.div>
@@ -1271,6 +1416,68 @@ export default function Game() {
                   <p className="mt-1.5 text-sm leading-relaxed text-foreground/90">{dialogue.text}</p>
                 </div>
                 <Button variant="ghost" size="icon" onClick={() => setDialogue(null)} className="size-7 shrink-0 rounded-full">
+                  <X className="size-4" />
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Conversation — player↔NPC: compact, E-advances, choices matter.
+          Clearly different from the generic dialogue panel and from NPC↔NPC
+          world bubbles. Clicking the panel advances when no choices pend. */}
+      <AnimatePresence>
+        {npcConvo && (
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 24 }}
+            className="pointer-events-auto absolute inset-x-0 bottom-16 z-[55] mx-auto w-[min(560px,calc(100%-2rem))]"
+          >
+            <div
+              className="rounded-2xl border border-amber-500/30 bg-card/95 p-4 shadow-2xl shadow-black/30 backdrop-blur-md"
+              onClick={() => {
+                if (!npcConvo.choices?.length) endNpcConvo();
+              }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold tracking-tight">{npcConvo.name}</span>
+                    {npcConvo.role && (
+                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600/90 dark:text-amber-300/90">
+                        {npcConvo.role}
+                      </span>
+                    )}
+                    <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-amber-600/80 dark:text-amber-300/80">
+                      NPC
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-sm leading-relaxed text-foreground/90">{npcConvo.line}</p>
+                  {npcConvo.choices && npcConvo.choices.length > 0 ? (
+                    <div className="mt-3 space-y-1.5">
+                      {npcConvo.choices.map((choice, i) => (
+                        <button
+                          key={i}
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            handleConvoChoice(choice);
+                          }}
+                          className="block w-full rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
+                        >
+                          <span className="mr-1.5 text-muted-foreground">›</span>
+                          {choice.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold">E</kbd> continue
+                    </p>
+                  )}
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => endNpcConvo()} className="size-7 shrink-0 rounded-full">
                   <X className="size-4" />
                 </Button>
               </div>

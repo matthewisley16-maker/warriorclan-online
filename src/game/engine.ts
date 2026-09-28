@@ -25,6 +25,7 @@ import {
   type NPCDef,
   type PreyKind,
 } from "./world";
+import type { WorldObject } from "./world";
 import { TP_Y, clearTraffic, drawTunnelPortal, drawVehicle, respawnBothDirections, trafficList, updateTraffic, vehicleLaneY } from "./traffic";
 /** Render-path traffic timestep fallback (wired from the update loop below). */
 let dt = 0.016;
@@ -56,6 +57,103 @@ export interface NearbyTarget {
   remoteUserId?: string;
 }
 
+// ---------------------------------------------------------------------------
+// NPC↔NPC ambient conversations: two cats pair up for a moment and exchange
+// short, original, Warriors-style lines as speech bubbles above their heads.
+// They never touch the player's dialogue UI and never interrupt gameplay —
+// the player simply walks past.
+// ---------------------------------------------------------------------------
+const CHAT: Record<string, string[]> = {
+  greet: [
+    "Wind's from the north today.",
+    "You're up early.",
+    "Good hunting out there?",
+    "Smell that? Rain's coming.",
+    "May StarClan light your path.",
+  ],
+  patrol: [
+    "Border's marked — no scent trouble.",
+    "ShadowClan scent by the logs again.",
+    "We should recross before dark.",
+    "The Thunderpath was quiet.",
+    "Fresh scent along the stream.",
+  ],
+  hunt: [
+    "The rabbits are back on the moor.",
+    "Two mice near the old oak.",
+    "Starling took flight before I could pounce.",
+    "Prey runs well this season.",
+    "The river fish are jumping.",
+  ],
+  weather: [
+    "Rain soon. My paws can feel it.",
+    "Greenleaf sun at last.",
+    "That wind bites like leaf-bare.",
+    "Fog on the hollow this morning.",
+    "Snow's coming — thick, too.",
+  ],
+  apprentice: [
+    "Can we train at the Hollow today?",
+    "I'll beat you to the Tallrock!",
+    "My mentor says I pounce crooked.",
+    "One day I'll lead a patrol.",
+    "Race you to the entrance!",
+  ],
+  mentor: [
+    "Keep your tail still when you stalk.",
+    "You hunted well today. Rest now.",
+    "Tomorrow we train battle moves.",
+    "Listen — the forest speaks first.",
+    "Eat first. Training after.",
+  ],
+  gossip: [
+    "The fresh-kill pile is finally full.",
+    "The elders want stories tonight.",
+    "Kits crowded the nursery all morning.",
+    "The medicine cat needs more marigold.",
+    "Dawn patrol left early today.",
+  ],
+};
+const CHAT_KEYS = Object.keys(CHAT);
+
+/** Deterministic line pair for two NPCs (same pair => same line set). */
+function chatLineFor(a: string, b: string, i: number): string {
+  const pool = CHAT[CHAT_KEYS[(a.charCodeAt(0) * 7 + b.charCodeAt(0) + i) % CHAT_KEYS.length]];
+  return pool[(a.charCodeAt(1) ?? 3) % pool.length];
+}
+const lastNpcPairKey: { key: string; at: number } = { key: "", at: 0 };
+const NPC_TALK = 4200; // ms each line shows
+const NPC_CONVOS = 12; // world is huge: keep at most this many chats alive
+
+/** Icon shown over a cat for a named action (social/emote feedback). */
+export function emoteIconFor(action: string): string | null {
+  switch (action) {
+    case "nod": return "👍";
+    case "shake-head": return "🙅";
+    case "bow": return "🙇";
+    case "greet": return "🐾";
+    case "invite": return "➡️";
+    case "look": return "👀";
+    case "challenge": return "⚔️";
+    case "agree": return "👍";
+    case "disagree": return "🙅";
+    case "comfort": return "🤝";
+    case "celebrate": return "🎉";
+    case "warn": return "⚠️";
+    case "signal": return "🙏";
+    case "groom-other": return "🫧";
+    case "play": return "🧶";
+    case "scratch": return "🪕";
+    case "dig": return "🕳️";
+    case "yawn": return "🤱";
+    case "alert": return "⚠️";
+    case "look": return "👀";
+    case "signal": return "〰️";
+    case "wag": return "〰️";
+    default: return null;
+  }
+}
+
 export interface RemotePlayer {
   userId: string;
   catName: string;
@@ -67,6 +165,10 @@ export interface RemotePlayer {
   facing: number;
   moving: boolean;
   emote?: string;
+  /** one-shot vocal payload (play the sound locally on receive) */
+  vocal?: string;
+  /** one-shot social/emote action payload (show the icon on receive) */
+  action?: string;
   /** synchronized movement state: derived from velocity by the SENDER */
   movementState?: MovementState;
   /** synchronized animation state: idle/walk/crouch/sit/... (never frames) */
@@ -151,6 +253,12 @@ export interface GameCallbacks {
   onDeath?: (cause: string, respawn: { x: number; y: number }) => void;
   /** Engine-originated sound (ambient mews, shakes, splashes, hits). */
   onSfx?: (name: import("./audio").EngineSfxName, opts: { volume?: number; throttleMs?: number }) => void;
+  /** Small floating icon over the player (emote/vocal/social feedback). */
+  onEmoteFx?: (icon: string) => void;
+  /** The engine ended a conversation (the player walked away from the NPC). */
+  onConvoEnd?: (npcId: string) => void;
+  /** A remote cat performed a vocal one-shot: play the real sound locally. */
+  onRemoteVocal?: (kind: string) => void;
 }
 
 export type WeatherKind =
@@ -986,7 +1094,7 @@ const PREY_MAX = 38;
 type NpcAiMode =
   | "idle" | "wander" | "patrol" | "hunt_stalk" | "hunt_chase"
   | "carry_home" | "deliver" | "return_home" | "go_eat" | "after_eat" | "go_drink"
-  | "go_den" | "in_den";
+  | "go_den" | "in_den" | "exit_den";
 
 interface NPCState {
   def: NPCDef;
@@ -1009,6 +1117,40 @@ interface NPCState {
   aiThinkAt: number;
   mewAt: number;
   stepAt: number; // last audible footstep (performance.now ms)
+  // --- conversation lock: while talking to the player the NPC's normal AI
+  // (wander/patrol/hunt) is paused; the cat stays put, faces the player and
+  // resumes exactly what it was doing when the conversation ends. ---
+  convoActive: boolean;
+  prevAi: NpcAiMode;
+  prevTx: number;
+  prevTy: number;
+  // --- stuck detection: movement that makes no progress for a while
+  // triggers a sidestep attempt, never a teleport as the normal path ---
+  stuckSince: number | null; // engine time when progress last happened
+  lastStuckX: number;
+  lastStuckY: number;
+  sidestepUntil: number; // engine time until a sidestep waypoint is tried
+  sidestepPt: { x: number; y: number } | null;
+  // --- den entry: seat booking so two NPCs never collide in one doorway ---
+  denId: string | null;
+  denSeat: number;
+  // --- body-level acting timers (mouth/ears/tail during conversations) ---
+  talkFxUntil: number;
+  yawnFxUntil: number;
+  tailFxUntil: number;
+  alertFxUntil: number;
+}
+
+/** Stable rest seats inside a den's footprint (an arc, not one shared spot). */
+function denSeatsFor(o: WorldObject): { x: number; y: number }[] {
+  const seats: { x: number; y: number }[] = [];
+  for (let i = 0; i < 6; i++) {
+    seats.push({
+      x: o.x - (o.w / 2 - 12) + (i % 3) * ((o.w - 24) / 2),
+      y: o.y - o.h / 4 + Math.floor(i / 3) * (o.h / 3),
+    });
+  }
+  return seats;
 }
 
 function scheduleTarget(def: NPCDef, hour: number): { x: number; y: number } | null {
@@ -1093,6 +1235,31 @@ export class GameCanvas {
   private pPose: CatPose = "walk";
   private poseUntil = 0;
   private pEmote: string | null = null;
+  /** last engine-time a vocal action fired (shared anti-spam cooldown) */
+  private lastVocalAt = 0;
+  /** one-shot payloads attached to engineState (re-broadcast via presence) */
+  pAction: string | undefined;
+  pVocal: string | undefined;
+  /** last payloads actually sent (Game.tsx marks them after the packet) */
+  pActionSent: string | undefined;
+  pVocalSent: string | undefined;
+  /** recent remote vocal/action payloads (de-dupes presence re-broadcasts) */
+  private seenActions = new Map<string, number>();
+  /** queued remote one-shots: vocals + social actions, replayed each frame */
+  private pendingActions: { kind: "vocal" | "action"; payload: string }[] = [];
+  /** live NPC↔NPC conversation sessions (bubble lines between two cats) */
+  private npcChats: {
+    aId: string;
+    bId: string;
+    linesLeft: number;
+    nextLineAt: number;
+  }[] = [];
+  /** engine time when the next NPC↔NPC chat may start (throttle) */
+  private nextNpcChatAt = 0;
+  // --- body-level acting timers for the player cat ---
+  private pYawnUntil = 0;
+  private pAlertUntil = 0;
+  private pTailUntil = 0;
   private emoteUntil = 0;
   private swimming = false; // deep-water movement state
   /** wet-coat timer (performance.now ms) — drives shake-off animations */
@@ -1208,6 +1375,21 @@ export class GameCanvas {
       aiThinkAt: Math.random() * 4,
       mewAt: 0,
       stepAt: 0,
+      convoActive: false,
+      prevAi: "idle" as NpcAiMode,
+      prevTx: n.home.x,
+      prevTy: n.home.y,
+      stuckSince: null,
+      lastStuckX: n.home.x,
+      lastStuckY: n.home.y,
+      sidestepUntil: 0,
+      sidestepPt: null,
+      denId: null,
+      denSeat: -1,
+      talkFxUntil: 0,
+      yawnFxUntil: 0,
+      tailFxUntil: 0,
+      alertFxUntil: 0,
     }));
     this.spawnPrey(80);
 
@@ -1476,7 +1658,123 @@ export class GameCanvas {
 
   addBubble(b: ChatBubble) {
     this.bubbles.push(b);
-    if (this.bubbles.length > 12) this.bubbles.shift();
+    if (this.bubbles.length > 16) this.bubbles.shift();
+  }
+
+  /**
+   * Cooldown-gated player vocal: plays the sound once per cooldown window
+   * (no sound spam, no stacking) and shows the vocal icon over the cat.
+   */
+  doVocal(vocal: string): boolean {
+    if (this.time - this.lastVocalAt < 1.6) return false;
+    this.lastVocalAt = this.time;
+    this.pVocal = vocal; // rides the next movement packet (remote one-shot)
+    this.setEmote(vocal === "meow" ? "🗣" : vocal === "hiss" ? "😤" : vocal === "growl" ? "😾" : vocal === "chirp" ? "🐦" : vocal === "trill" ? "🎵" : vocal === "purr" ? "💗" : "🗣");
+    return true;
+  }
+
+  /** Queue a one-shot from a remote player (vocal sound or social action). */
+  queueRemoteAction(kind: "vocal" | "action", payload: string) {
+    const key = kind + ":" + payload;
+    const now = Date.now();
+    if ((this.seenActions.get(key) ?? 0) > now - 2500) return; // de-dupe re-broadcasts
+    this.seenActions.set(key, now);
+    if (this.seenActions.size > 40) {
+      for (const [k, t] of this.seenActions) if (t < now - 10000) this.seenActions.delete(k);
+    }
+    this.pendingActions.push({ kind, payload });
+  }
+
+  /** Replay queued remote one-shots (called from the update loop). */
+  private drainActions() {
+    for (const a of this.pendingActions) {
+      if (a.kind === "vocal") {
+        // play the REAL sound through the audio engine (mew sample, purr
+        // sample, or the WebAudio synthesis for hiss/growl/chirp/trill)
+        this.cb.onRemoteVocal?.(a.payload);
+      } else {
+        const icon = emoteIconFor(a.payload);
+        if (icon) this.cb.onEmoteFx?.(icon);
+      }
+      if (this.pendingActions.length > 8) break; // never backlog spam
+    }
+    this.pendingActions.length = 0;
+  }
+
+  /**
+   * Player↔NPC conversation lock. While active, the NPC's normal AI is
+   * suspended: the cat stands still, faces the player and does NOT wander,
+   * patrol or hunt until the conversation ends (or the player leaves).
+   */
+  setNpcConversation(npcId: string, active: boolean) {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n) return;
+    if (active) {
+      if (n.convoActive) return;
+      n.convoActive = true;
+      n.prevAi = n.ai;
+      n.prevTx = n.tx;
+      n.prevTy = n.ty;
+      n.pose = "sit";
+      n.activity = "talking with you";
+      n.stuckSince = null;
+    } else {
+      if (!n.convoActive) return;
+      n.convoActive = false;
+      // resume the paused activity exactly where it left off
+      n.ai = n.prevAi;
+      n.tx = n.prevTx;
+      n.ty = n.prevTy;
+      n.activity = "resuming duties";
+      n.waitUntil = this.time + 0.4;
+      n.aiThinkAt = this.time + 2 + Math.random() * 3;
+      n.pose = "walk";
+    }
+  }
+
+  /** Facing for the player during a conversation (API for the UI). */
+  get npcTalkTarget(): string | null {
+    for (const n of this.npcStates) if (n.convoActive) return n.def.id;
+    return null;
+  }
+
+  /**
+   * Named social/emote ACTION: shows the matching icon over the cat, drives
+   * body-level fx (yawn/alert/tail) and syncs to other players as a one-shot.
+   */
+  doAction(action: string) {
+    this.pAction = action; // rides the next movement packet (remote one-shot)
+    this.setEmote(emoteIconFor(action) ?? "✨");
+    const now = this.time;
+    if (action === "yawn") this.pYawnUntil = now + 2.2;
+    else if (action === "alert" || action === "warn" || action === "challenge") this.pAlertUntil = now + 2.4;
+    else if (action === "signal" || action === "invite" || action === "wag") this.pTailUntil = now + 2.6;
+  }
+
+  // --- simple relationship memory: kind/unkind responses are remembered ---
+  private npcBonds = new Map<string, number>();
+  addNpcBond(npcId: string, delta: number) {
+    this.npcBonds.set(npcId, Math.max(-5, Math.min(5, (this.npcBonds.get(npcId) ?? 0) + delta)));
+  }
+  getNpcBond(npcId: string): number {
+    return this.npcBonds.get(npcId) ?? 0;
+  }
+
+  /** The player joined this NPC's patrol: the cat leads the way outside. */
+  joinNpcPatrol(npcId: string) {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n || n.convoActive) return;
+    n.ai = "patrol";
+    n.activity = "patrolling with you";
+    n.patrolPoints = [
+      this.campEntranceFor(n),
+      { x: n.def.home.x + 420, y: n.def.home.y - 120 },
+      { x: this.px, y: this.py },
+      { x: n.def.home.x + 200, y: n.def.home.y + 420 },
+    ];
+    n.patrolIdx = 0;
+    n.waitUntil = 0;
+    n.pose = "walk";
   }
 
   setEmote(emote: string | null) {
@@ -1591,6 +1889,7 @@ export class GameCanvas {
   engineState(): {
     x: number; y: number; facing: 1 | -1; moving: boolean;
     movementState: MovementState; animationState: CatPose;
+    action?: string; vocal?: string;
   } {
     // velocity > threshold => moving (spec: animation derives from movement)
     const moving = this.pSpeed > 8;
@@ -1625,6 +1924,10 @@ export class GameCanvas {
       moving,
       movementState,
       animationState,
+      // one-shot action/vocal payloads ride the next movement packet so the
+      // presence server can re-broadcast them (see Game.tsx heartbeat)
+      action: this.pAction,
+      vocal: this.pVocal,
     };
   }
 
@@ -1997,9 +2300,70 @@ export class GameCanvas {
       // decision tick: distant cats think every ~4s, nearby every ~1.2s
       const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
       const cadence = dPlayer < 700 ? 1.2 : 4;
-      if (!this.paused && !this.dead && this.time >= n.aiThinkAt) {
+      if (!this.paused && !this.dead && this.time >= n.aiThinkAt && !n.convoActive) {
         n.aiThinkAt = this.time + cadence * (0.8 + Math.random() * 0.5);
         this.npcThink(n, hr, night);
+      }
+      // stuck detection: a moving AI cat that makes no progress for ~1.4s
+      // tries a sidestep waypoint; only a genuinely trapped cat (>8s) gets an
+      // emergency nudge to the nearest free tile (never the normal path).
+      // Stationary-by-design modes (idle/deliver/after_eat) never trigger it.
+      const movingMode =
+        n.ai === "wander" || n.ai === "patrol" || n.ai === "hunt_stalk" ||
+        n.ai === "hunt_chase" || n.ai === "carry_home" || n.ai === "return_home" ||
+        n.ai === "go_eat" || n.ai === "go_den" || n.ai === "exit_den";
+      if (!n.convoActive && movingMode) {
+        if (Math.hypot(n.x - n.lastStuckX, n.y - n.lastStuckY) > 6) {
+          // making progress: reset the stall timer
+          n.stuckSince = null;
+          n.lastStuckX = n.x;
+          n.lastStuckY = n.y;
+        } else if (n.stuckSince === null) {
+          n.stuckSince = this.time;
+        } else if (this.time - n.stuckSince > 8) {
+          // genuinely trapped for 8+ seconds: emergency nudge to the nearest
+          // walkable tile (last-resort recovery, not normal pathing)
+          const free = this.nearestFreeNpcSpot(n.x, n.y);
+          if (free) {
+            n.x = free.x;
+            n.y = free.y;
+          }
+          n.stuckSince = null;
+          n.lastStuckX = n.x;
+          n.lastStuckY = n.y;
+          n.sidestepUntil = this.time + 1;
+        } else if (this.time - n.stuckSince > 1.4 && this.time >= n.sidestepUntil) {
+          // stalled 1.4s: try walking AROUND whatever is in the way
+          const st = this.npcSidestep(n);
+          n.sidestepPt = st;
+          n.sidestepUntil = this.time + (st ? 1.8 : 2.5);
+        }
+      }
+      if (n.convoActive) {
+        if (dPlayer > 260) {
+          // player wandered off: end the conversation, restore the schedule
+          this.setNpcConversation(n.def.id, false);
+          this.cb.onConvoEnd?.(n.def.id);
+          continue;
+        }
+        // talking with the player: face them, hold still, keep a polite gap
+        const dx = this.px - n.x;
+        n.facing = dx >= 0 ? 1 : -1;
+        if (dPlayer > 190) {
+          // walked off mid-chat: follow at a walk so the chat never strands
+          const dist = Math.max(1, dPlayer - 120);
+          const nx = n.x + (dx / dPlayer) * Math.min(60 * dt, dist);
+          const ny = n.y + ((this.py - n.y) / dPlayer) * Math.min(60 * dt, dist);
+          if (!isSolidPoint(nx, n.y)) n.x = nx;
+          if (!isSolidPoint(n.x, ny)) n.y = ny;
+          n.pose = "walk";
+        } else {
+          if (n.pose !== "sit" && n.pose !== "groom" && n.pose !== "stretch") n.pose = "sit";
+          // subtle talking/idle loop: mouth moves in bursts, tail flicks rarely
+          if (Math.floor(this.time / 3.2) % 2 === 0) n.talkFxUntil = this.time + 0.4;
+          else if (Math.random() < 0.0015) n.tailFxUntil = this.time + 1.8;
+        }
+        continue;
       }
       if (n.ai === "in_den") {
         // asleep inside a den: skip movement + rendering entirely
@@ -2007,19 +2371,84 @@ export class GameCanvas {
         continue;
       }
       this.npcAct(n, dt);
-      // ambient chatter + rare vocalization for nearby idlers
-      if (
-        this.cb.onNpcIdle &&
-        n.pose !== "walk" &&
-        !this.paused &&
-        Math.random() < 0.0012 &&
-        dPlayer < 200
-      ) {
-        this.cb.onNpcIdle(n.def.name, n.def.lines[Math.floor(Math.random() * n.def.lines.length)]);
-      }
       if (!this.paused && dPlayer < 420 && n.pose !== "sleep" && performance.now() - n.mewAt > 14000 && Math.random() < 0.004) {
         n.mewAt = performance.now();
         this.engineSfx("mew", { volume: dPlayer < 200 ? 0.5 : 0.3, throttleMs: 900 });
+      }
+    }
+
+    this.drainActions();
+    // --- NPC↔NPC ambient conversations: pair two idle-ish cats that are
+    // close together and exchange a few short lines as bubbles. Entirely
+    // world-space: never opens dialogue UI, never pauses the player. ---
+    if (!this.paused && this.time >= this.nextNpcChatAt && this.npcChats.length < NPC_CONVOS) {
+      this.nextNpcChatAt = this.time + 4 + Math.random() * 5;
+      const pool = this.npcStates.filter(
+        (n) =>
+          !n.convoActive &&
+          n.ai !== "in_den" &&
+          n.ai !== "go_den" &&
+          n.ai !== "exit_den" &&
+          n.pose !== "sleep" &&
+          Math.hypot(n.x - this.px, n.y - this.py) < 620,
+      );
+      let started = false;
+      for (let i = 0; i < pool.length && !started; i++) {
+        for (let j = i + 1; j < pool.length && !started; j++) {
+          const a = pool[i];
+          const b = pool[j];
+          const key = a.def.id < b.def.id ? a.def.id + "|" + b.def.id : b.def.id + "|" + a.def.id;
+          if (key === lastNpcPairKey.key) continue;
+          if (Math.hypot(a.x - b.x, a.y - b.y) > 80) continue;
+          a.facing = a.x <= b.x ? 1 : -1;
+          b.facing = b.x <= a.x ? 1 : -1;
+          this.npcChats.push({ aId: a.def.id, bId: b.def.id, linesLeft: 2 + Math.floor(Math.random() * 2), nextLineAt: 0 });
+          lastNpcPairKey.key = key;
+          lastNpcPairKey.at = performance.now();
+          started = true;
+        }
+      }
+    }
+    // advance live chats: each cat "speaks" in turn via a bubble over its head
+    if (this.npcChats.length > 0) {
+      const nowMs = performance.now();
+      for (let c = this.npcChats.length - 1; c >= 0; c--) {
+        const ch = this.npcChats[c];
+        const a = this.npcStates.find((n) => n.def.id === ch.aId);
+        const b = this.npcStates.find((n) => n.def.id === ch.bId);
+        // end the chat if a cat left, got far away, or is talking to the player
+        if (!a || !b || a.convoActive || b.convoActive || Math.hypot(a.x - b.x, a.y - b.y) > 130 || a.ai === "in_den" || b.ai === "in_den") {
+          this.npcChats.splice(c, 1);
+          continue;
+        }
+        if (nowMs >= ch.nextLineAt) {
+          const speaker = ch.linesLeft % 2 === 0 ? a : b;
+          const other = speaker === a ? b : a;
+          const line = chatLineFor(a.def.id, b.def.id, ch.linesLeft);
+          this.bubbles.push({
+            name: speaker.def.name,
+            text: line,
+            x: speaker.x,
+            y: speaker.y,
+            until: nowMs + NPC_TALK,
+            track: "npc:" + speaker.def.id,
+          });
+          if (this.bubbles.length > 16) this.bubbles.shift();
+          speaker.pose = speaker.pose === "sleep" ? "sit" : speaker.pose;
+          speaker.facing = speaker.x <= other.x ? 1 : -1;
+          other.facing = other.x <= speaker.x ? 1 : -1;
+          speaker.talkFxUntil = this.time + NPC_TALK / 1000;
+          // a quiet mew sells the "talking" (nearby cats only, heavily throttled)
+          if (Math.hypot(speaker.x - this.px, speaker.y - this.py) < 320) {
+            this.engineSfx("mew", { volume: 0.18, throttleMs: 1600 });
+          }
+          ch.linesLeft--;
+          ch.nextLineAt = nowMs + NPC_TALK + 900;
+          if (ch.linesLeft <= 0) {
+            this.npcChats.splice(c, 1);
+            lastNpcPairKey.at = nowMs;
+          }
+        }
       }
     }
 
@@ -2245,7 +2674,7 @@ export class GameCanvas {
         const d = Math.hypot(n.x - this.px, n.y - this.py);
         if (d < bestD) {
           bestD = d;
-          near = { kind: "npc", label: n.def.name, npcId: n.def.id };
+          near = { kind: "npc", label: "Talk — " + n.def.name, npcId: n.def.id };
         }
       }
       // prey nearby (pounce!)
@@ -2286,7 +2715,7 @@ export class GameCanvas {
         const d = Math.hypot(hx * 32 + 16 - this.px, hy * 32 + 16 - this.py);
         if (d < bestD) {
           bestD = d;
-          near = { kind: "npc", label: n.def.name, npcId: n.def.id };
+          near = { kind: "npc", label: "Talk — " + n.def.name, npcId: n.def.id };
         }
       }
       // exit door hint (walk-out is primary; E still works near the gap)
@@ -2778,8 +3207,11 @@ export class GameCanvas {
           // Never touch the ctx.save/restore stack here: an unbalanced restore
           // pops the camera transform and vanishes the world.
           void o.detail;
-          // den entrance: an actual dark doorway arch (no floating dot)
-          if (o.interior && !o.detail) {
+          // den-entrance arch is for CAVE dens only: bushes/brambles/logs,
+          // houses, barns and the cave already draw a real doorway inside
+          // their own sprite — stamping an arch on every interior object is
+          // what produced the "second floating door" beside every nest.
+          if (o.interior && !o.detail && o.style === "cave") {
             drawDenEntrance(ctx, o.x, o.y + h * 0.28, Math.max(26, w * 0.34));
           }
         },
@@ -2811,18 +3243,27 @@ export class GameCanvas {
       ents.push({
         y: n.y,
         draw: () => {
-          drawCat(ctx, n.def, n.x, n.y, n.facing, n.pose, this.time, n.phase);
+          drawCat(ctx, n.def, n.x, n.y, n.facing, n.pose, this.time, n.phase, {
+            talking: n.talkFxUntil > this.time,
+            yawn: n.yawnFxUntil > this.time,
+            tailFlick: n.tailFxUntil > this.time,
+            alert: n.alertFxUntil > this.time,
+          });
           const d = Math.hypot(n.x - this.px, n.y - this.py);
           if (d < 130) {
             ctx.font = "600 11px system-ui, sans-serif";
             ctx.textAlign = "center";
-            ctx.fillStyle = "rgba(0,0,0,0.45)";
+            ctx.fillStyle = "rgba(24, 30, 22, 0.55)";
             const tw = ctx.measureText(n.def.name).width;
             ctx.beginPath();
             ctx.roundRect(n.x - tw / 2 - 6, n.y - 40, tw + 12, 17, 8);
             ctx.fill();
-            ctx.fillStyle = "#f4f1e8";
+            ctx.fillStyle = "#f2d488"; // gold-ish: NPC cats, not players
             ctx.fillText(n.def.name, n.x, n.y - 28);
+            // small PAW badge: an unmistakable "this is an NPC" marker
+            ctx.font = "600 9px system-ui, sans-serif";
+            ctx.fillStyle = "rgba(242, 212, 136, 0.8)";
+            ctx.fillText("🐾 NPC", n.x, n.y - 18);
           }
         },
       });
@@ -2893,6 +3334,12 @@ export class GameCanvas {
       this.pPose,
       this.time,
       0,
+      {
+        yawn: this.pYawnUntil > this.time,
+        alert: this.pAlertUntil > this.time,
+        tailFlick: this.pTailUntil > this.time,
+        talking: false,
+      },
     );
         if (this.pEmote) {
           ctx.font = "18px system-ui, sans-serif";
@@ -2971,6 +3418,13 @@ export class GameCanvas {
         // follow MY cat every frame
         bx = this.px;
         by = this.py;
+      } else if (b.track && b.track.startsWith("npc:")) {
+        // follow an NPC (NPC↔NPC ambient conversation bubble)
+        const trackId = b.track;
+        const n = this.npcStates.find((s) => s.def.id === trackId.slice(4));
+        if (!n) continue;
+        bx = n.x;
+        by = n.y;
       } else if (b.track) {
         // follow the remote cat (interpolated); drop if that player left
         const r = this.remoteRender.get(b.track) ?? this.remotes.get(b.track);
@@ -4405,6 +4859,53 @@ export class GameCanvas {
     return best;
   }
 
+  /**
+   * A sidestep waypoint around whatever is blocking the cat: pick the
+   * perpendicular side that is actually walkable. Returns null when there is
+   * nothing walkable nearby — the caller then just waits and retries.
+   */
+  private npcSidestep(n: NPCState): { x: number; y: number } | null {
+    const dirx = n.tx - n.x;
+    const diry = n.ty - n.y;
+    const len = Math.hypot(dirx, diry) || 1;
+    const fx = dirx / len;
+    const fy = diry / len;
+    for (const side of [1, -1]) {
+      for (const dist of [26, 44, 62]) {
+        const px = n.x + (-fy * side) * dist + fx * 14;
+        const py = n.y + (fx * side) * dist + fy * 14;
+        if (!isSolidPoint(px, py) && !isSolidPoint(n.x + (px - n.x) * 0.5, n.y + (py - n.y) * 0.5)) {
+          return { x: px, y: py };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Nearest walkable point to (x, y) — emergency unstick ONLY (not pathing). */
+  private nearestFreeNpcSpot(x: number, y: number): { x: number; y: number } | null {
+    if (!isSolidPoint(x, y)) return { x, y };
+    for (let r = 1; r <= 5; r++) {
+      for (let a = 0; a < 12; a++) {
+        const ang = (a / 12) * Math.PI * 2;
+        const cx = x + Math.cos(ang) * r * 14;
+        const cy = y + Math.sin(ang) * r * 14;
+        if (!isSolidPoint(cx, cy)) return { x: cx, y: cy };
+      }
+    }
+    return null;
+  }
+
+  /** Claim a free resting seat inside a den (so two cats never share one). */
+  private claimDenSeat(o: WorldObject): number {
+    const seats = denSeatsFor(o);
+    const taken = new Set(
+      this.npcStates.filter((s) => s.denId === o.id).map((s) => s.denSeat),
+    );
+    for (let i = 0; i < seats.length; i++) if (!taken.has(i)) return i;
+    return 0;
+  }
+
   /** A walkable tile beside water (for drinking spots). */
   private nearestWaterEdge(x: number, y: number): { x: number; y: number } | null {
     if (!this.waterEdgeCache) {
@@ -4522,12 +5023,24 @@ export class GameCanvas {
   }
 
   private npcAct(n: NPCState, dt: number) {
+    if (n.convoActive) return; // talking with the player — schedule paused
     const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
     const arrive = 10;
     const walkSpeed = 46;
     const runSpeed = 120;
 
     const stepTo = (tx: number, ty: number, sp: number): number => {
+      // stuck-aware pathing: while a sidestep waypoint is live, route through
+      // it first so the cat walks AROUND the obstacle instead of into it
+      if (n.sidestepPt && this.time < n.sidestepUntil) {
+        const sd = Math.hypot(n.sidestepPt.x - n.x, n.sidestepPt.y - n.y);
+        if (sd > 8) {
+          tx = n.sidestepPt.x;
+          ty = n.sidestepPt.y;
+        } else {
+          n.sidestepPt = null; // cleared the corner: resume the real target
+        }
+      }
       const dist = Math.hypot(tx - n.x, ty - n.y);
       if (dist > 0.5) {
         const ux = (tx - n.x) / dist;
@@ -4663,27 +5176,68 @@ export class GameCanvas {
       case "go_den": {
         const denObj = allObjects.find((o) => o.interior && o.interior === n.preyId);
         if (!denObj) { n.preyId = null; n.ai = "wander"; break; }
+        // wait politely if another cat is still entering this den
+        const blocker = this.npcStates.some(
+          (o) => o !== n && o.denId === denObj.id && o.ai === "go_den" && Math.hypot(o.x - denObj.x, o.y - denObj.y) < 46,
+        );
+        if (blocker) { n.pose = "sit"; break; }
+        // 1) walk to the actual entrance mouth on the south face
         const d = stepTo(denObj.x, denObj.y + denObj.h / 2 + 14, walkSpeed);
         if (d <= arrive) {
-          // walk in: the cat disappears into the den and sleeps there
-          n.preyId = null;
-          n.pose = "sleep";
-          n.ai = "in_den";
-          n.activity = "sleeping in the den";
-          n.waitUntil = this.time + 30 + Math.random() * 40; // sleeps until ~dawn check
+          // 2) book a resting spot INSIDE the den's footprint (several valid
+          //    seats — never one shared coordinate) and take a few visible
+          //    steps into the mouth before tucking in
+          if (n.denId !== denObj.id) {
+            const seat = this.claimDenSeat(denObj);
+            n.denId = denObj.id;
+            n.denSeat = seat;
+          }
+          const seats = denSeatsFor(denObj);
+          const seat = seats[Math.max(0, Math.min(seats.length - 1, n.denSeat))];
+          const stepIn = stepTo(seat.x, seat.y, 30);
+          if (stepIn <= 6) {
+            n.preyId = null;
+            n.pose = "sleep";
+            n.ai = "in_den";
+            n.activity = "sleeping in the den";
+            n.waitUntil = this.time + 30 + Math.random() * 40; // sleeps until ~dawn check
+          }
         }
         break;
       }
       case "in_den": {
-        // daytime (or a long rest) ends den sleep: reappear at the entrance
+        // daytime (or a long rest) ends den sleep: wake up, then WALK out
+        // through the entrance mouth — no coordinate snap
         if (this.nightAlpha() < 0.4 || this.time > n.waitUntil) {
-          const denObj2 = allObjects.find((o) => o.interior && Math.hypot(o.x - n.x, o.y - n.y) < 80);
-          const out = denObj2 ? { x: denObj2.x, y: denObj2.y + denObj2.h / 2 + 22 } : n.def.home;
-          n.x = out.x;
-          n.y = out.y;
+          const denObj2 = allObjects.find((o) => o.interior && o.id === n.denId)
+            ?? allObjects.find((o) => o.interior && Math.hypot(o.x - n.x, o.y - n.y) < 80);
+          if (denObj2) {
+            n.ai = "exit_den";
+            n.preyId = denObj2.id; // carry the den object id while walking out
+            n.pose = "walk";
+            n.activity = "leaving the den";
+          } else {
+            n.denId = null;
+            n.denSeat = -1;
+            n.pose = "stretch";
+            n.ai = "idle";
+            n.activity = "waking up";
+            n.waitUntil = this.time + 2;
+          }
+        }
+        break;
+      }
+      case "exit_den": {
+        const denObj3 = allObjects.find((o) => o.id === n.preyId);
+        if (!denObj3) { n.preyId = null; n.denId = null; n.ai = "idle"; break; }
+        const out = stepTo(denObj3.x, denObj3.y + denObj3.h / 2 + 22, walkSpeed);
+        if (out <= 10) {
+          n.preyId = null;
+          n.denId = null;
+          n.denSeat = -1;
           n.pose = "stretch";
           n.ai = "idle";
-          n.activity = "waking up";
+          n.activity = "starting the day";
           n.waitUntil = this.time + 2;
         }
         break;

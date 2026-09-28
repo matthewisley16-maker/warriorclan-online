@@ -40,6 +40,8 @@ export function drawCat(
   pose: CatPose,
   time: number,
   phase: number,
+  /** optional body-level acting overlay: yawn/alert/tail-flick/blink/talk */
+  fx?: { yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean },
 ) {
   const size = skin.size ?? 1;
   const moving = pose === "walk" || pose === "swim";
@@ -190,19 +192,20 @@ export function drawCat(
   ctx.fill();
   ctx.stroke();
 
-  // ears
+  // ears (alert pricks both ears upright and forward)
   const earH = skin.ears === "tall" ? 12 : skin.ears === "fold" ? 6 : 10;
+  const earDx = fx?.alert ? -2 : 0;
   ctx.beginPath();
-  ctx.moveTo(headX - 5.5, headY - 3.5);
-  ctx.lineTo(headX - 3, headY - earH);
-  ctx.lineTo(headX - 0.5, headY - 4.5);
+  ctx.moveTo(headX - 5.5 + earDx, headY - 3.5);
+  ctx.lineTo(headX - 3 + earDx, headY - earH);
+  ctx.lineTo(headX - 0.5 + earDx, headY - 4.5);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(headX + 1, headY - 5);
-  ctx.lineTo(headX + 3.5, headY - earH - 0.5);
-  ctx.lineTo(headX + 6, headY - 3.5);
+  ctx.lineTo(headX + 3.5 - earDx, headY - earH - 0.5);
+  ctx.lineTo(headX + 6 - earDx, headY - 3.5);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
@@ -224,11 +227,30 @@ export function drawCat(
     ctx.stroke();
   }
 
-  // muzzle
+  // muzzle (a yawn opens the mouth: dark maw + tiny pink tongue)
   ctx.fillStyle = "rgba(255,255,255,0.25)";
   ctx.beginPath();
   ctx.ellipse(headX + 4, headY + 2.5, 3, 2.2, 0, 0, Math.PI * 2);
   ctx.fill();
+  if (fx?.yawn) {
+    const maw = Math.sin(time * 2.6) * 0.5 + 0.5; // gentle open-close loop
+    ctx.fillStyle = "#241a16";
+    ctx.beginPath();
+    ctx.ellipse(headX + 4.2, headY + 3.4 + maw * 0.8, 2.6, 1.4 + maw * 2.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#d98a8a";
+    ctx.beginPath();
+    ctx.ellipse(headX + 4.2, headY + 4.6 + maw * 1.4, 1.2, 0.8 + maw * 0.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (fx?.talking) {
+    // subtle mouth movement while this cat speaks to the player
+    ctx.fillStyle = "rgba(60, 40, 35, 0.85)";
+    const jaw = Math.abs(Math.sin(time * 6)) * 1.6;
+    ctx.beginPath();
+    ctx.ellipse(headX + 4.4, headY + 3.2, 1.1, 0.5 + jaw, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   // eyes — closed while sleeping, blinking otherwise; both visible (3/4 view)
   const blink =
@@ -266,6 +288,22 @@ export function drawCat(
   ctx.stroke();
 
   ctx.restore();
+
+  // tail flick: drawn OUTSIDE the mirrored transform so it always sweeps to
+  // the same side regardless of facing (a visible, readable tail gesture)
+  if (fx?.tailFlick) {
+    const flick = Math.sin(time * 5.5) * 8;
+    ctx.save();
+    ctx.translate(x, y - 4);
+    ctx.strokeStyle = skin.furDark;
+    ctx.lineWidth = 4.5;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(-12, 0);
+    ctx.quadraticCurveTo(-20, -8 - flick * 0.4, -24, -14 - flick);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 // ---------------------------------------------------------------------------

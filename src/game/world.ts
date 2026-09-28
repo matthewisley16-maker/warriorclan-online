@@ -142,7 +142,7 @@ export const clearZones: Rect[] = [
   { x: t(160), y: t(86), w: t(22), h: t(20) },                 // RiverClan camp
   { x: t(86), y: t(10), w: t(20), h: t(18) },                  // ShadowClan camp
   { x: t(58), y: t(128), w: t(40), h: t(40) },                 // Twolegplace
-  { x: t(20) - t(2.4), y: t(84) + t(19), w: t(6), h: t(5) },   // WindClan gorse-tunnel approach
+  { x: t(20) - t(2.4), y: t(84) + t(19), w: t(6), h: t(13) },  // WindClan gorse-tunnel approach (long open walkway south)
   { x: t(104), y: t(136), w: t(40), h: t(36) },                // Farm
   { x: t(18), y: t(38), w: t(16), h: t(10) },                  // Highstones
   { x: t(140), y: t(64), w: t(16), h: t(6) },                  // east river crossing approach
@@ -785,8 +785,9 @@ function seedScatter() {
   const entranceCorridors: Rect[] = [
     // ThunderClan: the tunnel mouth south of the wall + the walk-in inside
     { x: cc.x - t(2.5), y: CAMP_CENTER.y + CAMP_RADIUS - t(2), w: t(6), h: t(5) },
-    // WindClan: tunnel mouth south of the wall + the walk-in inside
-    { x: wc.x - t(2.5), y: wc.y + t(19.5), w: t(6), h: t(5) },
+    // WindClan: the long open walkway south of the camp (scatter trees
+    // dotted a diagonal line right across the walk-out path)
+    { x: wc.x - t(2.5), y: wc.y + t(19.5), w: t(6), h: t(13) },
     // RiverClan / ShadowClan entrances (same south-gap layout)
     { x: rc.x - t(2.5), y: rc.y + CAMP_RADIUS - t(2), w: t(6), h: t(5) },
     { x: sc.x - t(2.5), y: sc.y + CAMP_RADIUS - t(2), w: t(6), h: t(5) },
