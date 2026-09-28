@@ -122,7 +122,6 @@ const REMOTE_EXTRAPOLATE_MS = 220; // coast on velocity at most this long
 const REMOTE_MAX_EXTRAP = 26; // never coast farther than this (px)
 const REMOTE_SNAP_DIST = 250; // larger desync = authoritative correction
 const REMOTE_MAX_CATCHUP = 350; // max convergence speed px/s (anti rubber-band)
-const REMOTE_SOFT_CATCHUP = 18; // timeline-follow rate (1/s), dt-scaled
 const REMOTE_POSE_LATCH_MS = 450; // hold walk this long after movement stops
 
 export interface ChatBubble {
@@ -986,7 +985,8 @@ const PREY_MAX = 38;
 
 type NpcAiMode =
   | "idle" | "wander" | "patrol" | "hunt_stalk" | "hunt_chase"
-  | "carry_home" | "deliver" | "return_home";
+  | "carry_home" | "deliver" | "return_home" | "go_eat" | "after_eat" | "go_drink"
+  | "go_den" | "in_den";
 
 interface NPCState {
   def: NPCDef;
@@ -1104,10 +1104,10 @@ export class GameCanvas {
   private _needs = new SurvivalNeeds();
   /** ambient NPC mew throttle */
   private lastNpcMewAt = 0;
-  /** cached fresh-kill pile spot (resolved lazily) */
-  private campFreshKill: { x: number; y: number } | null = null;
   /** prey deposited by NPC hunters this session (pile grows visually) */
   private campPreyBonus = new Map<string, number>();
+  /** nearest water edge lookup cache (recomputed on world edits only) */
+  private waterEdgeCache: { x: number; y: number }[] | null = null;
 
   private camX = 0;
   private camY = 0;
@@ -1527,6 +1527,11 @@ export class GameCanvas {
     return this._needs;
   }
 
+  /** Player eats from the pile: it visibly shrinks (shared with NPC cats). */
+  takePreyFromPile() {
+    this.takeFromPile();
+  }
+
   /** Restore needs: eating fresh-kill, sleeping in dens, resting. */
   eat(amount = 30) {
     this._needs.hunger = Math.min(100, this._needs.hunger + amount);
@@ -1609,7 +1614,10 @@ export class GameCanvas {
       : "idle";
     const animationState: CatPose =
       moving ? (this.sneaking ? "crouch" : "walk")
-        : !moving && this.time > this.poseUntil && this.pPose !== "walk" ? this.pPose : "sit";
+        // poseUntil guards MOVEMENT transitions; timed emote/shake poses must
+        // still sync so remotes see shakes, grooming and rain reactions
+        : this.pPose !== "walk" && this.pPose !== "sit" && (this.time < this.poseUntil || this.pPose === "shake") ? this.pPose
+        : "sit";
     return {
       x: this.px,
       y: this.py,
@@ -1992,6 +2000,11 @@ export class GameCanvas {
       if (!this.paused && !this.dead && this.time >= n.aiThinkAt) {
         n.aiThinkAt = this.time + cadence * (0.8 + Math.random() * 0.5);
         this.npcThink(n, hr, night);
+      }
+      if (n.ai === "in_den") {
+        // asleep inside a den: skip movement + rendering entirely
+        if (this.nightAlpha() < 0.4 || this.time > n.waitUntil) this.npcAct(n, dt);
+        continue;
       }
       this.npcAct(n, dt);
       // ambient chatter + rare vocalization for nearby idlers
@@ -4366,11 +4379,52 @@ export class GameCanvas {
   // every frame with collision, so no cat ever teleports.
 
   private freshKillSpot(): { x: number; y: number } | null {
-    if (this.campFreshKill) return this.campFreshKill;
-    const pile = allObjects.find((o) => o.interact === "fresh-kill");
-    if (!pile) return null;
-    this.campFreshKill = { x: pile.x, y: pile.y };
-    return this.campFreshKill;
+    // nearest fresh-kill pile to the acting cat (each camp has its own)
+    let best: { x: number; y: number } | null = null;
+    let bestD = Infinity;
+    for (const o of allObjects) {
+      if (o.interact !== "fresh-kill") continue;
+      const d = Math.hypot(o.x - this.px, o.y - this.py);
+      if (d < bestD) { bestD = d; best = { x: o.x, y: o.y }; }
+    }
+    return best;
+  }
+
+  /** Nearest enterable den object near a point (null = none close). */
+  private denInteriorNear(x: number, y: number) {
+    let best: { id: string; interior: string; x: number; y: number; h: number } | null = null;
+    let bestD = 460;
+    for (const o of allObjects) {
+      if (!o.interior) continue;
+      const d = Math.hypot(o.x - x, o.y - y);
+      if (d < bestD) {
+        bestD = d;
+        best = { id: o.id, interior: o.interior, x: o.x, y: o.y, h: o.h };
+      }
+    }
+    return best;
+  }
+
+  /** A walkable tile beside water (for drinking spots). */
+  private nearestWaterEdge(x: number, y: number): { x: number; y: number } | null {
+    if (!this.waterEdgeCache) {
+      const edges: { x: number; y: number }[] = [];
+      for (let r = 0; r < GROUND_ROWS; r++) {
+        for (let c = 0; c < GROUND_COLS; c++) {
+          if ((groundMap[r * GROUND_COLS + c] ?? 0) !== 2) continue; // water cells
+          const up = r > 0 ? (groundMap[(r - 1) * GROUND_COLS + c] ?? 0) : 0;
+          if (up !== 2) edges.push({ x: c * GROUND_CELL + GROUND_CELL / 2, y: r * GROUND_CELL });
+        }
+      }
+      this.waterEdgeCache = edges;
+    }
+    let best: { x: number; y: number } | null = null;
+    let bestD = Infinity;
+    for (const e of this.waterEdgeCache) {
+      const d = Math.hypot(e.x - x, e.y - y);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return bestD < 3000 ? best : null;
   }
 
   private campEntranceFor(_n: NPCState): { x: number; y: number } {
@@ -4387,6 +4441,16 @@ export class GameCanvas {
     const outdoor = /warrior|deputy|leader|apprentice|hunter|guard/i.test(n.def.role) || n.def.wander;
     const roll = Math.random();
     if (night && roll < 0.55 * lazy) {
+      // den-owning cats sleep INSIDE their den (real enter/exit, no teleport)
+      const den = this.denInteriorNear(n.def.home.x, n.def.home.y);
+      if (den) {
+        n.ai = "go_den";
+        n.preyId = den.interior; // reuse preyId as the den interior id while travelling
+        n.activity = "heading to the den to sleep";
+        n.tx = den.x;
+        n.ty = den.y + den.h / 2 + 14;
+        return;
+      }
       n.ai = "wander";
       n.activity = "curling up to sleep";
       n.tx = n.def.home.x + (Math.random() - 0.5) * 40;
@@ -4396,10 +4460,21 @@ export class GameCanvas {
     if (roll < 0.16) {
       const pile = this.freshKillSpot();
       if (pile) {
-        n.ai = "wander";
+        n.ai = "go_eat";
         n.activity = "going to eat";
         n.tx = pile.x;
         n.ty = pile.y + 14;
+        return;
+      }
+    }
+    // thirsty: walk to the nearest water's edge and drink
+    if (roll < 0.22) {
+      const spot = this.nearestWaterEdge(n.x, n.y);
+      if (spot) {
+        n.ai = "go_drink";
+        n.activity = "going to drink";
+        n.tx = spot.x;
+        n.ty = spot.y;
         return;
       }
     }
@@ -4563,6 +4638,70 @@ export class GameCanvas {
         }
         break;
       }
+      case "go_eat": {
+        const pile = this.freshKillSpot();
+        if (!pile) { n.ai = "idle"; break; }
+        const d = stepTo(pile.x, pile.y + 14, walkSpeed);
+        if (d <= arrive) {
+          // EAT: pose + take from the pile (it shrinks), then groom happily
+          n.pose = "groom";
+          this.takeFromPile();
+          n.preyId = null;
+          n.waitUntil = this.time + 2.5;
+          n.ai = "after_eat";
+        }
+        break;
+      }
+      case "after_eat": {
+        if (this.time > n.waitUntil) {
+          n.pose = Math.random() < 0.5 ? "sit" : "sleep";
+          n.ai = "idle";
+          n.waitUntil = this.time + 4 + Math.random() * 5;
+        }
+        break;
+      }
+      case "go_den": {
+        const denObj = allObjects.find((o) => o.interior && o.interior === n.preyId);
+        if (!denObj) { n.preyId = null; n.ai = "wander"; break; }
+        const d = stepTo(denObj.x, denObj.y + denObj.h / 2 + 14, walkSpeed);
+        if (d <= arrive) {
+          // walk in: the cat disappears into the den and sleeps there
+          n.preyId = null;
+          n.pose = "sleep";
+          n.ai = "in_den";
+          n.activity = "sleeping in the den";
+          n.waitUntil = this.time + 30 + Math.random() * 40; // sleeps until ~dawn check
+        }
+        break;
+      }
+      case "in_den": {
+        // daytime (or a long rest) ends den sleep: reappear at the entrance
+        if (this.nightAlpha() < 0.4 || this.time > n.waitUntil) {
+          const denObj2 = allObjects.find((o) => o.interior && Math.hypot(o.x - n.x, o.y - n.y) < 80);
+          const out = denObj2 ? { x: denObj2.x, y: denObj2.y + denObj2.h / 2 + 22 } : n.def.home;
+          n.x = out.x;
+          n.y = out.y;
+          n.pose = "stretch";
+          n.ai = "idle";
+          n.activity = "waking up";
+          n.waitUntil = this.time + 2;
+        }
+        break;
+      }
+      case "go_drink": {
+        const pile = this.freshKillSpot();
+        void pile;
+        const target = this.nearestWaterEdge(n.x, n.y);
+        if (!target) { n.ai = "idle"; break; }
+        const d = stepTo(target.x, target.y, walkSpeed);
+        if (d <= arrive) {
+          n.pose = "sit"; // head lowered over the water
+          this.engineSfx("drink", { volume: 0.4, throttleMs: 900 });
+          n.waitUntil = this.time + 2;
+          n.ai = "after_eat";
+        }
+        break;
+      }
       case "return_home": {
         const d = stepTo(n.def.home.x, n.def.home.y, walkSpeed);
         if (d <= 20) {
@@ -4577,12 +4716,25 @@ export class GameCanvas {
     }
   }
 
-  /** A hunter deposits prey: the pile visibly grows (session-scoped). */
+  /** A hunter deposits prey: the nearest pile visibly grows (session-scoped). */
   private deliverFreshKill() {
-    const pile = allObjects.find((o) => o.interact === "fresh-kill");
+    const spot = this.freshKillSpot();
+    if (!spot) return;
+    const pile = allObjects.find((o) => o.interact === "fresh-kill" && Math.hypot(o.x - spot.x, o.y - spot.y) < 1);
     if (!pile) return;
     const cur = this.campPreyBonus.get(pile.id) ?? 0;
     this.campPreyBonus.set(pile.id, Math.min(6, cur + 1));
+  }
+
+  /** Eating from the pile: it visibly shrinks (floor 0, never negative). */
+  private takeFromPile() {
+    const spot = this.freshKillSpot();
+    if (!spot) return;
+    const pile = allObjects.find((o) => o.interact === "fresh-kill" && Math.hypot(o.x - spot.x, o.y - spot.y) < 1);
+    if (!pile) return;
+    const cur = this.campPreyBonus.get(pile.id) ?? 0;
+    if (cur <= 0) return;
+    this.campPreyBonus.set(pile.id, cur - 1);
   }
 
   private stepRemoteRender(cur: RemoteRenderState, dt: number, wallMs: number) {

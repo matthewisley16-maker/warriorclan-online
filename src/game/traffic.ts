@@ -54,14 +54,6 @@ export function respawnBothDirections(time: number) {
   respawnAtWest = time + 1.4;
 }
 
-/** Keep the fleet alive: updateTraffic schedules respawns; this is the
- *  engine-side tick called from update() so schedules also advance when the
- *  render path is the only caller. */
-export function tickTrafficRespawns(_time: number) {
-  // currently a hook point — respawn scheduling lives inside updateTraffic;
-  // keeping the call site explicit makes future fleet logic simpler
-}
-
 function pickKind(): (typeof KINDS)[number] {
   let r = Math.random() * KIND_TOTAL;
   for (const k of KINDS) {

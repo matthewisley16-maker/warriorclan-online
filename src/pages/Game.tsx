@@ -22,7 +22,6 @@ import {
   computeAmbience,
   computeMusic,
   stepKindFor,
-  type MusicId,
 } from "@/game/audio";
 import { interiors } from "@/game/engine";
 import { GROUND_CELL, GROUND_COLS, GROUND_ROWS, groundMap, lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
@@ -59,15 +58,6 @@ const audioRef: { current: AudioEngine | null } = { current: null };
 function audio(): AudioEngine {
   if (!audioRef.current) audioRef.current = new AudioEngine();
   return audioRef.current;
-}
-
-function musicOfClan(clan?: string): MusicId {
-  switch (clan) {
-    case "riverclan": return "riverclan";
-    case "windclan": return "windclan";
-    case "shadowclan": return "shadowclan";
-    default: return "thunderclan";
-  }
 }
 
 function groundIndexAt(x: number, y: number): number {
@@ -580,9 +570,8 @@ export default function Game() {
         });
         const rtt = Math.round(performance.now() - t0);
         if (!alive) return;
-        setPing(rtt);
-        const q = rtt < 90 ? "excellent" : rtt < 180 ? "good" : rtt < 350 ? "fair" : "poor";
-        setConnQuality(q);
+        setPing((prev) => (prev === null ? rtt : Math.round(prev * 0.7 + rtt * 0.3)));
+        setConnQuality(rtt < 90 ? "excellent" : rtt < 180 ? "good" : rtt < 350 ? "fair" : "poor");
       } catch {
         if (!alive) return;
         setConnQuality((navigator as unknown as { onLine?: boolean }).onLine ? "poor" : "offline");
@@ -854,8 +843,9 @@ export default function Game() {
         // fresh-kill pile: eat your fill
         if (target.interact === "fresh-kill") {
           gameRef.current?.eat(30);
+          gameRef.current?.takePreyFromPile();
           audio().playSfx("eat", { throttleMs: 800 });
-          setDialogue({ name: "Fresh-kill", text: "You eat until your belly is round and warm. (+hunger)" });
+          setDialogue({ name: "Fresh-kill", text: "You take a piece of fresh-kill and eat until your belly is round and warm. (+hunger)" });
           return;
         }
         // fishing spot / streams: drink
