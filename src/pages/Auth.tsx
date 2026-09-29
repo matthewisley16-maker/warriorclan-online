@@ -19,6 +19,8 @@ import logo from "@/assets/logo.svg";
 import { ArrowRight, Loader2, Mail, UserX } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 
 interface AuthProps {
   redirectAfterAuth?: string;
@@ -45,14 +47,20 @@ function GoogleIcon({ className }: { className?: string }) {
   );
 }
 
+/** Where Google sends the user back to (this page, with ?code=...). */
+function googleRedirectUri(): string {
+  return `${window.location.origin}/auth`;
+}
+
 function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const { isLoading: authLoading, isAuthenticated, signIn } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const redirect = resolveRedirectAfterAuth(
     searchParams.get("returnTo"),
     redirectAfterAuth,
   );
+  const googleCfg = useQuery(api.authConfig.googleAuthConfigured, {});
   const [step, setStep] = useState<"signIn" | { email: string }>("signIn");
   const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -65,29 +73,64 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       navigate(redirect);
     }
   }, [authLoading, isAuthenticated, navigate, redirect]);
-  /**
-   * Google sign-in: attempts the REAL Convex Auth OAuth flow for a provider
-   * id "google". The installed @convex-dev/auth build currently ships no
-   * Google provider, so this surfaces an honest error state instead of a
-   * fake login — configure a Google provider in src/convex/auth.ts to
-   * complete the integration (no passwords ever pass through this app).
-   */
-  const handleGoogleLogin = async () => {
+
+  // OAuth redirect round-trip: Google sends the user back with ?code=...
+  // (and optional error). Consume the code exactly once — exchange it via the
+  // real "google" provider, then strip the query so a refresh cannot replay it.
+  useEffect(() => {
+    const code = searchParams.get("code");
+    const oauthError = searchParams.get("error");
+    if (oauthError) {
+      setGoogleError(
+        oauthError === "access_denied"
+          ? "Google sign-in was cancelled."
+          : `Google sign-in failed: ${oauthError}`,
+      );
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    if (!code || googleLoading) return;
     setGoogleLoading(true);
     setGoogleError(null);
-    try {
-      await signIn("google");
-      // success: the auth state effect above navigates to `redirect`
-    } catch (e) {
-      const msg = e instanceof Error ? e.message.toLowerCase() : "";
+    signIn("google", { code, redirectUri: googleRedirectUri() })
+      .then(() => {
+        setSearchParams({}, { replace: true });
+        navigate(redirect);
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        setGoogleError(
+          /not configured/i.test(msg)
+            ? "Google sign-in isn't configured on this server yet. Use email sign-in below — it works the same."
+            : /exchange/i.test(msg)
+              ? "Google's one-time code expired. Try again."
+              : "Unable to sign in with Google. Please try again.",
+        );
+        setSearchParams({}, { replace: true });
+      })
+      .finally(() => setGoogleLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  /** Start the OAuth flow: navigate to Google's consent screen. */
+  const handleGoogleLogin = () => {
+    const clientId = googleCfg?.clientId;
+    if (!clientId) {
       setGoogleError(
-        msg.includes("cancel") ? "Google sign-in was cancelled."
-        : msg.includes("unknown") || msg.includes("provider")
-          ? "Google sign-in isn't configured on this server yet. Use email sign-in below — it works the same."
-          : "Unable to sign in with Google. Please try again.",
+        "Google sign-in isn't configured yet. Use email sign-in below — it works the same.",
       );
+      return;
     }
-    setGoogleLoading(false);
+    setGoogleLoading(true);
+    setGoogleError(null);
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: googleRedirectUri(),
+      response_type: "code",
+      scope: "openid email profile",
+      prompt: "select_account",
+    });
+    window.location.assign(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
   };
 
   const handleEmailSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -117,6 +160,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     try {
       const formData = new FormData(event.currentTarget);
       await signIn("email-otp", formData);
+
 
       console.log("signed in");
 
@@ -150,7 +194,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   return (
     <div className="min-h-screen flex flex-col">
 
-      
+
       {/* Auth Content */}
       <div className="flex-1 flex items-center justify-center">
         <div className="flex items-center justify-center h-full flex-col">
@@ -225,14 +269,14 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                       variant="outline"
                       className="w-full mt-4"
                       onClick={handleGoogleLogin}
-                      disabled={googleLoading || isLoading}
+                      disabled={googleLoading || isLoading || googleCfg === undefined}
                     >
                       {googleLoading ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       ) : (
                         <GoogleIcon className="mr-2 h-4 w-4" />
                       )}
-                      Continue with Google
+                      {googleLoading ? "Signing in…" : "Continue with Google"}
                     </Button>
 
                     <Button
@@ -258,92 +302,48 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                 </CardDescription>
               </CardHeader>
               <form onSubmit={handleOtpSubmit}>
-                <CardContent className="pb-4">
-                  <input type="hidden" name="email" value={step.email} />
-                  <input type="hidden" name="code" value={otp} />
-
-                  <div className="flex justify-center">
-                    <InputOTP
-                      value={otp}
-                      onChange={setOtp}
-                      maxLength={6}
-                      disabled={isLoading}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && otp.length === 6 && !isLoading) {
-                          // Find the closest form and submit it
-                          const form = (e.target as HTMLElement).closest("form");
-                          if (form) {
-                            form.requestSubmit();
-                          }
-                        }
-                      }}
-                    >
-                      <InputOTPGroup>
-                        {Array.from({ length: 6 }).map((_, index) => (
-                          <InputOTPSlot key={index} index={index} />
-                        ))}
-                      </InputOTPGroup>
-                    </InputOTP>
-                  </div>
-                  {error && (
-                    <p className="mt-2 text-sm text-red-500 text-center">
-                      {error}
-                    </p>
-                  )}
-                  <p className="text-sm text-muted-foreground text-center mt-4">
-                    Didn't receive a code?{" "}
-                    <Button
-                      variant="link"
-                      className="p-0 h-auto"
-                      onClick={() => setStep("signIn")}
-                    >
-                      Try again
-                    </Button>
-                  </p>
-                </CardContent>
-                <CardFooter className="flex-col gap-2">
-                  <Button
-                    type="submit"
-                    className="w-full"
-                    disabled={isLoading || otp.length !== 6}
+                <CardContent className="flex flex-col items-center gap-4">
+                  <InputOTP
+                    maxLength={6}
+                    value={otp}
+                    onChange={(value) => setOtp(value)}
+                    disabled={isLoading}
                   >
+                    <InputOTPGroup>
+                      {[0, 1, 2, 3, 4, 5].map((i) => (
+                        <InputOTPSlot key={i} index={i} />
+                      ))}
+                    </InputOTPGroup>
+                  </InputOTP>
+                  {error && <p className="text-sm text-red-500">{error}</p>}
+                  <Button type="submit" className="w-full" disabled={isLoading || otp.length !== 6}>
                     {isLoading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Verifying...
-                      </>
-                    ) : (
-                      <>
-                        Verify code
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </>
-                    )}
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : null}
+                    Verify code
                   </Button>
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={() => setStep("signIn")}
+                    className="text-muted-foreground"
+                    onClick={() => {
+                      setStep("signIn");
+                      setOtp("");
+                      setError(null);
+                    }}
                     disabled={isLoading}
-                    className="w-full"
                   >
-                    Use different email
+                    Back
                   </Button>
-                </CardFooter>
+                </CardContent>
               </form>
             </>
           )}
-
-          <div className="py-4 px-6 text-xs text-center text-muted-foreground bg-muted border-t rounded-b-lg">
-            Secured by{" "}
-            <a
-              href="https://freebuff.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline hover:text-primary transition-colors"
-            >
-              freebuff.com
-            </a>
-          </div>
+          <CardFooter className="justify-center border-t py-4">
+            <p className="text-center text-xs leading-relaxed text-muted-foreground">
+              By continuing, you agree to our Terms of Service and Privacy Policy.
+            </p>
+          </CardFooter>
         </Card>
         </div>
       </div>
@@ -351,10 +351,4 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   );
 }
 
-export default function AuthPage(props: AuthProps) {
-  return (
-    <Suspense>
-      <Auth {...props} />
-    </Suspense>
-  );
-}
+export default Auth;

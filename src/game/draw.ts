@@ -41,7 +41,7 @@ export function drawCat(
   time: number,
   phase: number,
   /** optional body-level acting overlay: yawn/alert/tail-flick/blink/talk */
-  fx?: { yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean },
+  fx?: { yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean; wet?: boolean; hop?: number },
 ) {
   const size = skin.size ?? 1;
   const moving = pose === "walk" || pose === "swim";
@@ -52,6 +52,11 @@ export function drawCat(
   const swimBob = pose === "swim"
     ? Math.sin(time * SWIM_BOB_HZ * Math.PI * 2 + phase) * 1.8
     : 0;
+  // shake-off pose: rapid left/right wobble + visible droplet spray (rain,
+  // snow, or the post-swim shake). 0.55s long, matching the engine's poseUntil.
+  const shakeT = pose === "shake" ? time * 26 : 0;
+  const shakeWobble = pose === "shake" ? Math.sin(shakeT) * 1.6 : 0;
+  const shakeWet = pose === "shake" && (fx?.wet ?? false);
 
   // shadow
   ctx.fillStyle = "rgba(0,0,0,0.22)";
@@ -67,7 +72,17 @@ export function drawCat(
     // lower body: only head/back/tail stay above the surface line
     ctx.translate(0, 2.5);
   }
+  if (pose === "shake") {
+    ctx.translate(shakeWobble, 0);
+  }
 
+  // breathing: gentle body scale while idle (never while moving)
+  const breath = pose === "walk" || pose === "swim" || pose === "shake"
+    ? 1
+    : 1 + Math.sin(time * 1.8 + phase) * 0.012;
+  // hop squash & stretch: compress at takeoff/landing, extend mid-air
+  const hopP = fx?.hop ?? -1;
+  const squash = hopP >= 0 ? 1 + Math.sin(hopP * Math.PI) * 0.08 : 1;
   const tail = skin.tail ?? "normal";
   const tailLen = tail === "short" ? 0.5 : tail === "bob" ? 0.3 : 1;
   const tailW = tail === "fluffy" ? 6.5 : 4.5;
@@ -98,6 +113,8 @@ export function drawCat(
   ctx.fillStyle = skin.fur;
   ctx.strokeStyle = outlineOf(skin);
   ctx.lineWidth = 1;
+  ctx.save();
+  ctx.scale(breath / Math.sqrt(squash), breath * Math.sqrt(squash)); // subtle volume change, same silhouette
   ctx.beginPath();
   if (pose === "swim") {
     // stretched, streamlined body half-submerged
@@ -113,6 +130,7 @@ export function drawCat(
   }
   ctx.fill();
   ctx.stroke();
+  ctx.restore();
 
   // pattern: tabby stripes
   if (skin.pattern === "tabby") {
@@ -181,7 +199,8 @@ export function drawCat(
 
   // head (groom pose dips toward the chest to lick it)
   const groomDip = pose === "groom" ? Math.max(0, Math.sin(time * 5.5)) : 0;
-  const headX = (pose === "sit" || pose === "groom" ? 4 : 9) - groomDip * 1.5;
+  const stretchOut = pose === "stretch" ? 3.5 + Math.max(0, Math.sin(time * 2.2)) * 2 : 0;
+  const headX = (pose === "sit" || pose === "groom" ? 4 : pose === "stretch" ? 13 : 9) - groomDip * 1.5 + stretchOut * 0.4;
   const headY =
     (pose === "swim" ? -8 : pose === "sit" ? -16 : pose === "sleep" ? -8 : pose === "crouch" ? -8 : -11) + groomDip * 5;
   ctx.fillStyle = skin.fur;
@@ -286,6 +305,21 @@ export function drawCat(
   ctx.moveTo(headX + 6, headY + 2.5);
   ctx.lineTo(headX + 11, headY + 3);
   ctx.stroke();
+
+  // shake droplets: spray off the head/back in an arc, fading over the pose
+  if (pose === "shake") {
+    const life = (Math.sin(time * 26) + 1) / 2; // 0..1 pulsing with the wobble
+    ctx.fillStyle = shakeWet ? "rgba(190, 220, 245, 0.85)" : "rgba(235, 245, 255, 0.8)"; // water vs snow
+    for (let i = 0; i < 7; i++) {
+      const a = -0.4 - i * 0.42;
+      const d = 10 + ((i * 5 + Math.floor(time * 40)) % 14);
+      const dx = Math.cos(a) * d - 4;
+      const dy = Math.sin(a) * d - 14 - life * 3;
+      ctx.beginPath();
+      ctx.arc(dx, dy, 1.4 - (d % 3) * 0.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
   ctx.restore();
 

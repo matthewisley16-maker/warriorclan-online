@@ -1190,6 +1190,13 @@ interface NPCState {
   // --- after an emergency nudge, ignore stuck detection briefly so the cat
   // can pick a reachable target instead of grinding the same wall again ---
   stuckCooldown: number;
+  // --- wet-coat timer (performance.now ms): rain soaks, clear dries; drives
+  // the wet shake-off droplets ---
+  wetnessUntil: number;
+  /** performance.now ms of the last weather shake-off (throttle) */
+  lastNpcShakeAt?: number;
+  /** engine time the current shake pose ends (undefined = none) */
+  shakeUntil?: number;
   // --- story availability: a cat whose timeline window has closed ---
   gone?: boolean;
 }
@@ -1501,6 +1508,14 @@ export class GameCanvas {
   private campPreyBonus = new Map<string, number>();
   /** nearest water edge lookup cache (recomputed on world edits only) */
   private waterEdgeCache: { x: number; y: number }[] | null = null;
+  /** one-shot exit splashes: world-space ripple rings that expand + fade */
+  private exitRipples: { x: number; y: number; t: number }[] = [];
+
+  /** Spawn a expanding ripple ring at a world point (water entry/exit). */
+  private spawnRipple(x: number, y: number) {
+    this.exitRipples.push({ x, y, t: 0 });
+    if (this.exitRipples.length > 8) this.exitRipples.shift();
+  }
 
   private camX = 0;
   private camY = 0;
@@ -1633,6 +1648,8 @@ export class GameCanvas {
       role: roleOf(n.role),
       campSpots: null,
       stuckCooldown: 0,
+      wetnessUntil: 0,
+      lastNpcShakeAt: 0,
     }));
     this.spawnPrey(80);
 
@@ -2002,10 +2019,13 @@ export class GameCanvas {
       n.pose = "sit";
       n.activity = "talking with you";
       n.stuckSince = null;
+      n.alertFxUntil = this.time + 1.5; // ears prick: the cat noticed you
     } else {
       if (!n.convoActive) return;
       n.convoActive = false;
-      // resume the paused activity exactly where it left off
+      // resume the paused activity exactly where it left off — with a small
+      // tail flick so the end of the chat reads as intentional
+      n.tailFxUntil = this.time + 1.2;
       n.ai = n.prevAi;
       n.tx = n.prevTx;
       n.ty = n.prevTy;
@@ -2466,13 +2486,16 @@ export class GameCanvas {
     // deep water (swimming) is slower than walking; shallow water stays walkable
     const swimmingNow = !this.interiorId && groundKindAtIdx(groundMap[Math.floor(this.py / GROUND_CELL) * GROUND_COLS + Math.floor(this.px / GROUND_CELL)] ?? 0) === "water";
     if (swimmingNow && !this.swimming) {
-      // entered water: coat gets soaked + a splash
+      // entered water: coat gets soaked + a splash ring
       this.wetnessUntil = performance.now() + 15000;
       this.engineSfx("splash", { volume: 0.9, throttleMs: 600 });
+      this.spawnRipple(this.px, this.py);
     } else if (!swimmingNow && this.swimming) {
-      // just left the water: guaranteed one shake-off soon
+      // just left the water: exit splash + guaranteed one shake-off soon
       this.wetnessUntil = performance.now() + 15000;
       this.lastShakeAt = -9999;
+      this.engineSfx("splash", { volume: 0.6, throttleMs: 600 });
+      this.spawnRipple(this.px, this.py);
     }
     this.swimming = swimmingNow;
     const speed = swimmingNow ? SWIM_SPEED : this.sneaking ? SNEAK_SPEED : running ? RUN_SPEED : WALK_SPEED;
@@ -2542,8 +2565,20 @@ export class GameCanvas {
         if (this.canMoveTo(this.px, this.py + dy)) this.py += dy;
       }
     } else if (!movingNow && this.time > this.poseUntil) {
-      // idle behaviors (never while floating in water — keep the swim pose)
-      if (!this.swimming && Math.random() < 0.001) this.pPose = "sit";
+      // idle behaviors (never while floating in water — keep the swim pose):
+      // rare micro-life so a standing cat never looks frozen. Throttled by
+      // poseUntil so a triggered behavior plays out before another can start.
+      if (!this.swimming && this.pPose === "sit" && Math.random() < 0.0016) {
+        const roll = Math.random();
+        if (roll < 0.45) {
+          this.pTailUntil = this.time + 1.6; // tail flick
+        } else if (roll < 0.75) {
+          this.pAlertUntil = this.time + 1.4; // ears prick (heard something)
+        } else {
+          this.pPose = "groom";
+          this.poseUntil = this.time + 2.4; // quick groom, then back to sit
+        }
+      }
     }
 
     // real velocity this frame: stop => idle pose (never walk-in-place)
@@ -2573,14 +2608,37 @@ export class GameCanvas {
     // decisions; movement integrates every frame along the world map) ---
     const night = this.nightAlpha() > 0.6;
     for (const n of this.npcStates) {
-      // scheduled destinations still apply (dens/night spots) when idle
       if (n.gone) continue;
+      // --- weather on the coat: rain soaks, clear dries, shake-off follows ---
+      if (!this.interiorId) {
+        if (this.weather === "rain" || this.weather === "heavy-rain" || this.weather === "storm") {
+          n.wetnessUntil = Math.max(n.wetnessUntil, performance.now() + 4000);
+        }
+      }
+      if (
+        !this.paused && !n.convoActive && n.ai !== "in_den" &&
+        n.pose !== "walk" && n.pose !== "crouch" && n.pose !== "sleep" && n.pose !== "swim" &&
+        performance.now() < n.wetnessUntil && this.time > n.waitUntil &&
+        performance.now() - (n.lastNpcShakeAt ?? 0) > 12000 && Math.random() < dt * 0.25
+      ) {
+        n.lastNpcShakeAt = performance.now();
+        n.pose = "shake";
+        n.waitUntil = this.time + 0.55;
+        n.shakeUntil = this.time + 0.55;
+        if (Math.hypot(n.x - this.px, n.y - this.py) < 300) this.engineSfx("shake", { volume: 0.5, throttleMs: 1500 });
+      }
+      // scheduled destinations still apply (dens/night spots) when idle
       const target = scheduleTarget(n.def, hr);
       if (target && hr !== n.lastScheduleHour && n.ai === "idle" && n.def.wander) {
         n.tx = target.x;
         n.ty = target.y;
         n.lastScheduleHour = hr;
         n.ai = "wander";
+      }
+      // a timed shake pose always ends (never freeze mid-shake)
+      if (n.shakeUntil !== undefined && n.pose === "shake" && this.time > n.shakeUntil) {
+        n.pose = "sit";
+        n.shakeUntil = undefined;
       }
       // decision tick: distant cats think every ~4s, nearby every ~1.2s
       const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
@@ -2826,6 +2884,12 @@ export class GameCanvas {
         this.running = false;
       }
     }
+    // --- exit-splash ripples: expand + fade over 0.8s ---
+    for (let i = this.exitRipples.length - 1; i >= 0; i--) {
+      this.exitRipples[i].t += dt;
+      if (this.exitRipples[i].t > 0.8) this.exitRipples.splice(i, 1);
+    }
+
     // --- prey AI ---
     if (!this.paused && this.prey.length < PREY_MAX && Math.random() < 0.02) this.respawnPreyTick();
 
@@ -3548,6 +3612,7 @@ export class GameCanvas {
         draw: () => {
           drawCat(ctx, n.def, n.x, n.y, n.facing, n.pose, this.time, n.phase, {
             talking: n.talkFxUntil > this.time,
+            wet: performance.now() < n.wetnessUntil,
             yawn: n.yawnFxUntil > this.time,
             tailFlick: n.tailFxUntil > this.time,
             alert: n.alertFxUntil > this.time,
@@ -3628,6 +3693,21 @@ export class GameCanvas {
       ctx.stroke();
       ctx.restore();
     }
+    // exit/entry splash rings
+    for (const r of this.exitRipples) {
+      const k = r.t / 0.8;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(r.x - 60, r.y - 30, 120, 60);
+      ctx.clip();
+      ctx.strokeStyle = `rgba(214, 236, 248, ${0.5 * (1 - k)})`;
+      ctx.lineWidth = 1.4;
+      const rr2 = 8 + k * 26;
+      ctx.beginPath();
+      ctx.ellipse(r.x, r.y + 2, rr2, rr2 * 0.45, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     drawCat(
       ctx,
       { ...this.playerSkin(), size: (this.playerSkin().size ?? 1) * 1.05 },
@@ -3642,6 +3722,7 @@ export class GameCanvas {
         alert: this.pAlertUntil > this.time,
         tailFlick: this.pTailUntil > this.time,
         talking: false,
+        hop: this.hopT >= 0 ? Math.min(1, this.hopT / HOP_DURATION) : undefined,
       },
     );
         if (this.pEmote) {
