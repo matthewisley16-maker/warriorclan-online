@@ -847,9 +847,27 @@ export const FARM: CharacterProfile[] = [
     },
     knowledge: ["clan-life", "twolegplace"], // knows OF the Clans, not their spirits
   },
+  {
+    id: "firepaw",
+    name: "Firepaw",
+    clan: "thunderclan",
+    rank: "Apprentice",
+    age: "apprentice",
+    appearance: "Bright flame-colored ginger tom, green eyes, forest-lean and quick.",
+    personality:
+      "The kittypet who chose the Clan. Eager to prove himself, hungry to learn, still surprised by the code. Farther from Smudge's garden every moon — and he knows it.",
+    voice: {
+      stance: "warm",
+      style: ["asks what everything means", "borrowed Clan phrases said carefully", "loyal past the point of sense"],
+      topics: ["training", "Graypaw's appetite", "the border smells", "the warrior code", "his old Twolegs"],
+    },
+    knowledge: ["clan-life", "warrior-code", "starclan", "thunderclan", "twolegplace"],
+    inOnline: true,
+  },
 ];
 
 /** All Book 1 character profiles, by id. */
+
 export const characterProfiles: Record<string, CharacterProfile> = Object.fromEntries(
   [...THUNDERCLAN, ...TWOLEGPLACE, ...RIVERCLAN, ...WINDCLAN, ...SHADOWCLAN, ...FARM].map((c) => [c.id, c]),
 );

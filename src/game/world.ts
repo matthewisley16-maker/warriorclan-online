@@ -1071,7 +1071,7 @@ export const npcs: NPCDef[] = [
     ],
   },
   {
-    id: "tigerclaw", name: "Tigerclaw", role: "Deputy", clan: "thunderclan", wander: true,
+    id: "tigerclaw", name: "Tigerclaw", role: "Warrior", clan: "thunderclan", wander: true,
     fur: "#6b4a2f", furDark: "#4e3421", eye: "#c98a1e",
     home: { x: cc.x + t(5), y: cc.y + t(4.4) },
     schedule: [
@@ -1380,7 +1380,7 @@ export const npcs: NPCDef[] = [
     ],
   },
   {
-    id: "mudclaw", name: "Mudclaw", role: "Deputy", clan: "windclan", wander: true,
+    id: "mudclaw", name: "Mudclaw", role: "Warrior", clan: "windclan", wander: true,
     fur: "#7a5b3a", furDark: "#5c4229", eye: "#c98a1e",
     home: { x: wc.x + t(4), y: wc.y + t(2) },
     schedule: [
@@ -1394,7 +1394,7 @@ export const npcs: NPCDef[] = [
     ],
   },
   {
-    id: "deadfoot", name: "Deadfoot", role: "Apprentice", clan: "windclan", wander: true,
+    id: "deadfoot", name: "Deadfoot", role: "Deputy", clan: "windclan", wander: true,
     fur: "#5c5c60", furDark: "#43434a", eye: "#d9a83a",
     home: { x: wc.x - t(3), y: wc.y - t(1) },
     schedule: [
@@ -1459,6 +1459,199 @@ export const npcs: NPCDef[] = [
     lines: [
       "Frogs and lizards — ShadowClan eats what the forest is too proud to touch.",
       "You crossed the Thunderpath alone? Monster-food for sure.",
+    ],
+  },
+  // ===================== Book 1 roster expansion =====================
+  // Redtail — ThunderClan DEPUTY at the start of Into the Wild.
+  {
+    id: "redtail", name: "Redtail", role: "Deputy", clan: "thunderclan", wander: true,
+    fur: "#8a5a3a", furDark: "#6d4527", eye: "#c98a1e", pattern: "tortie", tail: "short",
+    home: { x: cc.x + t(2.2), y: cc.y + t(5.2) },
+    schedule: [
+      { h: 6, x: cc.x - t(1), y: cc.y + t(10), activity: "leading the dawn patrol" },
+      { h: 10, x: t(10) + TC_OX, y: t(42) + TC_OY, activity: "patrolling Sunningrocks" },
+      { h: 15, x: cc.x + t(2.2), y: cc.y + t(5.2) },
+      { h: 21, x: cc.x + t(4.6), y: cc.y + t(5.4), activity: "sleeping in the warriors' den" },
+    ],
+    lines: [
+      "Sunningrocks is worth more than its stones. Whoever holds it hunts the river bank at leisure.",
+      "Patrols move at dawn. Stay clear of their line unless you carry news.",
+    ],
+  },
+  {
+    id: "longtail", name: "Longtail", role: "Warrior", clan: "thunderclan", wander: true,
+    fur: "#b0925f", furDark: "#8d7248", eye: "#7fae4e", pattern: "tabby", tail: "fluffy",
+    home: { x: cc.x + t(5.6), y: cc.y + t(7.4) },
+    schedule: [
+      { h: 7, x: cc.x - t(1), y: cc.y + t(10), activity: "dawn patrol" },
+      { h: 12, x: t(56) + TC_OX, y: t(45) + TC_OY, activity: "challenging cats to race up the Owl Tree" },
+      { h: 22, x: cc.x + t(4.6), y: cc.y + t(5.4) },
+    ],
+    lines: [
+      "You're the kittypet that scratched me. I remember scents AND scores.",
+      "I don't need a battle to prove myself. But I'd take one.",
+    ],
+  },
+  {
+    id: "frostfur", name: "Frostfur", role: "Queen", clan: "thunderclan", wander: false,
+    fur: "#eef1f4", furDark: "#cdd2d8", eye: "#5b8fd6",
+    home: { x: cc.x - t(6.6), y: cc.y + t(6.4) },
+    lines: [
+      "The kits are sleeping. Whisper or leave.",
+      "When ShadowClan comes, the nursery locks down tight. That's not fear. That's order.",
+    ],
+  },
+  {
+    id: "brindleface", name: "Brindleface", role: "Queen", clan: "thunderclan", wander: false,
+    fur: "#c9ced8", furDark: "#a5abbb", eye: "#7fae4e", pattern: "tabby",
+    home: { x: cc.x - t(7.6), y: cc.y + t(6.6) },
+    lines: [
+      "Oh, come in, come in! Mind the kits — the gray one bites toes. Lovingly.",
+      "Have you eaten? You look thin. Everyone looks thin to a queen.",
+    ],
+  },
+  {
+    id: "goldenflower", name: "Goldenflower", role: "Queen", clan: "thunderclan", wander: false,
+    fur: "#e3c088", furDark: "#c19c5f", eye: "#c98a1e",
+    home: { x: cc.x - t(8.4), y: cc.y + t(5.8) },
+    lines: [
+      "Warriors wash their paws before visiting. That includes you.",
+      "One kit asleep. One plotting. Typical evening.",
+    ],
+  },
+  {
+    id: "speckletail", name: "Speckletail", role: "Queen", clan: "thunderclan", wander: false,
+    fur: "#cfc3a1", furDark: "#a89d7d", eye: "#d9c04a", pattern: "tabby",
+    home: { x: cc.x - t(9), y: cc.y + t(4.6) },
+    lines: [
+      "Speak up! My ears are old, not my memory of every fool who mumbles.",
+      "In MY day, ONE mouse fed a patrol. Now look at the portions.",
+    ],
+  },
+  {
+    id: "smallear", name: "Smallear", role: "Elder", clan: "thunderclan", wander: false,
+    fur: "#9c9ca4", furDark: "#7c7c85", eye: "#c98a1e",
+    home: { x: cc.x - t(9.2), y: cc.y - t(2.2) },
+    lines: [
+      "Come closer, young one. My joints ache, but my ears work fine.",
+      "Patchpelt fell asleep mid-story again. Mid. Story.",
+    ],
+  },
+  {
+    id: "patchpelt", name: "Patchpelt", role: "Elder", clan: "thunderclan", wander: false,
+    fur: "#3a3a40", furDark: "#26262c", eye: "#d9a83a", pattern: "bicolor", chest: "#e8e6e0",
+    home: { x: cc.x - t(8.6), y: cc.y - t(3.4) },
+    lines: [
+      "So there I was — surrounded by badgers — or was it bees? …It was bees.",
+      "The stars are thick tonight. That's Silverpelt. Every one a cat we loved.",
+    ],
+  },
+  {
+    id: "one-eye", name: "One-eye", role: "Elder", clan: "thunderclan", wander: false,
+    fur: "#a8a8ae", furDark: "#85858c", eye: "#c9b23a",
+    home: { x: cc.x - t(9.6), y: cc.y - t(0.6) },
+    lines: [
+      "*twitch of one ear* …You smell of the far woods. Interesting.",
+      "I hear the night better than most see it. Currently: three owls, one fox, and you.",
+    ],
+  },
+  {
+    id: "dappletail", name: "Dappletail", role: "Elder", clan: "thunderclan", wander: false,
+    fur: "#c98d5a", furDark: "#a56a3d", eye: "#7fae4e", pattern: "tortie",
+    home: { x: cc.x - t(8.2), y: cc.y - t(4.4) },
+    lines: [
+      "The kits braided my tail fur today. The BEST day.",
+      "Speckletail's telling the badger story again. I'll nod in the right places. I always do.",
+    ],
+  },
+  {
+    id: "runningwind", name: "Runningwind", role: "Warrior", clan: "thunderclan", wander: true,
+    fur: "#b0925f", furDark: "#8d7248", eye: "#d9a83a", pattern: "tabby",
+    home: { x: cc.x + t(6.6), y: cc.y + t(3) },
+    schedule: [
+      { h: 6, x: cc.x - t(1), y: cc.y + t(10), activity: "dawn run" },
+      { h: 11, x: t(30) + TC_OX, y: t(58) + TC_OY, activity: "doubling the border at speed" },
+      { h: 22, x: cc.x + t(4.6), y: cc.y + t(5.4) },
+    ],
+    lines: [
+      "Dawn run — catch me if you can. No one has. No one will.",
+      "Rabbit tracks by the old oak! Two of them. FAT ones. Coming — tell no one—",
+    ],
+  },
+  {
+    id: "mousefur", name: "Mousefur", role: "Warrior", clan: "thunderclan", wander: true,
+    fur: "#7a5b3a", furDark: "#5c4229", eye: "#d9a83a",
+    home: { x: cc.x + t(6.8), y: cc.y - t(1.4) },
+    schedule: [
+      { h: 7, x: cc.x - t(1), y: cc.y + t(10), activity: "leading a border patrol" },
+      { h: 14, x: t(64) + TC_OX, y: t(30) + TC_OY, activity: "inspecting the northern markers" },
+      { h: 22, x: cc.x + t(4.6), y: cc.y + t(5.4) },
+    ],
+    lines: [
+      "That mouse was half-starved. I've seen plumper DUST.",
+      "Patrol discipline, warrior. Single file, no chatter, ALL EARS.",
+    ],
+  },
+  {
+    id: "swiftbreeze", name: "Swiftbreeze", role: "Queen", clan: "thunderclan", wander: false,
+    fur: "#e8e6e0", furDark: "#c9c6bd", eye: "#7fae4e", pattern: "tortie", chest: "#d9822f",
+    home: { x: cc.x - t(7), y: cc.y + t(7.6) },
+    lines: [
+      "The kits re-enacted your hunt today. You died heroically. You're welcome.",
+      "Wind from the moor today. It carries rabbit scent and bad memories.",
+    ],
+  },
+  {
+    id: "adderfang", name: "Adderfang", role: "Elder", clan: "thunderclan", wander: false,
+    fur: "#8a6248", furDark: "#6d4c37", eye: "#d9c04a", pattern: "tabby",
+    home: { x: cc.x - t(9.4), y: cc.y + t(1.6) },
+    lines: [
+      "A riddle, young one: what walks the border twice and never leaves? …Patrol discipline. Think on it.",
+      "Smallear claims the badger story's exaggerated. It was FOUR badgers. FOUR.",
+    ],
+  },
+  // --- Rusty as an ONLINE-world NPC (in Story Mode the player IS Rusty) ---
+  {
+    id: "rusty", name: "Rusty", role: "Kittypet", clan: "kittypet", wander: false,
+    fur: "#d96b2f", furDark: "#b04f1d", eye: "#4fae6e", chest: "#f4e9d8",
+    home: { x: t(76), y: t(146) },
+    schedule: [
+      { h: 8, x: t(76), y: t(146) },
+      { h: 12, x: t(79), y: t(149), activity: "sitting on the fence-top, staring at the forest" },
+      { h: 19, x: t(76), y: t(146) },
+    ],
+    lines: [
+      "I sat on the fence-top for an hour yesterday. Something watched me back from the trees.",
+      "You're from the forest! What's it LIKE? The smells? The cats? The— everything?",
+    ],
+  },
+  // --- ShadowClan: Clawface ---
+  {
+    id: "clawface", name: "Clawface", role: "Warrior", clan: "shadowclan", wander: true,
+    fur: "#6d4c37", furDark: "#543a28", eye: "#d9a83a",
+    home: { x: sc.x + t(2), y: sc.y - t(3) },
+    schedule: [
+      { h: 7, x: t(104), y: t(26), activity: "patrolling the pine-shadow" },
+      { h: 15, x: sc.x + t(2), y: sc.y - t(3) },
+    ],
+    lines: [
+      "Every scar has a story. Most of mine are someone else's funeral.",
+      "ThunderClan fights loud. ShadowClan fights LAST — when you've already lost.",
+    ],
+  },
+  // --- The farm: Barley's barn ---
+  {
+    id: "barley", name: "Barley", role: "Barn cat", clan: "kittypet", wander: true,
+    fur: "#3a3a40", furDark: "#26262c", eye: "#5b8fd6", pattern: "bicolor", chest: "#e8e6e0",
+    home: { x: t(124), y: t(154) },
+    schedule: [
+      { h: 8, x: t(124), y: t(154) },
+      { h: 13, x: t(120), y: t(158), activity: "hunting barn mice" },
+      { h: 20, x: t(124), y: t(154) },
+    ],
+    lines: [
+      "Barn mice — fat, slow, and abundant. Take a few. The barn provides.",
+      "A forest cat at my barn? You're always welcome. The hay doesn't judge and neither do I.",
     ],
   },
 ];
