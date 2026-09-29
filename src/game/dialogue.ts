@@ -1015,7 +1015,7 @@ function smallTalk(p: CharacterProfile, ctx: DialogueContext): string {
 }
 
 /** StarClan answers. The gating core of the knowledge system. */
-function starClanReply(p: CharacterProfile, ctx: DialogueContext): { text: string; learn?: KnowledgeFlag } {
+export function starClanReply(p: CharacterProfile, ctx: DialogueContext): { text: string; learn?: KnowledgeFlag } {
   const seed = (ctx.talked?.[p.id] ?? 0) + 41;
   const bank = V[p.id] ?? {};
   if (knows(p, "starclan", ctx)) {

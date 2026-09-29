@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import { GameCanvas, type MovementState, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
 type NpcConvoChoice = { label: string; reply: string; effect?: "bond" | "patrol" | "learn" | "end"; learn?: string };
+type ConvoView = "root" | "ask" | "chat";
 interface NpcConvo {
   npcId: string;
   name: string;
@@ -37,6 +38,8 @@ import { interiors } from "@/game/engine";
 import { GROUND_CELL, GROUND_COLS, GROUND_ROWS, groundMap, lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
 import { buildDialogue, type DialogueContext } from "@/game/dialogue";
+import { buildAskMenu, npcChatReply, type AskOption, type ChatMsg } from "@/game/npcChat";
+import { useAction } from "convex/react";
 import { profileFor } from "@/game/characters";
 import MainMenu, { LoadingScreen, loadSettings, SettingsScreen, type GameMode, type Settings } from "./MainMenu";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
@@ -161,6 +164,13 @@ export default function Game() {
   } | null>(null);
   // --- dedicated player↔NPC conversation state (separate from chatter) ---
   const [npcConvo, setNpcConvo] = useState<NpcConvo | null>(null);
+  /** sub-view of the compact interaction panel: root choices / ask menu / chat */
+  const [convoView, setConvoView] = useState<ConvoView>("root");
+  const [askOptions, setAskOptions] = useState<AskOption[]>([]);
+  const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([]);
+  const [chatBusy, setChatBusy] = useState(false);
+  const npcAiAction = useAction(api.npcAi.reply);
+  const npcAiAvailable = useQuery(api.authConfig.googleAuthConfigured, {})?.npcAi ?? false;
   const npcConvoRef = useRef(npcConvo);
   npcConvoRef.current = npcConvo;
   // --- per-NPC social memory (knowledge is learned, never global) ---
@@ -173,6 +183,10 @@ export default function Game() {
   bondsRef.current = bonds;
   const talkedRef = useRef(talked);
   talkedRef.current = talked;
+  const chatBusyRef = useRef(false);
+  const chatMsgsRef = useRef<ChatMsg[]>([]);
+  chatMsgsRef.current = chatMsgs;
+  const dialogueCtxRef = useRef<() => DialogueContext>(() => { throw new Error("not ready"); });
   /** throttled server persist of one cat's memory (or all of it on boot) */
   const persistNpcMemory = useCallback((npcId?: string) => {
     const l = learnedRef.current;
@@ -191,6 +205,9 @@ export default function Game() {
     if (!c) return;
     gameRef.current?.setNpcConversation(c.npcId, false);
     setNpcConvo(null);
+    setConvoView("root");
+    setChatMsgs([]);
+    setAskOptions([]);
   }, []);
   // Panel visibility is derived from the single active layer.
   const codexOpen = activeUI === "codex";
@@ -722,6 +739,8 @@ export default function Game() {
 
   // Pause the world while a menu or dialogue is on screen.
   useEffect(() => {
+    // NOTE: NPC conversations intentionally do NOT pause the world — the
+    // compact chat overlay lets the forest stay alive around the exchange.
     gameRef.current?.setPaused(dialogue !== null || activeUI !== "gameplay");
   }, [dialogue, activeUI]);
 
@@ -883,7 +902,11 @@ export default function Game() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (deathRef.current) return; // the death choice owns the screen
-      if (npcConvoRef.current) { endNpcConvo(); return; }
+      if (npcConvoRef.current) {
+        if (convoViewRef.current !== "root") setConvoView("root");
+        else endNpcConvo();
+        return;
+      }
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       audio().playSfx("ui_move", { throttleMs: 250 }); // menu open / back / close
@@ -927,6 +950,7 @@ export default function Game() {
       talked: talkedRef.current,
     };
   }, [mode, myCat]);
+  dialogueCtxRef.current = dialogueCtx;
 
   // --- interactions ---
   const handleInteract = useCallback(
@@ -962,6 +986,9 @@ export default function Game() {
         gameRef.current?.setNpcConversation(npc.id, true);
         audio().playMew("talk");
         const built = buildDialogue(npc.id, dialogueCtx());
+        setConvoView("root");
+        setChatMsgs([{ from: "npc", text: built.opening }]);
+        setAskOptions(buildAskMenu(npc.id, dialogueCtx()));
         setNpcConvo({ npcId: npc.id, name: npc.name, role: profileFor(npc.id).rank, line: built.opening, choices: built.choices });
         const nextTalked = { ...talkedRef.current, [npc.id]: (talkedRef.current[npc.id] ?? 0) + 1 };
         talkedRef.current = nextTalked;
@@ -1100,6 +1127,64 @@ export default function Game() {
     [endNpcConvo],
   );
 
+  /** Send a free-typed message to the NPC (compact chat view). */
+  const handleChatSend = useCallback(
+    (text: string) => {
+      const c = npcConvoRef.current;
+      const msg = text.trim();
+      if (!c || !msg || chatBusyRef.current) return;
+      setChatMsgs((m) => [...m, { from: "player", text: msg }]);
+      // 1) instant deterministic in-character reply (never blocks, no network)
+      const ctx = dialogueCtxRef.current();
+      const local = npcChatReply(c.npcId, msg, ctx);
+      setChatMsgs((m) => [...m, { from: "npc", text: local.text }]);
+      if (local.learn && local.effect === "learn") {
+        const flag = local.learn;
+        const have = learnedRef.current[c.npcId] ?? [];
+        if (!have.includes(flag)) {
+          const nextLearned = { ...learnedRef.current, [c.npcId]: [...have, flag] };
+          learnedRef.current = nextLearned;
+          setLearned(nextLearned);
+          persistNpcMemory(c.npcId);
+        }
+      }
+      // 2) optional AI polish: replaces the local line only when a key exists
+      if (npcAiAvailable) {
+        setChatBusy(true);
+        chatBusyRef.current = true;
+        const p = profileFor(c.npcId);
+        npcAiAction({
+          npcName: p.name,
+          npcRank: p.rank,
+          npcClan: p.clan,
+          npcPersonality: p.personality,
+          npcStyle: p.voice.style.join("; "),
+          npcTopics: p.voice.topics.join(", "),
+          npcKnowledge: p.knowledge.join(", "),
+          npcAvoid: "secret plot details, future events, anything outside this cat's knowledge",
+          playerName: ctx.player.name,
+          playerClan: ctx.player.clan,
+          playerRank: ctx.player.rank,
+          bond: ctx.bonds[p.id] ?? 0,
+          storyStep: ctx.storyStep,
+          mode: ctx.mode,
+          history: chatMsgsRef.current.slice(-6),
+          message: msg,
+        })
+          .then((r: { available: boolean; text: string | null }) => {
+            if (r?.text) setChatMsgs((m) => [...m.slice(0, -1), { from: "npc", text: r.text as string }]);
+          })
+          .catch(() => undefined) // local line already on screen — nothing to do
+          .finally(() => {
+            setChatBusy(false);
+            chatBusyRef.current = false;
+          });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [npcAiAction, npcAiAvailable],
+  );
+
   const handleInteractRef = useRef(handleInteract);
   handleInteractRef.current = handleInteract;
 
@@ -1127,6 +1212,10 @@ export default function Game() {
   questsDoneRef.current = questsDone;
   const dialogueRef = useRef(dialogue);
   dialogueRef.current = dialogue;
+  const convoViewRef = useRef(convoView);
+  convoViewRef.current = convoView;
+  const askOptionsRef = useRef(askOptions);
+  askOptionsRef.current = askOptions;
   /** guards against double-sends when Enter is pressed repeatedly */
   const lastSendAt = useRef(0);
   /** monotonic client input sequence — the server rejects already-processed inputs */
@@ -1520,57 +1609,179 @@ export default function Game() {
       <AnimatePresence>
         {npcConvo && (
           <motion.div
-            initial={{ opacity: 0, y: 24 }}
+            initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 24 }}
-            className="pointer-events-auto absolute inset-x-0 bottom-16 z-[55] mx-auto w-[min(560px,calc(100%-2rem))]"
+            exit={{ opacity: 0, y: 16 }}
+            transition={{ duration: 0.16 }}
+            className="pointer-events-auto absolute inset-x-0 bottom-14 z-[55] mx-auto w-[min(430px,calc(100%-2rem))]"
           >
             <div
-              className="rounded-2xl border border-amber-500/30 bg-card/95 p-4 shadow-2xl shadow-black/30 backdrop-blur-md"
+              className="rounded-xl border border-amber-500/30 bg-card/95 shadow-2xl shadow-black/40 backdrop-blur-md"
               onClick={() => {
-                if (!npcConvo.choices?.length) endNpcConvo();
+                if (convoView === "root" && !npcConvo.choices?.length) endNpcConvo();
               }}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold tracking-tight">{npcConvo.name}</span>
-                    {npcConvo.role && (
-                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600/90 dark:text-amber-300/90">
-                        {npcConvo.role}
-                      </span>
-                    )}
-                    <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-amber-600/80 dark:text-amber-300/80">
-                      NPC
+              {/* header: name + rank + close */}
+              <div className="flex items-center justify-between gap-2 border-b border-amber-500/20 px-3 py-1.5">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-[13px] font-semibold tracking-tight">{npcConvo.name}</span>
+                  {npcConvo.role && (
+                    <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-amber-600/90 dark:text-amber-300/90">
+                      {npcConvo.role}
                     </span>
-                  </div>
-                  <p className="mt-1.5 text-sm leading-relaxed text-foreground/90">{npcConvo.line}</p>
-                  {npcConvo.choices && npcConvo.choices.length > 0 ? (
-                    <div className="mt-3 space-y-1.5">
-                      {npcConvo.choices.map((choice, i) => (
-                        <button
-                          key={i}
-                          onClick={(ev) => {
-                            ev.stopPropagation();
-                            handleConvoChoice(choice);
-                          }}
-                          className="block w-full rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
-                        >
-                          <span className="mr-1.5 text-muted-foreground">›</span>
-                          {choice.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-[11px] text-muted-foreground">
-                      <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold">E</kbd> continue
-                    </p>
                   )}
                 </div>
-                <Button variant="ghost" size="icon" onClick={() => endNpcConvo()} className="size-7 shrink-0 rounded-full">
-                  <X className="size-4" />
+                <Button variant="ghost" size="icon" onClick={() => endNpcConvo()} className="size-6 shrink-0 rounded-full">
+                  <X className="size-3.5" />
                 </Button>
               </div>
+
+              {/* ---- ROOT: the NPC line + exactly three choices ---- */}
+              {convoView === "root" && (
+                <div className="px-3 py-2">
+                  <p className="text-[13px] leading-snug text-foreground/90">
+                    {npcConvo.line}
+                    {npcConvo.choices?.length ? (
+                      <span className="mt-1.5 block text-[10px] text-muted-foreground">…</span>
+                    ) : (
+                      <span className="mt-1 block text-[10px] text-muted-foreground">
+                        <kbd className="rounded bg-muted px-1 font-mono text-[9px]">E</kbd> continue
+                      </span>
+                    )}
+                  </p>
+                  {npcConvo.choices?.length ? (
+                    <div className="mt-2 grid grid-cols-3 gap-1.5">
+                      <button
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setAskOptions(buildAskMenu(npcConvo.npcId, dialogueCtx()));
+                          setConvoView("ask");
+                        }}
+                        className="rounded-lg border border-border/50 bg-background/60 px-2 py-1.5 text-[12px] font-medium text-foreground/85 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
+                      >
+                        Ask {npcConvo.name.split(" ")[0]}
+                      </button>
+                      <button
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setConvoView("chat");
+                        }}
+                        className="rounded-lg border border-border/50 bg-background/60 px-2 py-1.5 text-[12px] font-medium text-foreground/85 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
+                      >
+                        Talk to the cat
+                      </button>
+                      <button
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          endNpcConvo();
+                        }}
+                        className="rounded-lg border border-border/50 bg-background/60 px-2 py-1.5 text-[12px] font-medium text-foreground/85 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
+                      >
+                        Leave
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {/* ---- ASK: compact list of context-valid questions ---- */}
+              {convoView === "ask" && (
+                <div className="px-3 py-2">
+                  <div className="space-y-1">
+                    {askOptions.map((o) => (
+                      <button
+                        key={o.id}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setNpcConvo((c) => (c ? { ...c, line: o.reply } : c));
+                          if (o.effect === "learn" && o.learn) {
+                            const have = learnedRef.current[npcConvo.npcId] ?? [];
+                            if (!have.includes(o.learn)) {
+                              const nextLearned = { ...learnedRef.current, [npcConvo.npcId]: [...have, o.learn] };
+                              learnedRef.current = nextLearned;
+                              setLearned(nextLearned);
+                              persistNpcMemory(npcConvo.npcId);
+                            }
+                          }
+                          setChatMsgs((m) => [...m, { from: "player", text: o.label }, { from: "npc", text: o.reply }]);
+                          setConvoView("root");
+                        }}
+                        className="block w-full rounded-lg border border-border/40 bg-background/50 px-2.5 py-1.5 text-left text-[12px] text-foreground/85 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
+                      >
+                        <span className="mr-1 text-muted-foreground">›</span>
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      setConvoView("root");
+                    }}
+                    className="mt-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  >
+                    ← Back
+                  </button>
+                </div>
+              )}
+
+              {/* ---- CHAT: compact character AI panel ---- */}
+              {convoView === "chat" && (
+                <div className="px-3 py-2">
+                  <div className="max-h-40 space-y-1.5 overflow-y-auto pr-1" style={{ minHeight: 72 }}>
+                    {chatMsgs.map((m, idx) => (
+                      <p
+                        key={idx}
+                        className={
+                          m.from === "player"
+                            ? "ml-6 rounded-lg bg-primary/15 px-2 py-1 text-[12px] leading-snug text-foreground/90"
+                            : "mr-2 rounded-lg bg-muted/60 px-2 py-1 text-[12px] leading-snug text-foreground/90"
+                        }
+                      >
+                        {m.from === "player" ? "" : <span className="mr-1 font-semibold text-amber-600/90 dark:text-amber-300/90">{npcConvo.name.split(" ")[0]}:</span>}
+                        {m.text}
+                      </p>
+                    ))}
+                    {chatBusy && <p className="text-[10px] italic text-muted-foreground">{npcConvo.name.split(" ")[0]} is thinking…</p>}
+                  </div>
+                  <form
+                    className="mt-1.5 flex items-center gap-1.5"
+                    onSubmit={(ev) => {
+                      ev.preventDefault();
+                      const el = (ev.currentTarget.elements.namedItem("npcMsg") as HTMLInputElement | null);
+                      if (!el) return;
+                      const val = el.value;
+                      el.value = "";
+                      handleChatSend(val);
+                    }}
+                  >
+                    <input
+                      name="npcMsg"
+                      autoComplete="off"
+                      placeholder={`Say something to ${npcConvo.name.split(" ")[0]}…`}
+                      maxLength={140}
+                      className="h-7 min-w-0 flex-1 rounded-lg border border-border/50 bg-background/60 px-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground/70 focus:border-amber-500/40"
+                    />
+                    <button
+                      type="submit"
+                      disabled={chatBusy}
+                      className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 disabled:opacity-50"
+                    >
+                      Send
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        setConvoView("root");
+                      }}
+                      className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground"
+                    >
+                      ←
+                    </button>
+                  </form>
+                </div>
+              )}
             </div>
           </motion.div>
         )}
