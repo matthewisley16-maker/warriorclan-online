@@ -37,12 +37,18 @@ export function fullSkin(
     furDark: string;
     eye: string;
     chest: string;
-    pattern: "solid" | "tabby" | "tortie" | "bicolor";
+    pattern: string;
     furLength: number;
-    tail: "normal" | "short" | "fluffy" | "bob";
-    ears: "normal" | "tall" | "fold";
+    tail: string;
+    ears: string;
     size: number;
     scar: boolean;
+    eye2: string;
+    patternIntensity: number;
+    markings: string[];
+    scars: string[];
+    acc: Partial<Record<string, string>>;
+    accColor: string;
   }> | null,
 ) {
   const a = s ?? {};
@@ -52,12 +58,21 @@ export function fullSkin(
     furDark: a.furDark || shade(fur, 0.62),
     eye: a.eye || "#4fae6e",
     chest: a.chest,
-    pattern: a.pattern ?? ("solid" as const),
+    pattern: a.pattern ?? "solid",
     furLength: a.furLength ?? 1,
-    tail: a.tail ?? ("normal" as const),
-    ears: a.ears ?? ("normal" as const),
+    tail: a.tail ?? "normal",
+    ears: a.ears ?? "normal",
     size: a.size ?? 1,
     scar: a.scar ?? false,
+    // extended customization (optional; absent on old saves)
+    ...(a.eye2 ? { eye2: a.eye2 } : {}),
+    ...(a.patternIntensity !== undefined ? { patternIntensity: a.patternIntensity } : {}),
+    ...(a.markings?.length ? { markings: a.markings } : {}),
+    ...(a.scars?.length ? { scars: a.scars } : {}),
+    ...(a.acc && Object.keys(a.acc).length
+      ? { acc: Object.fromEntries(Object.entries(a.acc).filter(([, v]) => typeof v === "string")) as Record<string, string> }
+      : {}),
+    ...(a.accColor ? { accColor: a.accColor } : {}),
   };
 }
 

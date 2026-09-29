@@ -8,12 +8,20 @@ export const appearance = v.object({
   furDark: v.string(),
   eye: v.string(),
   chest: v.optional(v.string()),
-  pattern: v.union(v.literal("solid"), v.literal("tabby"), v.literal("tortie"), v.literal("bicolor")),
+  // extended ids (mackerel/spotted/...) render via drawCat's pattern switch
+  pattern: v.optional(v.string()),
   furLength: v.number(),
-  tail: v.union(v.literal("normal"), v.literal("short"), v.literal("fluffy"), v.literal("bob")),
-  ears: v.union(v.literal("normal"), v.literal("tall"), v.literal("fold")),
+  tail: v.optional(v.string()),
+  ears: v.optional(v.string()),
   size: v.number(),
   scar: v.boolean(),
+  // customization extensions (optional so old saves load unchanged)
+  eye2: v.optional(v.string()),
+  patternIntensity: v.optional(v.number()),
+  markings: v.optional(v.array(v.string())),
+  scars: v.optional(v.array(v.string())),
+  acc: v.optional(v.record(v.string(), v.string())),
+  accColor: v.optional(v.string()),
 });
 
 export type AppearanceT = {
@@ -21,12 +29,18 @@ export type AppearanceT = {
   furDark: string;
   eye: string;
   chest?: string;
-  pattern: "solid" | "tabby" | "tortie" | "bicolor";
+  pattern: string;
   furLength: number;
-  tail: "normal" | "short" | "fluffy" | "bob";
-  ears: "normal" | "tall" | "fold";
+  tail: string;
+  ears: string;
   size: number;
   scar: boolean;
+  eye2?: string;
+  patternIntensity?: number;
+  markings?: string[];
+  scars?: string[];
+  acc?: Partial<Record<string, string>>;
+  accColor?: string;
 };
 
 export const CLAN_SPAWNS: Record<string, { x: number; y: number }> = {

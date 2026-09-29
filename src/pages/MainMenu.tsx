@@ -37,6 +37,8 @@ import { ClanSelect } from "./ClanSelect";
 import { RefreshCw } from "lucide-react";
 import { drawCat, type CatSkin } from "@/game/draw";
 import { MenuScene } from "@/game/menuScene";
+import { CatCustomizer, type CustomizerSave } from "./CatCustomizer";
+import type { CustomSkin as FullSkinT } from "@/game/catItems";
 import { cn } from "@/lib/utils";
 
 export type GameMode = "story" | "open" | "free";
@@ -394,10 +396,12 @@ function CharacterScreen({
   player,
   onClose,
   onSave,
+  onOpenCustomizer,
 }: {
   player: MainMenuPlayer;
   onClose: () => void;
   onSave: (v: { name?: string; skin?: CatSkin; clan?: string }) => void;
+  onOpenCustomizer: () => void;
 }) {
   const [skin, setSkin] = useState<CatSkin>(player.skin);
   const [name, setName] = useState(player.name);
@@ -438,6 +442,13 @@ function CharacterScreen({
                 }}
               >
                 <RefreshCw className="size-3.5" /> Randomize cat
+              </Button>
+              <Button
+                size="sm"
+                className="mt-2 w-full gap-1.5 rounded-xl bg-amber-400 text-xs font-bold text-[#0d160d] hover:bg-amber-300"
+                onClick={onOpenCustomizer}
+              >
+                <Sparkles className="size-3.5" /> Customize Cat
               </Button>
               <Input
                 value={name}
@@ -895,6 +906,9 @@ export default function MainMenu({
   onSaveSkin,
   onSaveClan,
   onSaveSettings,
+  favorites = [],
+  presets = [],
+  onSaveCustomization,
 }: {
   player: MainMenuPlayer | null;
   /** mode + chosen Clan — Clan is picked every session, never locked */
@@ -903,10 +917,14 @@ export default function MainMenu({
   onSaveSkin: (skin: CatSkin) => void;
   onSaveClan: (clan: string) => void;
   onSaveSettings: (s: Settings) => void;
+  favorites?: string[];
+  presets?: { name: string; skin: FullSkinT }[];
+  onSaveCustomization?: (v: { favorites: string[]; presets: { name: string; skin: FullSkinT }[] }) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<MenuScene | null>(null);
   const [screen, setScreen] = useState<"menu" | "character" | "settings">("menu");
+  const [customizerOpen, setCustomizerOpen] = useState(false);
   const [clanFor, setClanFor] = useState<GameMode | null>(null);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
 
@@ -996,6 +1014,7 @@ export default function MainMenu({
               }
             }
             onClose={() => setScreen("menu")}
+            onOpenCustomizer={() => setCustomizerOpen(true)}
             onSave={(v) => {
               if (v.name && (!player || v.name !== player.name)) onSaveName(v.name);
               if (v.skin) onSaveSkin(v.skin);
@@ -1006,6 +1025,22 @@ export default function MainMenu({
         )}
         {screen === "settings" && (
           <SettingsScreen key="settings" settings={settings} onChange={updateSettings} onClose={() => setScreen("menu")} />
+        )}
+        {customizerOpen && (
+          <CatCustomizer
+            open
+            playerName={player?.name ?? "Rusty"}
+            initialSkin={(player?.skin ?? {}) as FullSkinT}
+            savedSkin={(player?.skin ?? {}) as FullSkinT}
+            favorites={favorites}
+            presets={presets}
+            onClose={() => setCustomizerOpen(false)}
+            onSave={(v) => {
+              onSaveSkin(v.skin as CatSkin);
+              onSaveCustomization?.({ favorites: v.favorites, presets: v.presets });
+              setCustomizerOpen(false);
+            }}
+          />
         )}
       </AnimatePresence>
 

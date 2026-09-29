@@ -23,12 +23,19 @@ const appearanceValidator = v.object({
   furDark: v.string(),
   eye: v.string(),
   chest: v.optional(v.string()),
-  pattern: v.union(v.literal("solid"), v.literal("tabby"), v.literal("tortie"), v.literal("bicolor")),
+  pattern: v.optional(v.string()),
   furLength: v.number(),
-  tail: v.union(v.literal("normal"), v.literal("short"), v.literal("fluffy"), v.literal("bob")),
-  ears: v.union(v.literal("normal"), v.literal("tall"), v.literal("fold")),
+  tail: v.optional(v.string()),
+  ears: v.optional(v.string()),
   size: v.number(), // 0.9 - 1.15
   scar: v.boolean(),
+  // customization extensions (optional so old saves load unchanged)
+  eye2: v.optional(v.string()),
+  patternIntensity: v.optional(v.number()),
+  markings: v.optional(v.array(v.string())),
+  scars: v.optional(v.array(v.string())),
+  acc: v.optional(v.record(v.string(), v.string())),
+  accColor: v.optional(v.string()),
 });
 
 export type CatAppearance = Infer<typeof appearanceValidator>;
@@ -61,6 +68,9 @@ const schema = defineSchema(
       y: v.number(),
       discovered: v.optional(v.array(v.string())),
       storyStep: v.optional(v.number()),
+      // customization extras: favorite item ids + up to 10 named appearance presets
+      favorites: v.optional(v.array(v.string())),
+      presets: v.optional(v.array(v.object({ name: v.string(), skin: v.any() }))),
       // per-NPC social memory: knowledge learned FROM each cat and the bond
       // built with them ("smudge:starclan" strings — knowledge is per-NPC,
       // never global; a Twolegplace cat learns StarClan only when told)

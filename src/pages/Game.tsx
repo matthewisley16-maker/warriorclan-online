@@ -141,6 +141,8 @@ export default function Game() {
   const saveNpcMemory = useMutation(api.players.saveNpcMemory);
   const addXp = useMutation(api.players.addXp);
   const updateCat = useMutation(api.players.updateCat);
+  const setFavorites = useMutation(api.customization.setFavorites);
+  const savePresets = useMutation(api.customization.savePresets);
   const updateStats = useMutation(api.players.updateStats);
   const heartbeat = useMutation(api.presence.heartbeat);
   const leavePresence = useMutation(api.presence.leave);
@@ -1373,6 +1375,12 @@ export default function Game() {
               : null
           }
           onPlay={startMode}
+          favorites={player?.favorites ?? []}
+          presets={player?.presets ?? []}
+          onSaveCustomization={(v) => {
+            setFavorites({ favorites: v.favorites }).catch(() => undefined);
+            savePresets({ presets: v.presets }).catch(() => undefined);
+          }}
           onSaveName={(name) => updateCat({ catName: name }).catch(() => undefined)}
           onSaveSkin={(skin) => updateCat({ appearance: fullSkin(skin) }).catch(() => undefined)}
           onSaveClan={(clan) => updateCat({ clan }).catch(() => undefined)}
@@ -1912,6 +1920,8 @@ export default function Game() {
               xp: player?.xp ?? 0,
               skin: myCat.appearance,
             }}
+            favorites={player?.favorites ?? []}
+            presets={player?.presets ?? []}
             onClose={() => setActiveUI("gameplay")}
             onSave={(v: CatClanSave) => {
               if (v.name && v.name !== myCat.name) {
@@ -1919,7 +1929,13 @@ export default function Game() {
               }
               if (v.skin) {
                 updateCat({ appearance: fullSkin(v.skin) }).catch(() => undefined);
+                // live-update the in-world cat + menu preview immediately
+                const g = gameRef.current;
+                if (g) g.mySkin = { ...fullSkin(v.skin), furDark: fullSkin(v.skin).furDark || "#5a3a20" };
+                setMyCat((c) => (c ? { ...c, appearance: fullSkin(v.skin) } : c));
               }
+              if (v.favorites) setFavorites({ favorites: v.favorites }).catch(() => undefined);
+              if (v.presets) savePresets({ presets: v.presets }).catch(() => undefined);
               if (v.clan && v.clan !== myCat.clan) {
                 const newClan = v.clan;
                 audio().playSfx("clan_join", { throttleMs: 800 }); // Clan change cue
