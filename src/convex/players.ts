@@ -176,6 +176,74 @@ export const setStoryStep = mutation({
   },
 });
 
+/**
+ * Per-NPC social memory: knowledge learned FROM each cat ("smudge:starclan"),
+ * bond levels and conversation counts. Merges arrays by npcId prefix so a
+ * client can patch one cat's memory without resending the whole map.
+ */
+export const saveNpcMemory = mutation({
+  args: {
+    /** "npcId:flag" strings learned this session (deduped server-side) */
+    learned: v.optional(v.array(v.string())),
+    /** "npcId:bond" strings — value replaces the cat's previous bond */
+    bonds: v.optional(v.array(v.string())),
+    /** "npcId:count" strings — value replaces the cat's previous count */
+    talked: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const prev = p.npcMemory ?? {};
+    const byId = (arr: string[] | undefined) => {
+      const m = new Map<string, string>();
+      for (const s of arr ?? []) {
+        const i = s.indexOf(":");
+        if (i > 0) m.set(s.slice(0, i), s.slice(i + 1));
+      }
+      return m;
+    };
+    const prevLearned = new Map<string, Set<string>>();
+    for (const s of prev.learned ?? []) {
+      const i = s.indexOf(":");
+      if (i <= 0) continue;
+      const [npc, flag] = [s.slice(0, i), s.slice(i + 1)];
+      if (!prevLearned.has(npc)) prevLearned.set(npc, new Set());
+      prevLearned.get(npc)!.add(flag);
+    }
+    for (const s of args.learned ?? []) {
+      const i = s.indexOf(":");
+      if (i <= 0) continue;
+      const [npc, flag] = [s.slice(0, i), s.slice(i + 1)];
+      if (!prevLearned.has(npc)) prevLearned.set(npc, new Set());
+      prevLearned.get(npc)!.add(flag);
+    }
+    const learnedOut: string[] = [];
+    for (const [npc, flags] of prevLearned) {
+      for (const flag of flags) learnedOut.push(`${npc}:${flag}`);
+    }
+    const bondPrev = byId(prev.bonds);
+    const bondNew = byId(args.bonds);
+    for (const [npc, val] of bondNew) bondPrev.set(npc, val);
+    const talkedPrev = byId(prev.talked);
+    const talkedNew = byId(args.talked);
+    for (const [npc, val] of talkedNew) talkedPrev.set(npc, val);
+    await ctx.db.patch(p._id, {
+      npcMemory: {
+        learned: learnedOut.sort(),
+        bonds: [...bondPrev].map(([npc, val]) => `${npc}:${val}`).sort(),
+        talked: [...talkedPrev].map(([npc, val]) => `${npc}:${val}`).sort(),
+      },
+      updatedAt: Date.now(),
+    });
+    return true;
+  },
+});
+
 export const joinClan = mutation({
   args: { clan: v.string() },
   handler: async (ctx, args) => {

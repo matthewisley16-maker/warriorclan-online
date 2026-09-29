@@ -638,7 +638,7 @@ const V: Record<string, VoiceBank> = {
     prey: ["You CATCH them? With your mouth? Barbaric. Impressive, but barbaric.", "The street has pigeons. They're mine. All of them. In theory."],
     help: ["Help me watch the wall-line. The neighbor's cat is getting ideas.", "Walk the street with me. Respect the boundaries and we're friends."],
     bye: ["Mind the boundaries.", "The street's watched. Always."],
-    star: ["StarClan? That forest-cat star stuff? Henry talks about it. Henry talks about everything.", "Never heard of it. Out here we believe in warm roofs and firm boundaries."],
+    star: ["StarClan. So Henry had it right after all — a Clan of cats living in the sky. Even the street answers to something, then.", "The star Clan. I walked the highest fence last night and looked up. If they watch boundaries, mine are clean."],
     chat: ["The wall was crossed. Twice. This means war.", "Smudge's friend came back looking like a WARRIOR. The street's impressed. I'm not."],
     other: ["You're not from my street. Off my fence. Now.", "Forest cat, eh? Keep your wild business off my boundaries."],
   },
@@ -956,6 +956,11 @@ function openingFor(p: CharacterProfile, ctx: DialogueContext): string {
 
   if (!playerIsClanmate && bank.other) return pick(bank.other, seed);
 
+  // repeat visits: alternate the band greeting with small talk so a cat you
+  // know well does not open with the same weather line every single time
+  const talks = ctx.talked?.[p.id] ?? 0;
+  if (talks > 0 && bank.small && talks % 2 === 1) return pick(bank.small, seed + 3);
+
   if (bank.open && bank.open[band]) return pick(bank.open[band]!, seed);
   if (bank.wx && bank.wx[wg]) return pick(bank.wx[wg]!, seed + 1);
   if (bank.small) return pick(bank.small, seed + 2);
@@ -1041,12 +1046,13 @@ export function buildDialogue(npcId: string, ctx: DialogueContext): DialogueTree
   const p = profileFor(npcId);
   const bond = ctx.bonds[p.id] ?? 0;
 
+  const star = starClanReply(p, ctx);
   const choices: DialogueChoice[] = [
     { label: smallTalkLabel(p, ctx), reply: smallTalk(p, ctx), effect: bond < 2 ? "bond" : undefined },
     { label: "Tell me about yourself.", reply: aboutSelf(p, ctx), effect: bond < 2 ? "bond" : undefined },
     { label: "The prey's running well, I hear.", reply: replyFor(p, "prey", ctx) },
     { label: "What about this weather?", reply: replyFor(p, "weather", ctx) },
-    { label: starClanLabel(p, ctx), reply: "", ...starClanReply(p, ctx) },
+    { label: starClanLabel(p, ctx), reply: star.text, effect: star.learn ? "learn" : undefined, learn: star.learn },
   ];
 
   // patrol offer: only warriors/deputies/leaders of the player's own Clan, or senior cats generally

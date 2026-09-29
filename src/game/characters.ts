@@ -478,6 +478,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
     },
     // Rusty only exists as an NPC in the ONLINE world; in Story Mode the
     // PLAYER is the Rusty/Firepaw of the narrative.
+    // Online-only: in Story Mode the PLAYER is this cat.
+    storyFrom: Number.POSITIVE_INFINITY,
     knowledge: ["twolegplace", "clan-life"],
     inOnline: true,
   },
@@ -861,6 +863,8 @@ export const FARM: CharacterProfile[] = [
       style: ["asks what everything means", "borrowed Clan phrases said carefully", "loyal past the point of sense"],
       topics: ["training", "Graypaw's appetite", "the border smells", "the warrior code", "his old Twolegs"],
     },
+    // Online-only: in Story Mode the PLAYER is this cat.
+    storyFrom: Number.POSITIVE_INFINITY,
     knowledge: ["clan-life", "warrior-code", "starclan", "thunderclan", "twolegplace"],
     inOnline: true,
   },

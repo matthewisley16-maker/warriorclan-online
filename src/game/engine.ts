@@ -30,6 +30,8 @@ import {
 } from "./world";
 import type { WorldObject } from "./world";
 import { TP_Y, clearTraffic, drawTunnelPortal, drawVehicle, respawnBothDirections, trafficList, updateTraffic, vehicleLaneY } from "./traffic";
+import { isAvailable, pickNpcChatLines } from "./dialogue";
+import { profileFor } from "./characters";
 /** Render-path traffic timestep fallback (wired from the update loop below). */
 let dt = 0.016;
 import {
@@ -1182,6 +1184,8 @@ interface NPCState {
   yawnFxUntil: number;
   tailFxUntil: number;
   alertFxUntil: number;
+  // --- story availability: a cat whose timeline window has closed ---
+  gone?: boolean;
 }
 
 /** Stable rest seats inside a den's footprint (an arc, not one shared spot). */
@@ -1402,6 +1406,13 @@ export class GameCanvas {
   private keys = new Set<string>();
   private paused = false;
 
+  // --- story/online context: which mode is the player in, and which step
+  // of the Book 1 timeline? Drives NPC availability (Redtail is gone after
+  // the Sunningrocks battle, Yellowfang arrives later, kittypets are
+  // Online-only). Set from Game.tsx right after construction. ---
+  storyMode = false;
+  storyStep = 0;
+
   private npcStates: NPCState[] = [];
   private prey: PreyState[] = [];
 
@@ -1472,7 +1483,12 @@ export class GameCanvas {
     this.camX = spawn.x;
     this.camY = spawn.y;
     const TRAITS: NPCState["trait"][] = ["brave", "cautious", "curious", "social", "quiet", "playful", "lazy"];
-    this.npcStates = npcs.map((n) => ({
+    this.npcStates = npcs
+      .filter((n) => {
+        const p = profileFor(n.id);
+        return p.id === "unknown" || isAvailable(p, "open", 0);
+      })
+      .map((n) => ({
       def: n,
       x: n.home.x,
       y: n.home.y,
@@ -1528,6 +1544,45 @@ export class GameCanvas {
       this.touchDx = 0;
       this.touchDy = 0;
       this.crouchHeld = false;
+    }
+  }
+
+  /**
+   * Story/online context: which mode is running and where in the Book 1
+   * timeline the player is. Re-filters NPC availability: cats that are gone
+   * (Redtail after the Sunningrocks battle) or not yet arrived (Yellowfang)
+   * despawn immediately; cats returning respawn at home, like a fresh boot.
+   */
+  setStoryContext(mode: string, step: number) {
+    const story = mode === "story";
+    if (story === this.storyMode && step === this.storyStep) return;
+    this.storyMode = story;
+    this.storyStep = step;
+    for (const n of this.npcStates) {
+      const p = profileFor(n.def.id);
+      const available = p.id === "unknown" || isAvailable(p, story ? "story" : "open", step);
+      if (available && n.gone) {
+        n.gone = false;
+        n.x = n.def.home.x;
+        n.y = n.def.home.y;
+        n.tx = n.def.home.x;
+        n.ty = n.def.home.y;
+        n.ai = "idle";
+        n.denId = null;
+        n.denSeat = -1;
+        n.convoActive = false;
+        n.activity = "settling in";
+      } else if (!available && !n.gone) {
+        n.gone = true;
+        if (n.convoActive) {
+          n.convoActive = false;
+          this.cb.onConvoEnd?.(n.def.id);
+        }
+        if (n.denId !== null) {
+          n.denId = null;
+          n.denSeat = -1;
+        }
+      }
     }
   }
 
@@ -1828,7 +1883,7 @@ export class GameCanvas {
    */
   setNpcConversation(npcId: string, active: boolean) {
     const n = this.npcStates.find((s) => s.def.id === npcId);
-    if (!n) return;
+    if (!n || n.gone) return;
     if (active) {
       if (n.convoActive) return;
       n.convoActive = true;
@@ -1883,7 +1938,7 @@ export class GameCanvas {
   /** The player joined this NPC's patrol: the cat leads the way outside. */
   joinNpcPatrol(npcId: string) {
     const n = this.npcStates.find((s) => s.def.id === npcId);
-    if (!n || n.convoActive) return;
+    if (!n || n.gone || n.convoActive) return;
     n.ai = "patrol";
     n.activity = "patrolling with you";
     n.patrolPoints = [
@@ -2410,6 +2465,7 @@ export class GameCanvas {
     const night = this.nightAlpha() > 0.6;
     for (const n of this.npcStates) {
       // scheduled destinations still apply (dens/night spots) when idle
+      if (n.gone) continue;
       const target = scheduleTarget(n.def, hr);
       if (target && hr !== n.lastScheduleHour && n.ai === "idle" && n.def.wander) {
         n.tx = target.x;
@@ -2517,6 +2573,7 @@ export class GameCanvas {
       const pool = this.npcStates.filter(
         (n) =>
           !n.convoActive &&
+          !n.gone &&
           n.ai !== "in_den" &&
           n.ai !== "go_den" &&
           n.ai !== "exit_den" &&
@@ -2548,14 +2605,15 @@ export class GameCanvas {
         const a = this.npcStates.find((n) => n.def.id === ch.aId);
         const b = this.npcStates.find((n) => n.def.id === ch.bId);
         // end the chat if a cat left, got far away, or is talking to the player
-        if (!a || !b || a.convoActive || b.convoActive || Math.hypot(a.x - b.x, a.y - b.y) > 130 || a.ai === "in_den" || b.ai === "in_den") {
+        if (!a || !b || a.gone || b.gone || a.convoActive || b.convoActive || Math.hypot(a.x - b.x, a.y - b.y) > 130 || a.ai === "in_den" || b.ai === "in_den") {
           this.npcChats.splice(c, 1);
           continue;
         }
         if (nowMs >= ch.nextLineAt) {
           const speaker = ch.linesLeft % 2 === 0 ? a : b;
           const other = speaker === a ? b : a;
-          const line = chatLineFor(a.def.id, b.def.id, ch.linesLeft);
+          const lines3 = pickNpcChatLines(a.def.id, b.def.id, Math.floor(this.time / 12) + ch.linesLeft);
+          const line = lines3[ch.linesLeft % lines3.length];
           this.bubbles.push({
             name: speaker.def.name,
             text: line,
@@ -2802,6 +2860,7 @@ export class GameCanvas {
         }
       }
       for (const n of this.npcStates) {
+        if (n.gone) continue;
         const d = Math.hypot(n.x - this.px, n.y - this.py);
         if (d < bestD) {
           bestD = d;
@@ -2838,7 +2897,7 @@ export class GameCanvas {
       // NPCs inside (same stable in-room positions as the renderer)
       for (const npcId of room.npcs ?? []) {
         const n = this.npcStates.find((s) => s.def.id === npcId);
-        if (!n) continue;
+        if (!n || n.gone) continue;
         const gw3 = ROOM_GEO[room.id]?.w ?? ROOM_W;
         const gh3 = ROOM_GEO[room.id]?.h ?? ROOM_H;
         const hx = 2.5 + hash2(npcId.length * 7 + 3, npcId.charCodeAt(0)) * (gw3 - 6);
@@ -3172,7 +3231,7 @@ export class GameCanvas {
     // may sit outside the room)
     for (const npcId of room.npcs ?? []) {
       const n = this.npcStates.find((s) => s.def.id === npcId);
-      if (!n) continue;
+      if (!n || n.gone) continue;
       const gw2 = geo?.w ?? ROOM_W;
       const gh2 = geo?.h ?? ROOM_H;
       const hx = 2.5 + hash2(npcId.length * 7 + 3, npcId.charCodeAt(0)) * (gw2 - 6);
@@ -3371,6 +3430,7 @@ export class GameCanvas {
     // NPCs
     for (const n of this.npcStates) {
       if (n.x < viewL - 60 || n.x > viewR + 60 || n.y < viewT - 60 || n.y > viewB + 60) continue;
+      if (n.gone) continue;
       ents.push({
         y: n.y,
         draw: () => {
@@ -3553,7 +3613,7 @@ export class GameCanvas {
         // follow an NPC (NPC↔NPC ambient conversation bubble)
         const trackId = b.track;
         const n = this.npcStates.find((s) => s.def.id === trackId.slice(4));
-        if (!n) continue;
+        if (!n || n.gone) continue;
         bx = n.x;
         by = n.y;
       } else if (b.track) {

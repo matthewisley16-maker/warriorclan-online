@@ -61,6 +61,16 @@ const schema = defineSchema(
       y: v.number(),
       discovered: v.optional(v.array(v.string())),
       storyStep: v.optional(v.number()),
+      // per-NPC social memory: knowledge learned FROM each cat and the bond
+      // built with them ("smudge:starclan" strings — knowledge is per-NPC,
+      // never global; a Twolegplace cat learns StarClan only when told)
+      npcMemory: v.optional(
+        v.object({
+          learned: v.optional(v.array(v.string())),
+          bonds: v.optional(v.array(v.string())),
+          talked: v.optional(v.array(v.string())),
+        }),
+      ),
       questsDone: v.optional(v.array(v.string())),
       skills: v.optional(v.object({
         hunt: v.number(),

@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import { GameCanvas, type MovementState, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
-type NpcConvoChoice = { label: string; reply: string; effect?: "bond" | "patrol" | "end" };
+type NpcConvoChoice = { label: string; reply: string; effect?: "bond" | "patrol" | "learn" | "end"; learn?: string };
 interface NpcConvo {
   npcId: string;
   name: string;
@@ -26,36 +26,6 @@ interface NpcConvo {
   choices?: NpcConvoChoice[];
   /** "reply" marks a closing reply: the next E press ends the conversation */
   lineIdx?: number | string;
-}
-/** Compact conversation data — context-aware, warriors-tone dialogue. */
-function buildNpcConvo(
-  npc: { id: string; name: string; role?: string; clan?: string; lines: string[] },
-  hour: number,
-  weather: string,
-): { opening: string; choices: NpcConvoChoice[] } {
-  const isNight = hour < 6 || hour >= 21;
-  const rainy = weather === "rain" || weather === "heavy-rain" || weather === "storm";
-  const role = (npc.role ?? "").toLowerCase();
-  let opening: string;
-  if (isNight) opening = "The camp is quiet. You should be asleep in your den, too. Something troubling you?";
-  else if (rainy) opening = "Rain like this keeps the prey deep in their burrows. Best wait it out under cover.";
-  else if (role.includes("leader")) opening = "Ah — good timing. I was just thinking about the patrols for today.";
-  else if (role.includes("deputy")) opening = "The border markers need refreshing along the far edge. Heavy work, but it keeps the Clan safe.";
-  else if (role.includes("medicine")) opening = "Careful where you tread — I just dried the last of the marigold there.";
-  else if (role.includes("apprentice")) opening = "Race you to the Tallrock! ...Well? Were you scared?";
-  else if (role.includes("elder")) opening = "Come closer, young one. My joints ache, but my ears work fine.";
-  else if (role.includes("queen")) opening = "Mind the entrance — one of the kits just learned to pounce, and everything is her prey now.";
-  else opening = "Good hunting? The forest feels full of prey today.";
-  const choices: NpcConvoChoice[] = [
-    { label: "The forest is full of prey today.", reply: "That it is. StarClan provides — when we respect it.", effect: "bond" },
-    { label: "Anything I can help with?", reply: "Keep your ears sharp and your paws quiet. That helps more than you know." },
-    { label: "What's the weather doing?", reply: rainy ? "This rain won't pass before sundown. Guard your nest from the drips." : "Clear skies. A good day to be out among the trees." },
-    { label: "I should get going.", reply: "May you walk safely, wherever the trails take you.", effect: "end" },
-  ];
-  if (role.includes("deputy") || role.includes("warrior")) {
-    choices.splice(1, 1, { label: "Can I join the border patrol?", reply: "Stay close, watch the scents, and keep off the Thunderpath. Welcome aboard.", effect: "patrol" });
-  }
-  return { opening, choices };
 }
 import {
   AudioEngine,
@@ -66,6 +36,8 @@ import {
 import { interiors } from "@/game/engine";
 import { GROUND_CELL, GROUND_COLS, GROUND_ROWS, groundMap, lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
+import { buildDialogue, type DialogueContext } from "@/game/dialogue";
+import { profileFor } from "@/game/characters";
 import MainMenu, { LoadingScreen, loadSettings, SettingsScreen, type GameMode, type Settings } from "./MainMenu";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
 import { WorldMapCanvas, MapLegend, WorldMapOverlay, MAP_SPOTS } from "./WorldMapData";
@@ -163,6 +135,7 @@ export default function Game() {
   const savePosition = useMutation(api.players.savePosition);
   const completeQuest = useMutation(api.players.completeQuest);
   const setStoryStep = useMutation(api.players.setStoryStep);
+  const saveNpcMemory = useMutation(api.players.saveNpcMemory);
   const addXp = useMutation(api.players.addXp);
   const updateCat = useMutation(api.players.updateCat);
   const updateStats = useMutation(api.players.updateStats);
@@ -190,6 +163,29 @@ export default function Game() {
   const [npcConvo, setNpcConvo] = useState<NpcConvo | null>(null);
   const npcConvoRef = useRef(npcConvo);
   npcConvoRef.current = npcConvo;
+  // --- per-NPC social memory (knowledge is learned, never global) ---
+  const [learned, setLearned] = useState<Record<string, string[]>>({});
+  const [bonds, setBonds] = useState<Record<string, number>>({});
+  const [talked, setTalked] = useState<Record<string, number>>({});
+  const learnedRef = useRef(learned);
+  learnedRef.current = learned;
+  const bondsRef = useRef(bonds);
+  bondsRef.current = bonds;
+  const talkedRef = useRef(talked);
+  talkedRef.current = talked;
+  /** throttled server persist of one cat's memory (or all of it on boot) */
+  const persistNpcMemory = useCallback((npcId?: string) => {
+    const l = learnedRef.current;
+    const b = bondsRef.current;
+    const t = talkedRef.current;
+    const pick = (m: Record<string, unknown>) =>
+      npcId && npcId in m ? { [npcId]: m[npcId] } : m;
+    saveNpcMemory({
+      learned: Object.entries(pick(l)).map(([id, v]) => `${id}:${(v as string[]).join(",")}`),
+      bonds: Object.entries(pick(b)).map(([id, v]) => `${id}:${v}`),
+      talked: Object.entries(pick(t)).map(([id, v]) => `${id}:${v}`),
+    }).catch(() => undefined);
+  }, [saveNpcMemory]);
   const endNpcConvo = useCallback(() => {
     const c = npcConvoRef.current;
     if (!c) return;
@@ -275,6 +271,32 @@ export default function Game() {
     });
     setQuestsDone(player.questsDone ?? []);
     setStoryStepLocal(player.storyStep ?? 0);
+    const mem = player.npcMemory;
+    if (mem) {
+      const learnedIn: Record<string, string[]> = {};
+      for (const s of mem.learned ?? []) {
+        const i = s.indexOf(":");
+        if (i <= 0) continue;
+        learnedIn[s.slice(0, i)] = s.slice(i + 1).split(",").filter(Boolean);
+      }
+      const bondsIn: Record<string, number> = {};
+      for (const s of mem.bonds ?? []) {
+        const i = s.indexOf(":");
+        if (i <= 0) continue;
+        const v = Number(s.slice(i + 1));
+        if (Number.isFinite(v)) bondsIn[s.slice(0, i)] = v;
+      }
+      const talkedIn: Record<string, number> = {};
+      for (const s of mem.talked ?? []) {
+        const i = s.indexOf(":");
+        if (i <= 0) continue;
+        const v = Number(s.slice(i + 1));
+        if (Number.isFinite(v)) talkedIn[s.slice(0, i)] = v;
+      }
+      setLearned(learnedIn);
+      setBonds(bondsIn);
+      setTalked(talkedIn);
+    }
     if (player.discovered?.length) setDiscovered(player.discovered);
   }, [player]);
 
@@ -414,6 +436,7 @@ export default function Game() {
       },
     });
     gameRef.current = game;
+    game.setStoryContext(mode, storyStepRef.current);
     // Audio unlock: entering the game follows the Play click (user gesture),
     // which satisfies browser autoplay policies.
     audio().start();
@@ -889,6 +912,22 @@ export default function Game() {
   const discRef = useRef(discovered);
   discRef.current = discovered;
 
+  /** Context for the per-character dialogue engine (mode, timeline, world). */
+  const dialogueCtx = useCallback((): DialogueContext => {
+    const clan = myCat?.clan ?? "loner";
+    return {
+      mode,
+      storyStep: storyStepRef.current,
+      hour: clockRef.current,
+      weather: weatherRef.current,
+      player: { name: myCat?.name ?? "Rusty", clan, rank: rankRef.current },
+      discovered: discRef.current,
+      learned: learnedRef.current,
+      bonds: bondsRef.current,
+      talked: talkedRef.current,
+    };
+  }, [mode, myCat]);
+
   // --- interactions ---
   const handleInteract = useCallback(
     (target: NearbyTarget) => {
@@ -922,8 +961,12 @@ export default function Game() {
         setDialogue(null); // the dedicated conversation UI replaces chatter panels
         gameRef.current?.setNpcConversation(npc.id, true);
         audio().playMew("talk");
-        const built = buildNpcConvo(npc, clockRef.current, weatherRef.current);
-        setNpcConvo({ npcId: npc.id, name: npc.name, role: npc.role, line: built.opening, choices: built.choices });
+        const built = buildDialogue(npc.id, dialogueCtx());
+        setNpcConvo({ npcId: npc.id, name: npc.name, role: profileFor(npc.id).rank, line: built.opening, choices: built.choices });
+        const nextTalked = { ...talkedRef.current, [npc.id]: (talkedRef.current[npc.id] ?? 0) + 1 };
+        talkedRef.current = nextTalked;
+        setTalked(nextTalked);
+        persistNpcMemory(npc.id);
         // story completion counts the first line of the conversation
         if (mode === "story") {
           const step = storySteps[storyStepRef.current];
@@ -1019,7 +1062,22 @@ export default function Game() {
       const c = npcConvoRef.current;
       if (!g || !c) return;
       audio().playSfx("ui_confirm", { volume: 0.35, throttleMs: 400 });
-      if (choice.effect === "bond") g.addNpcBond(c.npcId, 1);
+      if (choice.effect === "bond") {
+        g.addNpcBond(c.npcId, 1);
+        const nextBonds = { ...bondsRef.current, [c.npcId]: Math.max(-3, Math.min(3, (bondsRef.current[c.npcId] ?? 0) + 1)) };
+        bondsRef.current = nextBonds;
+        setBonds(nextBonds);
+        persistNpcMemory(c.npcId);
+      }
+      if (choice.effect === "learn" && choice.learn) {
+        const flag = choice.learn;
+        const have = learnedRef.current[c.npcId] ?? [];
+        if (have.includes(flag)) return; // this cat already knows it
+        const nextLearned = { ...learnedRef.current, [c.npcId]: [...have, flag] };
+        learnedRef.current = nextLearned;
+        setLearned(nextLearned);
+        persistNpcMemory(c.npcId);
+      }
       if (choice.effect === "patrol") {
         g.joinNpcPatrol(c.npcId);
         setDialogue({ name: c.name, text: choice.reply + " — Let's move." });
@@ -1055,6 +1113,7 @@ export default function Game() {
   // --- story helpers ---
   const storyStepRef = useRef(storyStep);
   storyStepRef.current = storyStep;
+  const rankRef = useRef("apprentice");
   const areaAtRef = useRef<string>("");
   areaAtRef.current = areaName;
   const posAreaIdRef = useRef<string>("");
@@ -1094,6 +1153,11 @@ export default function Game() {
       return next;
     });
   }, [setStoryStep, addXp]);
+
+  // story timeline moved: the engine despawns/respawns cats whose windows changed
+  useEffect(() => {
+    gameRef.current?.setStoryContext(mode, storyStep);
+  }, [mode, storyStep, phase]);
 
   // story: visit objectives trigger on area change
   useEffect(() => {
@@ -1198,6 +1262,7 @@ export default function Game() {
   const clanLabel = CLANS.find((c) => c.id === myCat?.clan)?.name;
   const rankXp = player?.xp ?? 0;
   const rankLabel = rankXp >= 300 ? "Warrior" : rankXp >= 100 ? "Apprentice" : (player?.rank ?? "apprentice") === "kittypet" ? "Kittypet" : "Kit";
+  rankRef.current = rankLabel.toLowerCase();
 
   if (phase !== "playing") {
     return (
