@@ -1357,7 +1357,7 @@ export default function Game() {
 
   if (phase !== "playing") {
     return (
-      <div className="relative h-screen w-full overflow-hidden">
+      <div className="relative h-[100dvh] w-full overflow-hidden">
         <MainMenu
           player={
             player

@@ -193,6 +193,17 @@ export function CatPortrait({
   );
 }
 
+/** Live viewport height (drives short-window compaction of the title screen). */
+function useViewportHeight() {
+  const [h, setH] = useState(() => (typeof window === "undefined" ? 800 : window.innerHeight));
+  useEffect(() => {
+    const onResize = () => setH(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return h;
+}
+
 // --- shared menu button -----------------------------------------------------
 
 function MenuButton({
@@ -255,7 +266,7 @@ const MODES: { id: GameMode; title: string; tagline: string; desc: string; bulle
   },
 ];
 
-function ModeCard({ mode, index, onPlay }: { mode: (typeof MODES)[number]; index: number; onPlay: (m: GameMode, clanId: string) => void }) {
+function ModeCard({ mode, index, onPlay, compact }: { mode: (typeof MODES)[number]; index: number; onPlay: (m: GameMode, clanId: string) => void; compact?: boolean }) {
   const Icon = mode.icon;
   return (
     <motion.div
@@ -281,7 +292,7 @@ function ModeCard({ mode, index, onPlay }: { mode: (typeof MODES)[number]; index
           </div>
         </div>
         <p className="mt-2.5 text-xs leading-snug text-white/70">{mode.desc}</p>
-        <ul className="mt-2.5 flex-1 space-y-1">
+        <ul className={cn("mt-2.5 flex-1 space-y-1", compact && "hidden")}>
           {mode.bullets.map((b) => (
             <li key={b} className="flex items-center gap-1.5 text-[11px] text-white/60">
               <Sparkles className="size-2.5 text-amber-300/80" /> {b}
@@ -975,9 +986,10 @@ export default function MainMenu({
   const rank = player ? rankOf(xp, player.rank) : "loner";
   const clanName = CLANS.find((c) => c.id === (player?.clan ?? "thunderclan"))?.name ?? "Loner";
   const toNext = nextRankXp(xp);
+  const compact = useViewportHeight() < 780; // short window: tighten vertical rhythm
 
   return (
-    <div className={cn("relative h-screen w-full overflow-hidden bg-[#0d160d]", settings.largeText && "text-lg")}>
+    <div className={cn("relative h-[100dvh] w-full overflow-hidden bg-[#0d160d]", settings.largeText && "text-lg")}>
       {/* cinematic camp background */}
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
 
@@ -1048,8 +1060,9 @@ export default function MainMenu({
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="relative z-10 flex h-full flex-col items-center px-4 py-6"
+          className="relative z-10 flex h-full min-h-0 flex-col overflow-y-auto px-4 py-4 sm:py-6"
         >
+          <div className="my-auto flex w-full flex-col items-center">
           {/* Logo */}
           <motion.div
             initial={{ opacity: 0, y: -14 }}
@@ -1057,10 +1070,10 @@ export default function MainMenu({
             transition={{ duration: 0.7 }}
             className="select-none text-center"
           >
-            <h1 className="text-5xl font-black tracking-[0.22em] text-amber-300 drop-shadow-[0_3px_10px_rgba(0,0,0,0.85)] md:text-6xl">
+            <h1 className="text-[clamp(2.4rem,6.5vw,4.5rem)] font-black leading-none tracking-[0.22em] text-amber-300 drop-shadow-[0_3px_10px_rgba(0,0,0,0.85)]">
               WARRIORS
             </h1>
-            <p className="mt-0.5 text-xl font-bold tracking-[0.6em] text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] md:text-2xl">
+            <p className="mt-0.5 text-[clamp(1.1rem,3vw,1.5rem)] font-bold tracking-[0.6em] text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)]">
               RPG
             </p>
             <div className="mt-2 flex items-center justify-center gap-3">
@@ -1075,9 +1088,12 @@ export default function MainMenu({
             initial={{ opacity: 0, y: 14 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.15, duration: 0.6 }}
-            className="mt-5 flex w-full max-w-md items-center gap-4 rounded-2xl border border-white/20 bg-black/45 px-5 py-3 shadow-xl shadow-black/40 backdrop-blur-md"
+            className={cn(
+              "mt-4 flex w-full max-w-md items-center gap-4 rounded-2xl border border-white/20 bg-black/45 shadow-xl shadow-black/40 backdrop-blur-md sm:mt-5",
+              compact ? "px-4 py-2.5" : "px-5 py-3",
+            )}
           >
-            <CatPortrait skin={previewSkin} size={84} />
+            <CatPortrait skin={previewSkin} size={compact ? 60 : 84} />
             <div className="min-w-0 flex-1">
               <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/50">Your cat</p>
               <p className="truncate text-lg font-extrabold tracking-tight text-white">{player?.name ?? "Warrior"}</p>
@@ -1094,9 +1110,9 @@ export default function MainMenu({
           </motion.div>
 
           {/* Three modes */}
-          <div className="mt-5 grid w-full max-w-4xl gap-3 sm:grid-cols-3">
+          <div className="mt-4 grid w-full max-w-4xl gap-3 sm:mt-5 sm:grid-cols-3 xl:max-w-6xl">
             {MODES.map((m, i) => (
-              <ModeCard key={m.id} mode={m} index={i} onPlay={onPlay} />
+              <ModeCard key={m.id} mode={m} index={i} onPlay={onPlay} compact={compact} />
             ))}
           </div>
 
@@ -1105,7 +1121,7 @@ export default function MainMenu({
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.55 }}
-            className="mt-auto flex flex-wrap items-center justify-center gap-2.5 pt-5"
+            className="mt-4 flex flex-wrap items-center justify-center gap-2.5 sm:mt-5"
           >
             <MenuButton icon={User} label="Character" onClick={() => setScreen("character")} />
             <MenuButton icon={SettingsIcon} label="Settings" onClick={() => setScreen("settings")} />
@@ -1129,9 +1145,10 @@ export default function MainMenu({
             <p className="text-[11px] font-semibold text-white/75">{player?.name ?? "Guest"}</p>
             <SignOutControl />
           </motion.div>
-          <p className="mt-2.5 pb-1 text-center text-[10px] text-white/40">
+          <p className={cn("mt-2.5 pb-1 text-center text-[10px] text-white/40", compact && "hidden")}>
             One cat, every adventure — your cat, progress and discoveries are saved automatically.
           </p>
+          </div>
         </motion.div>
       )}
     </div>
