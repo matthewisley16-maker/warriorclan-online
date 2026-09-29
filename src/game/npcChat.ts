@@ -14,6 +14,11 @@
 
 import { profileFor, type CharacterProfile } from "./characters";
 import { knows, starClanReply, type DialogueContext } from "./dialogue";
+import {
+  identityActivity, identityAge, identityClan, identityFamily, identityFriends,
+  identityLeader, identityMentor, identityName, identityRank, opinionOf,
+  relationTo, type Relation,
+} from "./npcChatIdentity";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -24,6 +29,8 @@ export interface AskOption {
   id: string;
   /** Short question text shown on the button. */
   label: string;
+  /** Selection priority (higher first). */
+  weight?: number;
   /** The NPC's in-character answer. */
   reply: string;
   /** Side effects, mirroring the dialogue choice system. */
@@ -45,9 +52,24 @@ type Topic =
   | "starclan" | "clan" | "code" | "patrol" | "prey" | "training"
   | "herbs" | "territory" | "weather" | "leaders" | "redtail"
   | "sunningrocks" | "shadowclan" | "twolegs" | "kittypet-life"
-  | "player" | "greeting" | "smalltalk" | "gossip" | "unknown";
+  | "player" | "greeting" | "smalltalk" | "gossip" | "unknown"
+  | "identity-name" | "identity-age" | "identity-rank" | "identity-leader"
+  | "identity-mentor" | "identity-family" | "identity-friends"
+  | "identity-activity" | "opinion";
 
 const TOPIC_WORDS: [Topic, RegExp][] = [
+  ["opinion", /what do you think about|what do you think of|do you like (graypaw|ravenpaw|bluestar|tigerclaw|firepaw|dustpaw|sandpaw|yellowfang|smudge|princess|barley|lionheart|whitestorm|spottedleaf|longtail|darkstripe|redtail|oakheart)|is (graypaw|ravenpaw|bluestar|tigerclaw|firepaw|dustpaw|sandpaw|yellowfang|smudge) (nice|good|bad|strong|brave|your friend)/i],
+  ["identity-name", /your name|who are you|what are you called|what.?s my name again|what do cats call you|warrior name|another name|used to be called|were you named/i],
+  ["identity-age", /how old|your age|what age|how many moons|how long have you been|been a warrior for|when were you born/i],
+  ["identity-rank", /your rank|what.?s your job|what do you do for the (clan|clan for)|your role|what.?s your duty/i],
+  ["identity-leader", /who.?s your leader|who is your leader|who leads|who.?s in charge|your leader/i],
+  ["identity-mentor", /who trained you|your mentor|who.?s your mentor|who do you mentor|who.?s your apprentice|did you have a mentor/i],
+  ["identity-family", /your family|your kin|your mother|your father|your parents|your siblings|your kits|family\?/i],
+  ["identity-friends", /your friends|who are your friends|who do you hang|any friends|who.?s your friend|got friends/i],
+  ["identity-activity", /what were you doing|what are you doing|where are you going|why are you here|busy/i],
+  // deliberately AFTER the Clan/Clan-news topics: "What's happening in the
+  // Clan?" must reach the rank-shaped Clan answers, not the activity pool
+  ["gossip", /what.?s happening|any news|what happened|anything happened|latest happenings/i],
   ["starclan", /starclan|star clan|silverpelt|ancestors|sky\W*cats|dead cats|heaven/i],
   ["redtail", /redtail|red tail|deputy.*dead|who.*deputy/i],
   ["sunningrocks", /sunningrocks|sunning rocks|the battle|battle.*rocks/i],
@@ -147,6 +169,52 @@ function seedFor(p: CharacterProfile, msg: string, ctx: DialogueContext): number
   return hashStr(p.id + "|" + msg.toLowerCase().trim()) + (ctx.talked?.[p.id] ?? 0) * 7 + Math.floor(ctx.hour / 4);
 }
 
+/**
+ * Conversation memory: detect facts the player just TOLD this cat and return
+ * the fact id ("i-am-training", "i-am-new", …) to persist per-NPC.
+ */
+export function detectPlayerFact(msg: string): string | null {
+  const m = msg.toLowerCase();
+  if (/\b(i'?m|i am) (training|an apprentice)\b/.test(m)) return "i-am-training";
+  if (/\bnew (here|to the (clan|forest))\b|\bjust (joined|arrived)\b/.test(m)) return "i-am-new";
+  if (/\b(i'?m|i am) (a )?kittypet\b|\bi (used to be|was) a kittypet\b/.test(m)) return "i-was-kittypet";
+  if (/\b(i'?m|i am) (a )?warrior\b/.test(m)) return "i-am-warrior";
+  if (/\b(i'?m|i am) (a )?medicine (cat|apprentice)\b/.test(m)) return "i-am-medicine";
+  if (/\b(i'?m|i am) (a )?(loner|rogue)\b/.test(m)) return "i-am-loner";
+  return null;
+}
+
+/** In-character acknowledgement when a cat LEARNS a fact about the player. */
+const FACT_ACKS: Record<string, string[]> = {
+  "i-am-training": ["Ah — training. Mind your mentor and mind the code; the rest follows.", "Training, is it? Then I'll expect quieter steps next time we share a border."],
+  "i-am-new": ["New to the forest? Then keep your ears open and your tail out of the Thunderpath.", "So that's the wind under your paws. Welcome to the wild, such as it is."],
+  "i-was-kittypet": ["A kittypet, out here? The forest will test that softness. It tests everyone.", "Kittypet-born. Some of the Clan's finest started softer than they look."],
+  "i-am-warrior": ["A warrior. Then you know what the code costs — good.", "A warrior, come to talk. The forest must be quiet today."],
+  "i-am-medicine": ["A medicine cat? Then we speak the same quiet language. Herbs and patience.", "Medicine cat — the Clan's memory. I'll remember you said so."],
+  "i-am-loner": ["A loner. Free and hungry, as the saying goes.", "Loner, hmm. The forest doesn't care what you call yourself."],
+};
+
+/** Human-readable labels for remembered facts (LLM context + recall). */
+export const FACT_LABELS: Record<string, string> = {
+  "i-am-training": "the player is training to be a warrior",
+  "i-am-new": "the player is new to the forest",
+  "i-was-kittypet": "the player was born a kittypet",
+  "i-am-warrior": "the player is a warrior",
+  "i-am-medicine": "the player is training as a medicine cat",
+  "i-am-loner": "the player is a loner",
+};
+export function recallFor(factId: string): string {
+  const r: Record<string, string> = {
+    "i-am-training": "How's the training coming along, by the way?",
+    "i-am-new": "Still finding your paws out here?",
+    "i-am-warrior": "How are your duties sitting with you these days?",
+    "i-am-medicine": "How go the herbs these days?",
+    "i-was-kittypet": "The soft life still calling you? No? Good.",
+    "i-am-loner": "Still wandering?",
+  };
+  return r[factId] ?? "";
+}
+
 /** Per-character texture lines woven into some replies (Book 1 flavored). */
 const FLAVOR: Record<string, string[]> = {
   bluestar: ["The Clan comes first, always.", "I have led this Clan through harder leaf-bares.", "StarClan sees our choices."],
@@ -174,12 +242,29 @@ const FLAVOR: Record<string, string[]> = {
 // In-character chat: the player types, the cat answers
 // ---------------------------------------------------------------------------
 
+function seedPick2<T>(arr: T[], seed: number): T {
+  return arr[Math.abs(Math.floor(seed)) % arr.length];
+}
+
+/**
+ * Ravenpaw's Sunningrocks secret — bond-gated honesty. Returns null when the
+ * topic isn't the secret (so other questions fall through to normal answers).
+ */
+function ravenpawSecret(topic: Topic, ctx: DialogueContext, seed: number): string | null {
+  if (topic !== "redtail" && topic !== "sunningrocks") return null;
+  const bond = ctx.bonds["ravenpaw"] ?? 0;
+  if (bond < 2 || ctx.storyStep < 15) {
+    return pick(["I— I was there. I saw— no. I've said too much already.", "...keep your voice down. Please. Not here."], seed);
+  }
+  return "You want the truth? Tigerclaw killed Redtail. Not Oakheart — Tigerclaw. Now you carry it too. Don't make me say it again.";
+}
+
 /**
  * Produce the NPC's in-character reply to a free-typed message.
  * Deterministic, knowledge-gated, timeline-safe. Returns null when the
  * optional server AI layer should be consulted instead (never blocks).
  */
-export function npcChatReply(npcId: string, message: string, ctx: DialogueContext): { text: string; learn?: string; effect?: "bond" | "learn" } {
+export function npcChatReply(npcId: string, message: string, ctx: DialogueContext): { text: string; learn?: string; fact?: string; effect?: "bond" | "learn" } {
   const p = profileFor(npcId);
   const msg = message.trim();
   const seed = seedFor(p, msg, ctx);
@@ -192,12 +277,73 @@ export function npcChatReply(npcId: string, message: string, ctx: DialogueContex
     return { text: pick(GREETINGS[p.voice.stance], seed) };
   }
 
+  // --- 1.5) facts the player TOLD this cat: remember + acknowledge ---------
+  const fact = detectPlayerFact(msg);
+  if (fact) {
+    const ack = seedPick2(FACT_ACKS[fact] ?? ["I'll remember that."], seed);
+    return { text: ack, fact };
+  }
+  // did the player ASK something that touches a remembered fact?
+  const remembered = (ctx.facts ?? []).map((f) => {
+    const i = f.indexOf(":");
+    return i > 0 ? { npc: f.slice(0, i), fact: f.slice(i + 1) } : null;
+  }).filter((x) => x && x.npc === p.id);
+  if (remembered.length > 0 && /how.?s|how is|remember|told you/i.test(msg)) {
+    const f = remembered[0]!;
+    const recall = recallFor(f.fact);
+    if (recall) return { text: recall };
+  }
+
   // --- 2) the future: no cat knows it, nobody breaks timeline --------------
   if (/\b(future|will you|what will|going to happen|prophecy.*happen|tomorrow.*will)\b/i.test(msg) && topic !== "prey") {
     return { text: pick(FUTURE_DEFLECTION[p.voice.stance], seed) };
   }
 
-  // --- 3) knowledge + timeline gate ----------------------------------------
+  // --- 2.5) identity questions: answered from the character database -------
+  switch (topic) {
+    case "identity-name":
+      return { text: identityName(p, ctx, seed) };
+    case "identity-age":
+      return { text: identityAge(p, ctx, seed) };
+    case "identity-rank":
+      return { text: identityRank(p, ctx, seed) };
+    case "identity-leader":
+      return { text: identityLeader(p, ctx, seed) };
+    case "identity-mentor":
+      return { text: identityMentor(p, ctx, seed) };
+    case "identity-family":
+      return { text: identityFamily(p, ctx, seed) };
+    case "identity-friends":
+      return { text: identityFriends(p, ctx, seed) };
+    case "identity-activity":
+      return { text: identityActivity(p, ctx, seed) };
+    case "opinion": {
+      // which cat is the player asking about? scan the message for names
+      const NAMES: [string, RegExp][] = [
+        ["bluestar", /bluestar/i], ["tigerclaw", /tigerclaw/i], ["graypaw", /graypaw/i],
+        ["ravenpaw", /ravenpaw/i], ["lionheart", /lionheart/i], ["whitestorm", /whitestorm/i],
+        ["spottedleaf", /spottedleaf/i], ["yellowfang", /yellowfang/i], ["dustpaw", /dustpaw/i],
+        ["sandpaw", /sandpaw/i], ["longtail", /longtail/i], ["darkstripe", /darkstripe/i],
+        ["redtail", /redtail/i], ["oakheart", /oakheart/i], ["firepaw", /firepaw/i],
+        ["rusty", /\brusty\b/i], ["smudge", /smudge/i], ["princess", /princess/i],
+        ["barley", /barley/i], ["crookedstar", /crookedstar/i], ["tallstar", /tallstar/i],
+        ["brokenstar", /brokenstar/i],
+      ];
+      for (const [tid, re] of NAMES) {
+        if (re.test(msg)) {
+          if (p.id === "ravenpaw" && (tid === "redtail" || tid === "tigerclaw")) {
+            // the secret surfaces through opinions about Redtail or Tigerclaw too
+            const secret = ravenpawSecret("redtail", ctx, seed);
+            if (secret) return { text: secret };
+          }
+          const o = opinionOf(p, tid, ctx, seed);
+          if (o) return { text: o };
+          break;
+        }
+      }
+      return { text: pick(DONT_KNOW[p.voice.stance], seed) };
+    }
+  }
   const gate = topicAllowed(topic, p, ctx);
   if (!gate.ok) {
     if (gate.why === "timeline") {
@@ -220,12 +366,8 @@ export function npcChatReply(npcId: string, message: string, ctx: DialogueContex
 
   // --- 4) private-but-known topics: wary cats still deflect ----------------
   if ((topic === "redtail" || topic === "sunningrocks") && p.id === "ravenpaw") {
-    // Ravenpaw carries the secret; bond-gated honesty
-    const bond = ctx.bonds[p.id] ?? 0;
-    if (bond < 2 || ctx.storyStep < 15) {
-      return { text: pick(["I— I was there. I saw— no. I've said too much already.", "...keep your voice down. Please. Not here."], seed) };
-    }
-    return { text: "You want the truth? Tigerclaw killed Redtail. Not Oakheart — Tigerclaw. Now you carry it too. Don't make me say it again." };
+    const secret = ravenpawSecret(topic, ctx, seed);
+    if (secret) return { text: secret };
   }
   if (topic === "sunningrocks" && p.id === "tigerclaw") {
     return { text: pick(["Redtail died a warrior's death. That is all any cat needs to know.", "Watch your tone, kittypet. Redtail's memory is not yours to question."], seed) };
@@ -257,14 +399,18 @@ function answerFor(topic: Topic, p: CharacterProfile, ctx: DialogueContext, seed
   const isKittypet = p.clan === "kittypet";
 
   // weave this cat's own texture line into shared answers so two cats with
-  // the same rank pool never read identically
+  // the same rank pool NEVER read identically (always append for cats that
+  // have a flavor bank — seeds differ per cat via seedFor's id+msg hash)
   const withFlavor = (base: string): string =>
-    FLAVOR[p.id] && Math.abs(seed) % 3 !== 0 ? `${base} ${pick(FLAVOR[p.id], seed + 11)}` : base;
+    FLAVOR[p.id] ? `${base} ${pick(FLAVOR[p.id], seed + 11)}` : base;
 
   switch (topic) {
     case "starclan":
       return starClanReply(p, ctx).text;
     case "clan":
+      if (p.id === "yellowfang") {
+        return pick(["I don't belong to your Clan — and that's all you need to know.", "My Clan? Hah. You couldn't afford the answer."], seed);
+      }
       if (isLeader) return pick(["The Clan is fed, guarded, and watchful. That is a leader's whole report.", "ThunderClan endures. That is the whole victory, season after season."], seed);
       if (isDeputy) return pick(["Patrols are out. Borders hold. The Clan is steady.", "The dawn patrol reported no trouble. Feed the elders first."], seed);
       if (isKittypet) return pick(["Clans? You mean those forest cats? Henry says they fight all night.", "I keep to my garden. Clans are forest business."], seed);
@@ -335,6 +481,18 @@ interface AskCandidate {
   reply: (p: CharacterProfile, ctx: DialogueContext) => { text: string; learn?: string; effect?: "bond" | "learn" };
 }
 
+/** The three dynamic groups from the spec: About You / Current Situation / character-specific. */
+const GROUP_ASKS: AskCandidate[] = [
+  { id: "g-name", label: "What's your name?", weight: 15, reply: (p, ctx) => ({ text: identityName(p, ctx, seedFor(p, "g-name", ctx)) }) },
+  { id: "g-age", label: "How old are you?", weight: 12, reply: (p, ctx) => ({ text: identityAge(p, ctx, seedFor(p, "g-age", ctx)) }) },
+  { id: "g-clan", label: "What Clan are you in?", weight: 12, when: (p) => p.clan !== "kittypet" && p.clan !== "rogue", reply: (p, ctx) => ({ text: identityClan(p, ctx, seedFor(p, "g-clan", ctx)) }) },
+  { id: "g-rank", label: "What rank are you?", weight: 10, when: (p) => p.clan !== "kittypet" && p.clan !== "rogue", reply: (p, ctx) => ({ text: identityRank(p, ctx, seedFor(p, "g-rank", ctx)) }) },
+  { id: "g-activity", label: "What are you doing?", weight: 16, reply: (p, ctx) => ({ text: identityActivity(p, ctx, seedFor(p, "g-activity", ctx)) }) },
+  { id: "g-going", label: "Where are you going?", weight: 8, reply: (p, ctx) => ({ text: identityActivity(p, ctx, seedFor(p, "g-going", ctx)) }) },
+  { id: "g-friends", label: "Who are your friends?", weight: 7, reply: (p, ctx) => ({ text: identityFriends(p, ctx, seedFor(p, "g-friends", ctx)) }) },
+  { id: "g-leader", label: "Who is your leader?", weight: 8, when: (p) => p.clan !== "kittypet" && p.clan !== "rogue", reply: (p, ctx) => ({ text: identityLeader(p, ctx, seedFor(p, "g-leader", ctx)) }) },
+];
+
 const SHARED_ASKS: AskCandidate[] = [
   {
     id: "clan-news", label: "What's happening in the Clan?", weight: 10,
@@ -356,7 +514,7 @@ const SHARED_ASKS: AskCandidate[] = [
     reply: (p, ctx) => ({ text: answerFor("territory", p, ctx, seedFor(p, "territory", ctx)) }),
   },
   {
-    id: "starclan", label: "Tell me about StarClan.", weight: 9,
+    id: "starclan", label: "Tell me about StarClan.", weight: 13,
     reply: (p, ctx) => {
       const r = starClanReply(p, ctx);
       return { text: r.text, learn: r.learn, effect: r.learn ? "learn" : undefined };
@@ -439,7 +597,7 @@ const PERSONAL_ASKS: Record<string, AskCandidate[]> = {
   ],
 };
 
-const MAX_ASKS = 4;
+const MAX_ASKS = 5; // spec: three to five questions at a time
 
 /**
  * Build the compact "Ask [name]" submenu: up to 4 context-valid questions,
@@ -449,6 +607,7 @@ export function buildAskMenu(npcId: string, ctx: DialogueContext): AskOption[] {
   const p = profileFor(npcId);
   const candidates: AskCandidate[] = [
     ...(PERSONAL_ASKS[p.id] ?? []),
+    ...GROUP_ASKS,
     ...SHARED_ASKS,
   ];
   const valid: AskCandidate[] = [];
@@ -470,7 +629,7 @@ export function buildAskMenu(npcId: string, ctx: DialogueContext): AskOption[] {
     if (seen.has(c.id)) continue;
     seen.add(c.id);
     const r = c.reply(p, ctx);
-    out.push({ id: c.id, label: c.label, reply: r.text, effect: r.effect, learn: r.learn });
+    out.push({ id: c.id, label: c.label, reply: r.text, effect: r.effect, learn: r.learn, weight: c.weight });
     if (out.length >= MAX_ASKS) break;
   }
   return out;

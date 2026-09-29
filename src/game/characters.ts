@@ -51,6 +51,13 @@ export interface CharacterProfile {
   /** Book 1 role/rank — NOT later-book ranks. */
   rank: string;
   age: AgeBand;
+  /** sex where the book establishes it ("she-cat" | "tom" | undefined) */
+  sex?: "she-cat" | "tom";
+  /**
+   * Canon age phrasing. Book-exact ("six moons") when established; otherwise
+   * a life-stage phrase — NEVER an invented number passed off as canon.
+   */
+  agePhrase?: string;
   appearance: string;
   personality: string;
   /** dialogue texture hints used by the voice banks */
@@ -85,6 +92,8 @@ export interface CharacterProfile {
 export const THUNDERCLAN: CharacterProfile[] = [
   {
     id: "bluestar",
+  sex: "she-cat",
+  agePhrase: "a senior leader — many seasons past her warrior assessment",
     name: "Bluestar",
     clan: "thunderclan",
     rank: "Leader",
@@ -101,6 +110,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "lionheart",
+  sex: "tom",
+  agePhrase: "a warrior in his prime — seasoned but far from old",
     name: "Lionheart",
     clan: "thunderclan",
     rank: "Warrior",
@@ -118,6 +129,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "tigerclaw",
+  sex: "tom",
+  agePhrase: "a warrior in his prime — seasons of battle behind his shoulders",
     name: "Tigerclaw",
     clan: "thunderclan",
     rank: "Warrior",
@@ -136,6 +149,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "redtail",
+  sex: "tom",
+  agePhrase: "a young deputy — newly given the rank",
     name: "Redtail",
     clan: "thunderclan",
     rank: "Deputy",
@@ -157,6 +172,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "whitestorm",
+  sex: "tom",
+  agePhrase: "an experienced senior warrior",
     name: "Whitestorm",
     clan: "thunderclan",
     rank: "Warrior",
@@ -174,6 +191,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "spottedleaf",
+  sex: "she-cat",
+  agePhrase: "a young medicine cat — recently full healer of the Clan",
     name: "Spottedleaf",
     clan: "thunderclan",
     rank: "Medicine cat",
@@ -190,6 +209,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "graypaw",
+  sex: "tom",
+  agePhrase: "six moons — a brand-new apprentice",
     name: "Graypaw",
     clan: "thunderclan",
     rank: "Apprentice",
@@ -207,6 +228,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "ravenpaw",
+  sex: "tom",
+  agePhrase: "an apprentice a few moons along in training",
     name: "Ravenpaw",
     clan: "thunderclan",
     rank: "Apprentice",
@@ -224,6 +247,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "dustpaw",
+  sex: "tom",
+  agePhrase: "an apprentice — a little ahead of the newest kits in training",
     name: "Dustpaw",
     clan: "thunderclan",
     rank: "Apprentice",
@@ -240,6 +265,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "sandpaw",
+  sex: "she-cat",
+  agePhrase: "an apprentice — a little ahead of the newest kits in training",
     name: "Sandpaw",
     clan: "thunderclan",
     rank: "Apprentice",
@@ -257,6 +284,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "longtail",
+  sex: "tom",
+  agePhrase: "a young warrior — fresh off his assessment",
     name: "Longtail",
     clan: "thunderclan",
     rank: "Warrior",
@@ -273,6 +302,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "darkstripe",
+  sex: "tom",
+  agePhrase: "a warrior in his prime",
     name: "Darkstripe",
     clan: "thunderclan",
     rank: "Warrior",
@@ -289,6 +320,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "yellowfang",
+  sex: "she-cat",
+  agePhrase: "old — a beaten-down elder in body, sharp as thorns in mind",
     name: "Yellowfang",
     clan: "shadowclan",
     rank: "Medicine cat of ShadowClan (wandering)",
@@ -309,6 +342,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   // --- queens / elders / background warriors: a living camp ---
   {
     id: "frostfur",
+  sex: "she-cat",
+  agePhrase: "a nursery queen with young kits",
     name: "Frostfur",
     clan: "thunderclan",
     rank: "Queen",
@@ -320,6 +355,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "brindleface",
+  sex: "she-cat",
+  agePhrase: "a nursery queen with young kits",
     name: "Brindleface",
     clan: "thunderclan",
     rank: "Queen",
@@ -331,6 +368,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "goldenflower",
+  sex: "she-cat",
+  agePhrase: "a nursery queen",
     name: "Goldenflower",
     clan: "thunderclan",
     rank: "Queen",
@@ -342,6 +381,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "willowpelt",
+  sex: "she-cat",
+  agePhrase: "a nursery queen",
     name: "Willowpelt",
     clan: "thunderclan",
     rank: "Queen",
@@ -353,6 +394,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "speckletail",
+  sex: "she-cat",
+  agePhrase: "an older queen — half-retired to the nursery",
     name: "Speckletail",
     clan: "thunderclan",
     rank: "Queen",
@@ -364,6 +407,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "smallear",
+  sex: "tom",
+  agePhrase: "an elder — small ears, sharp tongue, decades of forest in him",
     name: "Smallear",
     clan: "thunderclan",
     rank: "Elder",
@@ -375,6 +420,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "patchpelt",
+  sex: "tom",
+  agePhrase: "an elder",
     name: "Patchpelt",
     clan: "thunderclan",
     rank: "Elder",
@@ -386,6 +433,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "halftail",
+  sex: "tom",
+  agePhrase: "an elder — lost half his tail to a Twoleg trap",
     name: "Halftail",
     clan: "thunderclan",
     rank: "Elder",
@@ -397,6 +446,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "one-eye",
+  sex: "she-cat",
+  agePhrase: "a very old elder — one eye left and no patience to spare",
     name: "One-eye",
     clan: "thunderclan",
     rank: "Elder",
@@ -408,6 +459,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "dappletail",
+  sex: "she-cat",
+  agePhrase: "an elder",
     name: "Dappletail",
     clan: "thunderclan",
     rank: "Elder",
@@ -419,6 +472,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "runningwind",
+  sex: "tom",
+  agePhrase: "a young warrior — fastest paws in the Clan, if you ask him",
     name: "Runningwind",
     clan: "thunderclan",
     rank: "Warrior",
@@ -430,6 +485,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "mousefur",
+  sex: "she-cat",
+  agePhrase: "a warrior — small, prickly, and quick to correct you",
     name: "Mousefur",
     clan: "thunderclan",
     rank: "Warrior",
@@ -441,6 +498,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "swiftbreeze",
+  sex: "she-cat",
+  agePhrase: "an older warrior of the Clan",
     name: "Swiftbreeze",
     clan: "thunderclan",
     rank: "Queen",
@@ -452,6 +511,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   },
   {
     id: "adderfang",
+  sex: "tom",
+  agePhrase: "an older warrior of the Clan",
     name: "Adderfang",
     clan: "thunderclan",
     rank: "Elder",
@@ -464,6 +525,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
   // --- the protagonist cat of Book 1, as an NPC ---
   {
     id: "rusty",
+  sex: "tom",
+  agePhrase: "a young house cat — barely past kithood",
     name: "Rusty",
     clan: "kittypet",
     rank: "Kittypet (Twolegplace)",
@@ -492,6 +555,8 @@ export const THUNDERCLAN: CharacterProfile[] = [
 export const TWOLEGPLACE: CharacterProfile[] = [
   {
     id: "smudge",
+  sex: "tom",
+  agePhrase: "a young house cat — Rusty's age, if not a moon behind",
     name: "Smudge",
     clan: "kittypet",
     rank: "Kittypet (Rusty's friend)",
@@ -509,6 +574,8 @@ export const TWOLEGPLACE: CharacterProfile[] = [
   },
   {
     id: "princess",
+  sex: "she-cat",
+  agePhrase: "a young house cat",
     name: "Princess",
     clan: "kittypet",
     rank: "Kittypet (Rusty's sister)",
@@ -526,6 +593,8 @@ export const TWOLEGPLACE: CharacterProfile[] = [
   // --- the rest of the neighborhood: every kittypet a different life ---
   {
     id: "henry",
+  sex: "tom",
+  agePhrase: "a well-fed house cat of comfortable years",
     name: "Henry",
     clan: "kittypet",
     rank: "Kittypet (garden wall king)",
@@ -538,6 +607,8 @@ export const TWOLEGPLACE: CharacterProfile[] = [
   },
   {
     id: "marmalade",
+  sex: "tom",
+  agePhrase: "a young house cat",
     name: "Marmalade",
     clan: "kittypet",
     rank: "Kittypet (top cat of the street)",
@@ -550,6 +621,8 @@ export const TWOLEGPLACE: CharacterProfile[] = [
   },
   {
     id: "biscuit",
+  sex: "she-cat",
+  agePhrase: "a young house cat",
     name: "Biscuit",
     clan: "kittypet",
     rank: "Kittypet (flowerbed napper)",
@@ -562,6 +635,8 @@ export const TWOLEGPLACE: CharacterProfile[] = [
   },
   {
     id: "ginger",
+  sex: "she-cat",
+  agePhrase: "a young house cat",
     name: "Ginger",
     clan: "kittypet",
     rank: "Kittypet (street walker)",
@@ -574,6 +649,8 @@ export const TWOLEGPLACE: CharacterProfile[] = [
   },
   {
     id: "smokey",
+  sex: "tom",
+  agePhrase: "a house cat of comfortable years",
     name: "Smokey",
     clan: "kittypet",
     rank: "Kittypet (car-roof philosopher)",
@@ -586,6 +663,8 @@ export const TWOLEGPLACE: CharacterProfile[] = [
   },
   {
     id: "fluffy",
+  sex: "she-cat",
+  agePhrase: "a young house cat",
     name: "Fluffy",
     clan: "kittypet",
     rank: "Kittypet (window watcher)",
@@ -605,6 +684,8 @@ export const TWOLEGPLACE: CharacterProfile[] = [
 export const RIVERCLAN: CharacterProfile[] = [
   {
     id: "crookedstar",
+  sex: "tom",
+  agePhrase: "a leader of many seasons",
     name: "Crookedstar",
     clan: "riverclan",
     rank: "Leader",
@@ -621,6 +702,8 @@ export const RIVERCLAN: CharacterProfile[] = [
   },
   {
     id: "oakheart",
+  sex: "tom",
+  agePhrase: "a warrior in his prime",
     name: "Oakheart",
     clan: "riverclan",
     rank: "Deputy",
@@ -637,6 +720,8 @@ export const RIVERCLAN: CharacterProfile[] = [
   },
   {
     id: "leopardfur",
+  sex: "she-cat",
+  agePhrase: "a fierce young warrior",
     name: "Leopardfur",
     clan: "riverclan",
     rank: "Warrior",
@@ -653,6 +738,8 @@ export const RIVERCLAN: CharacterProfile[] = [
   },
   {
     id: "silverstream",
+  sex: "she-cat",
+  agePhrase: "a young apprentice-aged RiverClan cat",
     name: "Silverstream",
     clan: "riverclan",
     rank: "Warrior",
@@ -677,6 +764,8 @@ export const RIVERCLAN: CharacterProfile[] = [
 export const WINDCLAN: CharacterProfile[] = [
   {
     id: "tallstar",
+  sex: "tom",
+  agePhrase: "a lean leader of many seasons",
     name: "Tallstar",
     clan: "windclan",
     rank: "Leader",
@@ -693,6 +782,8 @@ export const WINDCLAN: CharacterProfile[] = [
   },
   {
     id: "mudclaw",
+  sex: "tom",
+  agePhrase: "a warrior in his prime",
     name: "Mudclaw",
     clan: "windclan",
     rank: "Warrior",
@@ -709,6 +800,8 @@ export const WINDCLAN: CharacterProfile[] = [
   },
   {
     id: "deadfoot",
+  sex: "tom",
+  agePhrase: "a young deputy — given the name at birth",
     name: "Deadfoot",
     clan: "windclan",
     rank: "Deputy",
@@ -748,6 +841,8 @@ export const WINDCLAN: CharacterProfile[] = [
 export const SHADOWCLAN: CharacterProfile[] = [
   {
     id: "brokenstar",
+  sex: "tom",
+  agePhrase: "a leader in his prime — young for the title",
     name: "Brokenstar",
     clan: "shadowclan",
     rank: "Leader",
@@ -764,6 +859,8 @@ export const SHADOWCLAN: CharacterProfile[] = [
   },
   {
     id: "blackfoot",
+  sex: "tom",
+  agePhrase: "a big white warrior in his prime",
     name: "Blackfoot",
     clan: "shadowclan",
     rank: "Deputy",
@@ -780,6 +877,8 @@ export const SHADOWCLAN: CharacterProfile[] = [
   },
   {
     id: "clawface",
+  sex: "tom",
+  agePhrase: "a battle-scarred warrior",
     name: "Clawface",
     clan: "shadowclan",
     rank: "Warrior",
@@ -796,6 +895,8 @@ export const SHADOWCLAN: CharacterProfile[] = [
   },
   {
     id: "runningnose",
+  sex: "tom",
+  agePhrase: "an aging medicine cat",
     name: "Runningnose",
     clan: "shadowclan",
     rank: "Medicine cat",
@@ -812,6 +913,8 @@ export const SHADOWCLAN: CharacterProfile[] = [
   },
   {
     id: "russetfur",
+  sex: "she-cat",
+  agePhrase: "a young ShadowClan warrior",
     name: "Russetfur",
     clan: "shadowclan",
     rank: "Warrior",
@@ -835,6 +938,8 @@ export const SHADOWCLAN: CharacterProfile[] = [
 export const FARM: CharacterProfile[] = [
   {
     id: "barley",
+  sex: "tom",
+  agePhrase: "a young loner — still young, though he'd never say so",
     name: "Barley",
     clan: "rogue",
     rank: "Barn cat (the farm)",
@@ -851,6 +956,8 @@ export const FARM: CharacterProfile[] = [
   },
   {
     id: "firepaw",
+  sex: "tom",
+  agePhrase: "six moons — newly named apprentice",
     name: "Firepaw",
     clan: "thunderclan",
     rank: "Apprentice",
@@ -883,6 +990,8 @@ export const fallbackProfile: CharacterProfile = {
   clan: "thunderclan",
   rank: "Warrior",
   age: "warrior",
+  sex: "tom",
+  agePhrase: "a warrior of no particular fame",
   appearance: "An unfamiliar cat.",
   personality: "Hard to read.",
   voice: { stance: "wary", style: ["guarded"], topics: ["the forest"] },

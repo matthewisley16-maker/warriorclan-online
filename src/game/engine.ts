@@ -2036,6 +2036,12 @@ export class GameCanvas {
     }
   }
 
+  /** Current activity label for an NPC ("hunting", "napping in the sun"…). */
+  getNpcActivity(npcId: string): string | null {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    return n?.activity ?? null;
+  }
+
   /** Facing for the player during a conversation (API for the UI). */
   get npcTalkTarget(): string | null {
     for (const n of this.npcStates) if (n.convoActive) return n.def.id;

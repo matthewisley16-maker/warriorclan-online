@@ -37,6 +37,10 @@ export interface DialogueContext {
   bonds: Record<string, number>;
   /** how many conversations the player has had with each NPC (variety rotation) */
   talked?: Record<string, number>;
+  /** facts the player told THIS npc ("npcId:factId" ids), for chat memory */
+  facts?: string[];
+  /** what this npc is doing right now (engine activity label) */
+  npcActivity?: string;
 }
 
 export interface DialogueLine {

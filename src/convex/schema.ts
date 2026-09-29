@@ -79,6 +79,7 @@ const schema = defineSchema(
           learned: v.optional(v.array(v.string())),
           bonds: v.optional(v.array(v.string())),
           talked: v.optional(v.array(v.string())),
+          facts: v.optional(v.array(v.string())),
         }),
       ),
       questsDone: v.optional(v.array(v.string())),

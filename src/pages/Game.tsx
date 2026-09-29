@@ -38,7 +38,7 @@ import { interiors } from "@/game/engine";
 import { GROUND_CELL, GROUND_COLS, GROUND_ROWS, groundMap, lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
 import { storySteps } from "@/game/story";
 import { buildDialogue, type DialogueContext } from "@/game/dialogue";
-import { buildAskMenu, npcChatReply, type AskOption, type ChatMsg } from "@/game/npcChat";
+import { buildAskMenu, npcChatReply, FACT_LABELS, type AskOption, type ChatMsg } from "@/game/npcChat";
 import { useAction } from "convex/react";
 import { profileFor } from "@/game/characters";
 import MainMenu, { LoadingScreen, loadSettings, SettingsScreen, type GameMode, type Settings } from "./MainMenu";
@@ -179,6 +179,10 @@ export default function Game() {
   const [learned, setLearned] = useState<Record<string, string[]>>({});
   const [bonds, setBonds] = useState<Record<string, number>>({});
   const [talked, setTalked] = useState<Record<string, number>>({});
+  /** facts the player told each cat ("npcId:factId") — per-NPC chat memory */
+  const [facts, setFacts] = useState<string[]>([]);
+  const factsRef = useRef(facts);
+  factsRef.current = facts;
   const learnedRef = useRef(learned);
   learnedRef.current = learned;
   const bondsRef = useRef(bonds);
@@ -200,6 +204,9 @@ export default function Game() {
       learned: Object.entries(pick(l)).map(([id, v]) => `${id}:${(v as string[]).join(",")}`),
       bonds: Object.entries(pick(b)).map(([id, v]) => `${id}:${v}`),
       talked: Object.entries(pick(t)).map(([id, v]) => `${id}:${v}`),
+      facts: npcId
+        ? factsRef.current.filter((f) => f.startsWith(`${npcId}:`))
+        : factsRef.current,
     }).catch(() => undefined);
   }, [saveNpcMemory]);
   const endNpcConvo = useCallback(() => {
@@ -315,6 +322,7 @@ export default function Game() {
       setLearned(learnedIn);
       setBonds(bondsIn);
       setTalked(talkedIn);
+      setFacts(mem.facts ?? []);
     }
     if (player.discovered?.length) setDiscovered(player.discovered);
   }, [player]);
@@ -950,6 +958,7 @@ export default function Game() {
       learned: learnedRef.current,
       bonds: bondsRef.current,
       talked: talkedRef.current,
+      facts: factsRef.current,
     };
   }, [mode, myCat]);
   dialogueCtxRef.current = dialogueCtx;
@@ -990,7 +999,9 @@ export default function Game() {
         const built = buildDialogue(npc.id, dialogueCtx());
         setConvoView("root");
         setChatMsgs([{ from: "npc", text: built.opening }]);
-        setAskOptions(buildAskMenu(npc.id, dialogueCtx()));
+        const dCtx = dialogueCtx();
+        dCtx.npcActivity = gameRef.current?.getNpcActivity(npc.id) ?? undefined;
+        setAskOptions(buildAskMenu(npc.id, dCtx));
         setNpcConvo({ npcId: npc.id, name: npc.name, role: profileFor(npc.id).rank, line: built.opening, choices: built.choices });
         const nextTalked = { ...talkedRef.current, [npc.id]: (talkedRef.current[npc.id] ?? 0) + 1 };
         talkedRef.current = nextTalked;
@@ -1140,6 +1151,11 @@ export default function Game() {
       const ctx = dialogueCtxRef.current();
       const local = npcChatReply(c.npcId, msg, ctx);
       setChatMsgs((m) => [...m, { from: "npc", text: local.text }]);
+      if (local.fact && !factsRef.current.includes(`${c.npcId}:${local.fact}`)) {
+        setFacts((prev) => [...prev, `${c.npcId}:${local.fact}`]);
+        factsRef.current = [...factsRef.current, `${c.npcId}:${local.fact}`];
+        persistNpcMemory(c.npcId);
+      }
       if (local.learn && local.effect === "learn") {
         const flag = local.learn;
         const have = learnedRef.current[c.npcId] ?? [];
@@ -1164,6 +1180,15 @@ export default function Game() {
           npcTopics: p.voice.topics.join(", "),
           npcKnowledge: p.knowledge.join(", "),
           npcAvoid: "secret plot details, future events, anything outside this cat's knowledge",
+          npcAgePhrase: p.agePhrase,
+          npcSex: p.sex,
+          npcMentor: p.mentor,
+          npcApprentice: p.apprentice,
+          npcRelationships: (p.relationships ?? []).join("; "),
+          npcActivity: gameRef.current?.getNpcActivity(c.npcId) ?? undefined,
+          rememberedFacts: (ctx.facts ?? [])
+            .filter((f) => f.startsWith(`${c.npcId}:`))
+            .map((f) => FACT_LABELS[f.slice(c.npcId.length + 1)] ?? f.slice(c.npcId.length + 1)),
           playerName: ctx.player.name,
           playerClan: ctx.player.clan,
           playerRank: ctx.player.rank,
@@ -1662,7 +1687,9 @@ export default function Game() {
                       <button
                         onClick={(ev) => {
                           ev.stopPropagation();
-                          setAskOptions(buildAskMenu(npcConvo.npcId, dialogueCtx()));
+                          const dCtx2 = dialogueCtx();
+                          dCtx2.npcActivity = gameRef.current?.getNpcActivity(npcConvo.npcId) ?? undefined;
+                          setAskOptions(buildAskMenu(npcConvo.npcId, dCtx2));
                           setConvoView("ask");
                         }}
                         className="rounded-lg border border-border/50 bg-background/60 px-2 py-1.5 text-[12px] font-medium text-foreground/85 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"

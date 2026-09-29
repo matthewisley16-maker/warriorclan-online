@@ -189,6 +189,8 @@ export const saveNpcMemory = mutation({
     bonds: v.optional(v.array(v.string())),
     /** "npcId:count" strings — value replaces the cat's previous count */
     talked: v.optional(v.array(v.string())),
+    /** "npcId:factId" strings — things the player TOLD this cat */
+    facts: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -232,11 +234,14 @@ export const saveNpcMemory = mutation({
     const talkedPrev = byId(prev.talked);
     const talkedNew = byId(args.talked);
     for (const [npc, val] of talkedNew) talkedPrev.set(npc, val);
+    const factsPrev = new Set(prev.facts ?? []);
+    for (const f of args.facts ?? []) factsPrev.add(f);
     await ctx.db.patch(p._id, {
       npcMemory: {
         learned: learnedOut.sort(),
         bonds: [...bondPrev].map(([npc, val]) => `${npc}:${val}`).sort(),
         talked: [...talkedPrev].map(([npc, val]) => `${npc}:${val}`).sort(),
+        facts: [...factsPrev].sort(),
       },
       updatedAt: Date.now(),
     });
