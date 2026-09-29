@@ -1184,6 +1184,12 @@ interface NPCState {
   yawnFxUntil: number;
   tailFxUntil: number;
   alertFxUntil: number;
+  // --- role-differentiated behavior (Book 1 camp life) ---
+  role: "leader" | "deputy" | "medicine" | "queen" | "elder" | "apprentice" | "warrior" | "kit" | "kittypet" | "other";
+  campSpots: CampSpots | null;
+  // --- after an emergency nudge, ignore stuck detection briefly so the cat
+  // can pick a reachable target instead of grinding the same wall again ---
+  stuckCooldown: number;
   // --- story availability: a cat whose timeline window has closed ---
   gone?: boolean;
 }
@@ -1339,6 +1345,104 @@ const HOP_DURATION = 0.5; // seconds of air time
 const HOP_HEIGHT = 18; // px lift at the apex
 const GAME_HOUR_START = 8; // start in the morning
 const GAME_DAY_SECONDS = 600; // 10 real minutes per in-game day
+
+// ---------------------------------------------------------------------------
+// NPC camp spots + per-rank behavior (Into the Wild camp life)
+// ---------------------------------------------------------------------------
+
+type CampSpots = { x: number; y: number }[];
+
+/** Preferred idle spots for a cat inside its OWN camp (world coords). */
+function denSpotsFor(denId: string | null): CampSpots | null {
+  if (!denId) return null;
+  const o = allObjects.find((d) => d.id === denId);
+  if (!o) return null;
+  const spots: CampSpots = [];
+  for (let i = 0; i < 4; i++) {
+    spots.push({
+      x: o.x + (i % 2 === 0 ? -1 : 1) * (o.w / 2 + 16),
+      y: o.y + (i < 2 ? -1 : 1) * (o.h / 2 + 12),
+    });
+  }
+  return spots;
+}
+
+function clanCamp(n: NPCState): { x: number; y: number; r: number } | null {
+  if (n.homeTerritory === "thunderclan") return { x: CAMP_CENTER.x, y: CAMP_CENTER.y, r: CAMP_RADIUS };
+  const areaId =
+    n.homeTerritory === "windclan" ? "windclan-camp"
+    : n.homeTerritory === "riverclan" ? "riverclan-camp"
+    : n.homeTerritory === "shadowclan" ? "shadowclan-camp" : null;
+  const a = areaId ? areas.find((ar) => ar.id === areaId) : null;
+  if (!a) return null;
+  return { x: a.rect.x + a.rect.w / 2, y: a.rect.y + a.rect.h / 2, r: Math.min(a.rect.w, a.rect.h) / 2 };
+}
+
+/** Den object ids per role inside a clan camp (nearest match wins). */
+function roleDenIds(role: string, clan: string): string[] {
+  const r = role.toLowerCase();
+  const c = clan === "thunderclan" ? "tc" : clan === "windclan" ? "wc" : clan === "riverclan" ? "rc" : "sc";
+  if (r.includes("leader")) return [`${c}-leader-den`, "leader-den"];
+  if (r.includes("medicine")) return [`${c}-medicine-den`, "medicine-den"];
+  if (r.includes("queen") || r.includes("kit")) return [`${c}-nursery`, "nursery"];
+  if (r.includes("elder")) return [`${c}-elders`, `${c}-elders-den`, "elders-den"];
+  if (r.includes("apprentice")) return [`${c}-apprentices-den`, "apprentices-den"];
+  return [`${c}-warriors-den`, "warriors-den"];
+}
+
+/**
+ * Pick a preferred camp spot for this cat near a named landmark (Book 1
+ * geography): Tallrock for leaders, the medicine store for medicine cats,
+ * the training stump for apprentices, sun-warmed stones for everyone else.
+ */
+function pickCampSpot(n: NPCState): { x: number; y: number } {
+  const camp = clanCamp(n);
+  if (!camp) return { x: n.def.home.x, y: n.def.home.y };
+  const r = roleOf(n.def.role);
+  const ids =
+    r === "leader" ? ["tallrock", "tallrock-moss"]
+    : r === "deputy" ? ["entrance", "tc-stone-2"]
+    : r === "medicine" ? ["medicine-stone", "tc-moss-1"]
+    : r === "queen" ? ["nursery", "tc-moss-2"]
+    : r === "elder" ? ["tc-stone-1", "tc-stone-a"]
+    : r === "apprentice" ? ["tc-stump-app", "tc-earth-a"]
+    : ["tc-stone-3", "tc-grass-b"];
+  for (const id of ids) {
+    const o = allObjects.find((d) => d.id === id);
+    if (!o) continue;
+    const sx = o.x + (o.w / 2 + 20) * (id.length % 2 === 0 ? 1 : -1);
+    const sy = o.y + o.h / 2 + 18;
+    if (Math.hypot(sx - camp.x, sy - camp.y) < camp.r + 60) return { x: sx, y: sy };
+  }
+  return { x: camp.x + (Math.random() - 0.5) * camp.r, y: camp.y + (Math.random() - 0.5) * camp.r };
+}
+
+/** Short flavor label for the activity HUD under a cat's nameplate. */
+function roleActivity(r: string, verb: string): string {
+  switch (r) {
+    case "leader": return `${verb} from the Tallrock`;
+    case "deputy": return `${verb} the patrols`;
+    case "medicine": return `${verb} with her herbs`;
+    case "queen": return `${verb} in the nursery`;
+    case "elder": return `${verb} outside the elders' den`;
+    case "apprentice": return `${verb} with the apprentices`;
+    default: return `${verb}`;
+  }
+}
+
+/** Coarse role bucket for behavior shaping (from the world roster role). */
+export function roleOf(role: string): "leader" | "deputy" | "medicine" | "queen" | "elder" | "apprentice" | "warrior" | "kit" | "kittypet" | "other" {
+  const r = role.toLowerCase();
+  if (r.includes("leader")) return "leader";
+  if (r.includes("deputy")) return "deputy";
+  if (r.includes("medicine")) return "medicine";
+  if (r.includes("queen")) return "queen";
+  if (r.includes("elder")) return "elder";
+  if (r.includes("kit")) return r.includes("kitty") ? "kittypet" : "kit";
+  if (r.includes("apprentice")) return "apprentice";
+  if (r.includes("warrior")) return "warrior";
+  return "other";
+}
 
 export class GameCanvas {
   private canvas: HTMLCanvasElement;
@@ -1526,6 +1630,9 @@ export class GameCanvas {
       yawnFxUntil: 0,
       tailFxUntil: 0,
       alertFxUntil: 0,
+      role: roleOf(n.role),
+      campSpots: null,
+      stuckCooldown: 0,
     }));
     this.spawnPrey(80);
 
@@ -1572,6 +1679,8 @@ export class GameCanvas {
         n.denSeat = -1;
         n.convoActive = false;
         n.activity = "settling in";
+        this.refreshNpcRoles(n);
+        n.stuckCooldown = 0;
       } else if (!available && !n.gone) {
         n.gone = true;
         if (n.convoActive) {
@@ -2499,7 +2608,7 @@ export class GameCanvas {
         n.ai === "wander" || n.ai === "patrol" || n.ai === "hunt_stalk" ||
         n.ai === "hunt_chase" || n.ai === "carry_home" || n.ai === "return_home" ||
         n.ai === "go_eat" || n.ai === "go_den" || n.ai === "exit_den";
-      if (!n.convoActive && movingMode) {
+      if (!n.convoActive && movingMode && this.time >= n.stuckCooldown) {
         if (Math.hypot(n.x - n.lastStuckX, n.y - n.lastStuckY) > 6) {
           // making progress: reset the stall timer
           n.stuckSince = null;
@@ -2519,6 +2628,9 @@ export class GameCanvas {
           n.lastStuckX = n.x;
           n.lastStuckY = n.y;
           n.sidestepUntil = this.time + 1;
+          // long cool-down: the nudge means the TARGET is likely unreachable,
+          // so let the cat idle here and re-decide instead of grinding back
+          n.stuckCooldown = this.time + 12;
         } else if (this.time - n.stuckSince > 1.4 && this.time >= n.sidestepUntil) {
           // stalled 1.4s: try walking AROUND whatever is in the way
           const st = this.npcSidestep(n);
@@ -5023,13 +5135,17 @@ export class GameCanvas {
   // Decisions are throttled (nearby ~1.2s, far ~4s); movement integrates
   // every frame with collision, so no cat ever teleports.
 
-  private freshKillSpot(): { x: number; y: number } | null {
-    // nearest fresh-kill pile to the acting cat (each camp has its own)
+  private freshKillSpot(near?: { x: number; y: number }): { x: number; y: number } | null {
+    // nearest fresh-kill pile TO THE ACTING CAT (each camp has its own —
+    // anchoring this to the player sent every cat in the world toward the
+    // player's camp, straight into its walls)
+    const ax = near?.x ?? this.px;
+    const ay = near?.y ?? this.py;
     let best: { x: number; y: number } | null = null;
     let bestD = Infinity;
     for (const o of allObjects) {
       if (o.interact !== "fresh-kill") continue;
-      const d = Math.hypot(o.x - this.px, o.y - this.py);
+      const d = Math.hypot(o.x - ax, o.y - ay);
       if (d < bestD) { bestD = d; best = { x: o.x, y: o.y }; }
     }
     return best;
@@ -5133,22 +5249,35 @@ export class GameCanvas {
     return { x: CAMP_CENTER.x, y: CAMP_CENTER.y + CAMP_RADIUS };
   }
 
+  /** Fresh preferred spots after boot/respawn (or whenever invalid). */
+  private refreshNpcRoles(n: NPCState) {
+    n.role = roleOf(n.def.role);
+    const denId = roleDenIds(n.def.role, n.def.clan)
+      .map((id) => allObjects.find((o) => o.id === id))
+      .find((o): o is NonNullable<typeof o> => Boolean(o))?.id ?? null;
+    n.campSpots = denSpotsFor(denId) ?? [];
+  }
+
+  /**
+   * Decide what this cat does next. Heavily role-shaped (Into the Wild):
+   * each rank has its own day, and camp cats stay recognizably themselves
+   * instead of every cat rolling the same generic hunt/patrol dice.
+   */
   private npcThink(n: NPCState, _hr: number, night: boolean) {
     if (n.ai !== "idle") return; // mid-activity cats finish first
     if (this.time < n.waitUntil) return;
-    const t = n.trait;
-    const lazy = t === "lazy" ? 0.5 : 1;
-    const outdoor = /warrior|deputy|leader|apprentice|hunter|guard/i.test(n.def.role) || n.def.wander;
+    if (n.role === undefined || n.campSpots === null) this.refreshNpcRoles(n);
+    const r = n.role;
+    const lazy = n.trait === "lazy" ? 0.5 : 1;
     const roll = Math.random();
+
+    // --- night: den-owning cats sleep INSIDE their den (real enter/exit) ---
     if (night && roll < 0.55 * lazy) {
-      // den-owning cats sleep INSIDE their den (real enter/exit, no teleport)
       const den = this.denInteriorNear(n.def.home.x, n.def.home.y);
       if (den) {
         n.ai = "go_den";
-        n.preyId = den.interior; // reuse preyId as the den interior id while travelling
+        n.preyId = den.interior; // reused as the den interior id while travelling
         n.activity = "heading to the den to sleep";
-        n.tx = den.x;
-        n.ty = den.y + den.h / 2 + 14;
         return;
       }
       n.ai = "wander";
@@ -5157,63 +5286,177 @@ export class GameCanvas {
       n.ty = n.def.home.y + (Math.random() - 0.5) * 40;
       return;
     }
-    if (roll < 0.16) {
-      const pile = this.freshKillSpot();
-      if (pile) {
-        n.ai = "go_eat";
-        n.activity = "going to eat";
-        n.tx = pile.x;
-        n.ty = pile.y + 14;
-        return;
-      }
+
+    // --- role days -------------------------------------------------------
+    if (r === "leader") return this.roleThinkLeader(n, roll);
+    if (r === "deputy") return this.roleThinkDeputy(n, roll);
+    if (r === "medicine") return this.roleThinkMedicine(n, roll);
+    if (r === "queen") return this.roleThinkQueen(n, roll);
+    if (r === "elder") return this.roleThinkElder(n, roll);
+    if (r === "apprentice") return this.roleThinkApprentice(n, roll);
+    this.roleThinkWarrior(n, roll, lazy);
+  }
+
+  /** Camp-centric idle for elders/queens/medicine: return to their den spots. */
+  private returnToCampSpots(n: NPCState, label: string) {
+    if (n.campSpots && n.campSpots.length > 0) {
+      const s = n.campSpots[Math.floor(Math.random() * n.campSpots.length)];
+      n.ai = "wander";
+      n.tx = s.x;
+      n.ty = s.y;
+    } else {
+      n.ai = "wander";
+      n.tx = n.def.home.x + (Math.random() - 0.5) * 60;
+      n.ty = n.def.home.y + (Math.random() - 0.5) * 60;
     }
-    // thirsty: walk to the nearest water's edge and drink
-    if (roll < 0.22) {
-      const spot = this.nearestWaterEdge(n.x, n.y);
-      if (spot) {
-        // drink INSIDE home ground: the clamp keeps riverbank trips on the
-        // cat's own side of the water (RiverClan fishes its own river)
-        const dp = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, spot.x, spot.y);
-        n.ai = "go_drink";
-        n.activity = "going to drink";
-        n.tx = dp.x;
-        n.ty = dp.y;
-        return;
-      }
-    }
-    if (outdoor && roll < 0.42 && (this.weather === "clear" || this.weather === "cloudy" || this.weather === "wind")) {
-      n.ai = "hunt_stalk";
-      n.activity = "hunting";
-      const ang = Math.random() * Math.PI * 2;
-      const rad = 300 + Math.random() * 800;
-      const huntPt = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, n.def.home.x + Math.cos(ang) * rad, n.def.home.y + Math.sin(ang) * rad);
-      n.tx = huntPt.x;
-      n.ty = huntPt.y;
-      return;
-    }
-    if (outdoor && roll < 0.58) {
+    n.activity = label;
+  }
+
+  private goEat(n: NPCState, chance: number, roll: number) {
+    if (roll >= chance) return false;
+    const pile = this.freshKillSpot(n);
+    if (!pile) return false;
+    n.ai = "go_eat";
+    n.activity = "going to eat";
+    return true;
+  }
+
+  private goDrink(n: NPCState, chance: number, roll: number) {
+    if (roll >= chance) return false;
+    const spot = this.nearestWaterEdge(n.x, n.y);
+    if (!spot) return false;
+    const dp = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, spot.x, spot.y);
+    n.ai = "go_drink";
+    n.activity = "going to drink";
+    n.tx = dp.x;
+    n.ty = dp.y;
+    return true;
+  }
+
+  private roleThinkLeader(n: NPCState, roll: number) {
+    // Book 1: Bluestar oversees the camp from the Tallrock and keeps to it.
+    if (this.goEat(n, 0.15, roll) || this.goDrink(n, 0.2, roll)) return;
+    const spot = pickCampSpot(n);
+    n.ai = "wander";
+    n.tx = spot.x;
+    n.ty = spot.y;
+    n.activity = roleActivity("leader", roll < 0.5 ? "watching the camp" : "sitting in quiet thought");
+  }
+
+  private roleThinkDeputy(n: NPCState, roll: number) {
+    // Book 1: Redtail/Lionheart organize and LEAD patrols, checking the camp.
+    if (this.goEat(n, 0.12, roll) || this.goDrink(n, 0.16, roll)) return;
+    if (roll < 0.62) {
       const e = this.campEntranceFor(n);
-      n.ai = "patrol";
-      n.activity = "patrolling";
       const clamp = (x: number, y: number) => clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, x, y);
-      const c1 = clamp(n.def.home.x + 380, n.def.home.y - 90);
-      const c2 = clamp(n.def.home.x + 620, n.def.home.y + 180);
-      const c3 = clamp(n.def.home.x + 300, n.def.home.y + 390);
-      n.patrolPoints = [e, c1, c2, c3];
+      n.ai = "patrol";
+      n.activity = roleActivity("deputy", "leading");
+      n.patrolPoints = [e, clamp(n.def.home.x + 460, n.def.home.y - 140), clamp(n.def.home.x + 680, n.def.home.y + 200), clamp(n.def.home.x + 320, n.def.home.y + 420)];
       n.patrolIdx = 0;
       n.tx = e.x;
       n.ty = e.y;
       return;
     }
-    const pile2 = this.freshKillSpot();
-    if (t === "social" && pile2 && roll < 0.8) {
+    const spot = pickCampSpot(n);
+    n.ai = "wander";
+    n.tx = spot.x;
+    n.ty = spot.y;
+    n.activity = roleActivity("deputy", "organizing the day");
+  }
+
+  private roleThinkMedicine(n: NPCState, roll: number) {
+    // Book 1: Spottedleaf sorts herbs and checks the store — rarely leaves.
+    if (this.goEat(n, 0.12, roll) || this.goDrink(n, 0.14, roll)) return;
+    if (roll < 0.25) {
+      // a short walk NEAR camp for herbs, always inside home ground
+      const ang = Math.random() * Math.PI * 2;
+      const pt = clampTerritoryTarget(n.def, n.homeTerritory, 320, n.def.home.x + Math.cos(ang) * 240, n.def.home.y + Math.sin(ang) * 240);
       n.ai = "wander";
-      n.activity = "chatting near the pile";
-      n.tx = pile2.x + (Math.random() - 0.5) * 90;
-      n.ty = pile2.y + 20 + Math.random() * 30;
+      n.tx = pt.x;
+      n.ty = pt.y;
+      n.activity = "gathering herbs nearby";
       return;
     }
-    if (t === "curious" && roll < 0.75) {
+    this.returnToCampSpots(n, roleActivity("medicine", roll < 0.6 ? "sorting herbs" : "resting"));
+  }
+
+  private roleThinkQueen(n: NPCState, roll: number) {
+    // Book 1: queens stay by the nursery, share tongues, mind the kits.
+    if (this.goEat(n, 0.14, roll) || this.goDrink(n, 0.12, roll)) return;
+    this.returnToCampSpots(n, roleActivity("queen", roll < 0.5 ? "minding the kits" : "sharing tongues"));
+  }
+
+  private roleThinkElder(n: NPCState, roll: number) {
+    // Book 1: elders sun themselves, trade stories, and nap between them.
+    if (this.goEat(n, 0.18, roll)) return;
+    if (roll < 0.3) {
+      n.pose = "sleep";
+      n.activity = "napping in the sun";
+      n.waitUntil = this.time + 6 + Math.random() * 8;
+      return;
+    }
+    this.returnToCampSpots(n, roleActivity("elder", roll < 0.65 ? "sharing tongues" : "sunning"));
+  }
+
+  private roleThinkApprentice(n: NPCState, roll: number) {
+    // Book 1: apprentices train, spar at the stump, eat, and get into mischief.
+    if (this.goEat(n, 0.22, roll) || this.goDrink(n, 0.12, roll)) return;
+    if (roll < 0.34) {
+      const pile = this.freshKillSpot(n);
+      if (pile) {
+        n.ai = "wander";
+        n.tx = pile.x + (Math.random() - 0.5) * 90;
+        n.ty = pile.y + 20 + Math.random() * 30;
+        n.activity = "chatting by the fresh-kill pile";
+        return;
+      }
+    }
+    if (roll < 0.55) {
+      const spot = pickCampSpot(n);
+      n.ai = "wander";
+      n.tx = spot.x;
+      n.ty = spot.y;
+      n.activity = roleActivity("apprentice", roll < 0.45 ? "battle-training" : "playing");
+      return;
+    }
+    this.huntOrPatrol(n, 0.9, roll, true);
+  }
+
+  private roleThinkWarrior(n: NPCState, roll: number, lazy: number) {
+    if (this.goEat(n, 0.14, roll) || this.goDrink(n, 0.16, roll)) return;
+    this.huntOrPatrol(n, roll < 0.62 ? 1 : 0.62, roll * (lazy < 1 ? 1.4 : 1), false);
+  }
+
+  /** Shared hunt/patrol/social roll for outdoor cats. */
+  private huntOrPatrol(n: NPCState, huntChance: number, roll: number, _apprentice: boolean) {
+    const goodWeather = this.weather === "clear" || this.weather === "cloudy" || this.weather === "wind";
+    if (roll < huntChance && goodWeather) {
+      n.ai = "hunt_stalk";
+      n.activity = "hunting";
+      const ang = Math.random() * Math.PI * 2;
+      const rad = 300 + Math.random() * 800;
+      const pt = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, n.def.home.x + Math.cos(ang) * rad, n.def.home.y + Math.sin(ang) * rad);
+      n.tx = pt.x;
+      n.ty = pt.y;
+      return;
+    }
+    if (roll < huntChance + 0.2) {
+      const e = this.campEntranceFor(n);
+      const clamp = (x: number, y: number) => clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, x, y);
+      n.ai = "patrol";
+      n.activity = "patrolling";
+      n.patrolPoints = [e, clamp(n.def.home.x + 380, n.def.home.y - 90), clamp(n.def.home.x + 620, n.def.home.y + 180), clamp(n.def.home.x + 300, n.def.home.y + 390)];
+      n.patrolIdx = 0;
+      n.tx = e.x;
+      n.ty = e.y;
+      return;
+    }
+    // otherwise: idle in camp at a preferred spot (or the old trait idles)
+    if (n.campSpots && n.campSpots.length > 0 && Math.random() < 0.7) {
+      this.returnToCampSpots(n, n.trait === "social" ? "chatting in camp" : "resting in camp");
+      return;
+    }
+    if (n.trait === "curious" && roll < 0.95) {
       n.ai = "wander";
       n.activity = "exploring camp";
       const wp = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, n.def.home.x + (Math.random() - 0.5) * 220, n.def.home.y + (Math.random() - 0.5) * 160);
@@ -5335,7 +5578,7 @@ export class GameCanvas {
         break;
       }
       case "carry_home": {
-        const pile = this.freshKillSpot();
+        const pile = this.freshKillSpot(n);
         if (!pile) { n.ai = "return_home"; break; }
         const d = stepTo(pile.x, pile.y, runSpeed * 0.8);
         if (d <= 26) {
@@ -5356,7 +5599,7 @@ export class GameCanvas {
         break;
       }
       case "go_eat": {
-        const pile = this.freshKillSpot();
+        const pile = this.freshKillSpot(n);
         if (!pile) { n.ai = "idle"; break; }
         const d = stepTo(pile.x, pile.y + 14, walkSpeed);
         if (d <= arrive) {
@@ -5380,21 +5623,24 @@ export class GameCanvas {
       case "go_den": {
         const denObj = allObjects.find((o) => o.interior && o.interior === n.preyId);
         if (!denObj) { n.preyId = null; n.ai = "wander"; break; }
-        // wait politely if another cat is still entering this den
-        const blocker = this.npcStates.some(
-          (o) => o !== n && o.denId === denObj.id && o.ai === "go_den" && Math.hypot(o.x - denObj.x, o.y - denObj.y) < 46,
-        );
-        if (blocker) { n.pose = "sit"; break; }
-        // 1) walk to the actual entrance mouth on the south face
-        const d = stepTo(denObj.x, denObj.y + denObj.h / 2 + 14, walkSpeed);
+        // approach the ENTRANCE MOUTH only — the den interior is solid
+        // collision, so walking into the footprint ground cats against the
+        // door until the emergency nudge rescued them (the "stuck on doors" bug)
+        const mouth = { x: denObj.x, y: denObj.y + denObj.h / 2 + 14 };
+        const d = stepTo(mouth.x, mouth.y, walkSpeed);
         if (d <= arrive) {
-          // 2) book a resting spot INSIDE the den's footprint (several valid
-          //    seats — never one shared coordinate) and take a few visible
-          //    steps into the mouth before tucking in
+          // someone still entering this doorway: wait politely behind them
+          const blocker = this.npcStates.some(
+            (o) => o !== n && o.denId === denObj.id && o.ai === "go_den" && Math.hypot(o.x - mouth.x, o.y - mouth.y) < 40,
+          );
+          if (blocker) {
+            n.pose = "sit";
+            break;
+          }
+          // reserve the seat ONLY on arrival, then tuck in
           if (n.denId !== denObj.id) {
-            const seat = this.claimDenSeat(denObj);
             n.denId = denObj.id;
-            n.denSeat = seat;
+            n.denSeat = this.claimDenSeat(denObj);
           }
           const seats = denSeatsFor(denObj);
           const seat = seats[Math.max(0, Math.min(seats.length - 1, n.denSeat))];
