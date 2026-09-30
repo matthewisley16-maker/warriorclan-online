@@ -444,8 +444,12 @@ export default function Game() {
         setInterior(id);
       },
       onNpcIdle: undefined, // ambient NPC chatter stays NPC↔NPC; never pops at the player
-      onEmoteFx: (icon) => {
-        gameRef.current?.setEmote(icon); // vocal/action one-shots from remote cats
+      onEmoteFx: () => {
+        // legacy icon hook: intentionally unused — remote cats now replay
+        // REAL animations via onRemoteAnim (no emojis above cats)
+      },
+      onRemoteAnim: (uid, emoteId) => {
+        gameRef.current?.playRemoteAnim(uid, emoteId); // real cat animation
       },
       onConvoEnd: (npcId) => {
         if (npcConvoRef.current?.npcId === npcId) setNpcConvo(null);
@@ -515,8 +519,8 @@ export default function Game() {
         // (the first packet after stopping always goes out so remotes see the
         // idle transition immediately instead of extrapolating forever)
         const hasPendingOneShot = Boolean((gameRef.current as unknown as { pAction?: string; pVocal?: string; pActionSent?: string; pVocalSent?: string } | null)?.pAction || (gameRef.current as unknown as { pVocal?: string } | null)?.pVocal);
-        if (last && stationary && !last.wasMoving && Math.hypot(s.x - last.x, s.y - last.y) < 2 && last.ms === s.movementState && last.an === s.animationState && !hasPendingOneShot) return;
-        lastSyncRef.current = { x: s.x, y: s.y, ms: s.movementState, an: s.animationState, wasMoving: !stationary };
+        if (last && stationary && !last.wasMoving && Math.hypot(s.x - last.x, s.y - last.y) < 2 && last.ms === s.movementState && last.an === s.animationState && last.em === s.emote && !hasPendingOneShot) return;
+        lastSyncRef.current = { x: s.x, y: s.y, ms: s.movementState, an: s.animationState, wasMoving: !stationary, em: s.emote };
         const engineWithActions = gameRef.current as unknown as { pAction?: string; pVocal?: string; pActionSent?: string; pVocalSent?: string } | null;
         let sentAction: string | undefined;
         let sentVocal: string | undefined;
@@ -540,6 +544,7 @@ export default function Game() {
           animationState: s.animationState,
           ...(sentAction ? { action: sentAction } : {}),
           ...(sentVocal ? { vocal: sentVocal } : {}),
+          ...(s.emote ? { animOneShot: s.emote } : {}),
           mode: "open",
           catName: myCat.name,
           clan: myCat.clan,
@@ -698,11 +703,12 @@ export default function Game() {
       seen.add(r.userId);
       map.set(r.userId, r);
       const prevPayload = lastRemoteActionRef.current.get(r.userId) ?? "";
-      const curPayload = `${r.vocal ?? ""}|${r.action ?? ""}`;
+      const curPayload = `${r.vocal ?? ""}|${r.action ?? ""}|${r.animOneShot ?? ""}`;
       if (curPayload !== prevPayload) {
         lastRemoteActionRef.current.set(r.userId, curPayload);
         if (r.vocal) (gameRef.current as unknown as { queueRemoteAction?: (k: "vocal", p: string) => void } | null)?.queueRemoteAction?.("vocal", r.vocal);
         if (r.action) (gameRef.current as unknown as { queueRemoteAction?: (k: "action", p: string) => void } | null)?.queueRemoteAction?.("action", r.action);
+        if (r.animOneShot) (gameRef.current as unknown as { queueRemoteAction?: (k: "action", p: string, u?: string) => void } | null)?.queueRemoteAction?.("action", `anim:${r.animOneShot}`, r.userId);
       }
     }
     // a player joining (or re-joining) is re-buffed by the engine from their
@@ -1248,7 +1254,7 @@ export default function Game() {
   /** monotonic client input sequence — the server rejects already-processed inputs */
   const inputSeq = useRef(0);
   /** last movement state sent to the server (meaningful-change gating) */
-  const lastSyncRef = useRef<{ x: number; y: number; ms: string; an: string; wasMoving: boolean } | null>(null);
+  const lastSyncRef = useRef<{ x: number; y: number; ms: string; an: string; wasMoving: boolean; em?: string } | null>(null);
   /** live interior id (null = outdoors); engine coords are room-local inside */
   const interiorRef = useRef<string | null>(null);
   /** last known OUTDOOR world position — what presence broadcasts */
@@ -1345,7 +1351,9 @@ export default function Game() {
       const g = gameRef.current;
       if (!g) return;
       if (e.kind === "pose") {
+        // real pose held for a while (movement cancels cleanly in-engine)
         g.setPose(e.pose, 5);
+        g.startEmote(e.pose);
         if (e.pose === "sleep") {
           g.rest(55);
           audio().playSfx("ui_confirm", { volume: 0.4, throttleMs: 500 });
@@ -1353,22 +1361,21 @@ export default function Game() {
           window.setTimeout(() => setDialogue((d) => (d && d.name === "Rest" ? null : d)), 4000);
         }
       } else if (e.kind === "vocal") {
-        // real audio: sampled mews/purr or synthesized hiss/growl/chirp/trill;
-        // engine cooldown prevents sound spam — setEmote only when it fired
+        // real audio: sampled mews/purr or synthesized hiss/growl/chirp/trill
         const fired = g.doVocal(e.vocal);
         if (fired) {
           if (e.vocal === "meow") audio().playMew("talk");
           else if (e.vocal === "purr") audio().playSfx("cat_purr", { volume: 0.5, throttleMs: 900 });
           else audio().playVocal(e.vocal);
         }
-      } else if (e.kind === "action") {
-        // named social/emote action: icon + body fx + remote one-shot sync
-        g.doAction(e.action);
-        if (e.action === "yawn") audio().playSfx("cat_mew3", { volume: 0.35, rate: 0.7, throttleMs: 800 });
-        else if (e.action === "greet") audio().playMew("talk");
+      } else if (e.kind === "emote") {
+        // THE CAT PERFORMS THE EMOTE — no emoji is shown (spec §10)
+        g.startEmote(e.emote);
+        if (e.emote === "yawn") audio().playSfx("cat_mew3", { volume: 0.35, rate: 0.7, throttleMs: 800 });
+        else if (e.emote === "greet") audio().playMew("talk");
         else audio().playSfx("ui_confirm", { volume: 0.25, throttleMs: 500 });
       } else {
-        g.setEmote(e.emote);
+        g.doAction(e.action);
       }
     },
     [],

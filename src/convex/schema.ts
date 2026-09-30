@@ -114,6 +114,8 @@ const schema = defineSchema(
       emote: v.optional(v.string()),
       vocal: v.optional(v.string()),
       action: v.optional(v.string()),
+      // synchronized REAL animation one-shot (emote id, e.g. "anim:dance1")
+      animOneShot: v.optional(v.string()),
       mode: v.union(v.literal("story"), v.literal("open")),
       updatedAt: v.number(),
       // server authority: ordering + staleness rejection (see presence.ts)

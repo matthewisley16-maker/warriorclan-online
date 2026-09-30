@@ -212,73 +212,70 @@ export function ChatPanel({
 // ---------------------------------------------------------------------------
 
 export type AnimAction =
-  | { kind: "pose"; label: string; icon: string; pose: "sit" | "sleep" | "groom" | "stretch" | "crouch" }
-  | { kind: "emote"; label: string; icon: string; emote: string }
-  | { kind: "action"; label: string; icon: string; action: string }
-  | { kind: "vocal"; label: string; icon: string; vocal: "meow" | "hiss" | "growl" | "chirp" | "trill" | "purr" };
+  | { kind: "pose"; label: string; pose: "sit" | "sleep" | "groom" | "stretch" | "crouch" }
+  | { kind: "emote"; label: string; emote: string }
+  | { kind: "action"; label: string; action: string }
+  | { kind: "vocal"; label: string; vocal: "meow" | "hiss" | "growl" | "chirp" | "trill" | "purr" };
 
-/** Every action here is real: poses drive the sprite, emotes render over the
- *  cat, named actions drive body-level fx (yawn/alert/tail) and sync to other
- *  players, vocalizations play actual audio (mew asset, purr asset, or
- *  WebAudio synthesis). No decorative buttons. */
-export const ANIM_TABS: { tab: string; icon: string; actions: AnimAction[] }[] = [
+/** Every action is a REAL cat animation: the sprite performs it, movement
+ *  cancels cleanly, and other players see the same animation (state sync).
+ *  Buttons show ACTION NAMES — no emoji icons anywhere (spec §21). */
+export const ANIM_TABS: { tab: string; actions: AnimAction[] }[] = [
+  {
+    tab: "Body",
+    actions: [
+      { kind: "pose", label: "Sit", pose: "sit" },
+      { kind: "emote", label: "Lie down", emote: "lie" },
+      { kind: "emote", label: "Sleep", emote: "sleep" },
+      { kind: "pose", label: "Groom", pose: "groom" },
+      { kind: "pose", label: "Stretch", pose: "stretch" },
+      { kind: "pose", label: "Crouch", pose: "crouch" },
+      { kind: "emote", label: "Yawn", emote: "yawn" },
+      { kind: "emote", label: "Scratch", emote: "scratch" },
+      { kind: "emote", label: "Shake", emote: "shake" },
+      { kind: "emote", label: "Sniff", emote: "sniff" },
+      { kind: "emote", label: "Alert", emote: "alert" },
+      { kind: "emote", label: "Tail flick", emote: "tail-flick" },
+    ],
+  },
+  {
+    tab: "Hunter",
+    actions: [
+      { kind: "emote", label: "Stalk", emote: "stalk" },
+      { kind: "emote", label: "Pounce", emote: "pounce" },
+      { kind: "emote", label: "Leap", emote: "leap" },
+      { kind: "emote", label: "Play", emote: "play" },
+      { kind: "emote", label: "Bow", emote: "bow" },
+      { kind: "emote", label: "Challenge", emote: "challenge" },
+    ],
+  },
   {
     tab: "Social",
-    icon: "🐾",
     actions: [
-      { kind: "action", label: "Nod", icon: "👍", action: "nod" },
-      { kind: "action", label: "Shake head", icon: "🙅", action: "shake-head" },
-      { kind: "action", label: "Bow", icon: "🙇", action: "bow" },
-      { kind: "action", label: "Greet", icon: "🐾", action: "greet" },
-      { kind: "action", label: "Invite", icon: "➡️", action: "invite" },
-      { kind: "action", label: "Comfort", icon: "🤝", action: "comfort" },
-      { kind: "action", label: "Celebrate", icon: "🎉", action: "celebrate" },
-      { kind: "action", label: "Warn", icon: "⚠️", action: "warn" },
+      { kind: "emote", label: "Greet", emote: "greet" },
+      { kind: "emote", label: "Nod", emote: "nod" },
+      { kind: "emote", label: "Shake head", emote: "shake-head" },
+      { kind: "emote", label: "Look around", emote: "look" },
     ],
   },
   {
-    tab: "Emotes",
-    icon: "😊",
+    tab: "Dance",
     actions: [
-      { kind: "emote", label: "Happy", icon: "😀", emote: "😊" },
-      { kind: "emote", label: "Excited", icon: "✨", emote: "✨" },
-      { kind: "emote", label: "Confused", icon: "❓", emote: "❓" },
-      { kind: "emote", label: "Surprised", icon: "❗", emote: "❗" },
-      { kind: "emote", label: "Sad", icon: "💧", emote: "💧" },
-      { kind: "emote", label: "Angry", icon: "💢", emote: "💢" },
-      { kind: "emote", label: "Scared", icon: "🙀", emote: "🙀" },
-      { kind: "emote", label: "Proud", icon: "👑", emote: "👑" },
-      { kind: "emote", label: "Tired", icon: "😴", emote: "😴" },
-    ],
-  },
-  {
-    tab: "Actions",
-    icon: "⚡",
-    actions: [
-      { kind: "pose", label: "Sit", icon: "🐱", pose: "sit" },
-      { kind: "pose", label: "Lie down", icon: "💤", pose: "sleep" },
-      { kind: "pose", label: "Groom", icon: "🫧", pose: "groom" },
-      { kind: "pose", label: "Stretch", icon: "〰️", pose: "stretch" },
-      { kind: "pose", label: "Crouch", icon: "🐍", pose: "crouch" },
-      { kind: "action", label: "Scratch", icon: "🪵", action: "scratch" },
-      { kind: "action", label: "Look around", icon: "👀", action: "look" },
-      { kind: "action", label: "Sniff", icon: "👃", action: "sniff" },
-      { kind: "action", label: "Yawn", icon: "🥱", action: "yawn" },
-      { kind: "action", label: "Alert", icon: "⚠️", action: "alert" },
-      { kind: "action", label: "Wag tail", icon: "〰️", action: "wag" },
-      { kind: "emote", label: "Shake fur", icon: "💨", emote: "💨" },
+      { kind: "emote", label: "Bounce", emote: "dance1" },
+      { kind: "emote", label: "Wiggle", emote: "dance2" },
+      { kind: "emote", label: "Spin step", emote: "dance3" },
+      { kind: "emote", label: "Paw wave", emote: "dance4" },
     ],
   },
   {
     tab: "Voice",
-    icon: "🗣️",
     actions: [
-      { kind: "vocal", label: "Meow", icon: "🗣️", vocal: "meow" },
-      { kind: "vocal", label: "Purr", icon: "💗", vocal: "purr" },
-      { kind: "vocal", label: "Hiss", icon: "😤", vocal: "hiss" },
-      { kind: "vocal", label: "Growl", icon: "😾", vocal: "growl" },
-      { kind: "vocal", label: "Chirp", icon: "🐦", vocal: "chirp" },
-      { kind: "vocal", label: "Trill", icon: "🎵", vocal: "trill" },
+      { kind: "vocal", label: "Meow", vocal: "meow" },
+      { kind: "vocal", label: "Purr", vocal: "purr" },
+      { kind: "vocal", label: "Hiss", vocal: "hiss" },
+      { kind: "vocal", label: "Growl", vocal: "growl" },
+      { kind: "vocal", label: "Chirp", vocal: "chirp" },
+      { kind: "vocal", label: "Trill", vocal: "trill" },
     ],
   },
 ];
@@ -321,7 +318,7 @@ export function EmoteBar({
           title="Open animations"
           className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/95 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground shadow-lg backdrop-blur-md transition-colors hover:bg-muted"
         >
-          <span>🐾</span> Animations
+          Animations
           <ChevronUp className="size-3.5" />
         </button>
       </div>
@@ -346,7 +343,6 @@ export function EmoteBar({
               i === tab ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
             )}
           >
-            <span className="mr-1">{t.icon}</span>
             {t.tab}
           </button>
         ))}
@@ -359,7 +355,7 @@ export function EmoteBar({
           <ChevronDown className="size-4" />
         </button>
       </div>
-      <div className="flex gap-1 border-t border-border/60 pt-1">
+      <div className="flex max-w-[min(92vw,560px)] flex-wrap gap-1 border-t border-border/60 pt-1">
         {current.actions.map((e) => (
           <button
             key={e.label}
@@ -368,10 +364,9 @@ export function EmoteBar({
             // driving the game instead of re-triggering the animation.
             onMouseDown={(ev) => ev.preventDefault()}
             onClick={() => onAction(e)}
-            className="flex size-9 flex-col items-center justify-center rounded-xl text-base transition-colors hover:bg-muted active:scale-90"
+            className="rounded-xl border border-border/40 bg-background/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-foreground/80 transition-colors hover:bg-muted active:scale-95"
           >
-            <span>{e.icon}</span>
-            <span className="sr-only">{e.label}</span>
+            {e.label}
           </button>
         ))}
       </div>

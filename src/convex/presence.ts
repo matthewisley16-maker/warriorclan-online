@@ -30,6 +30,15 @@ function jsonOrNull(v: string | undefined): string | undefined {
   }
 }
 
+/**
+ * Plain-string guard for ANIMATION one-shot ids ("groom", "dance1", …).
+ * These are NOT JSON — jsonOrNull would silently drop every emote id, so
+ * animation sync uses a simple length-capped string check instead.
+ */
+function animIdOrNull(v: string | undefined): string | undefined {
+  return v && v.length > 0 && v.length <= 40 ? v : undefined;
+}
+
 // server speed authority: clamp generously above RUN_SPEED (250 px/s) so
 // lag spikes never rubber-band honest clients, but impossible jumps
 // (teleports) are pulled back to the last confirmed position.
@@ -54,6 +63,7 @@ export const heartbeat = mutation({
     emote: v.optional(v.string()),
     vocal: v.optional(v.string()),
     action: v.optional(v.string()),
+    animOneShot: v.optional(v.string()),
     mode: v.union(v.literal("story"), v.literal("open")),
     catName: v.string(),
     clan: v.optional(v.string()),
@@ -112,6 +122,7 @@ export const heartbeat = mutation({
         emote: args.emote,
         vocal,
         action,
+        animOneShot: animIdOrNull(args.animOneShot),
         mode: args.mode,
         catName: args.catName,
         clan: args.clan,
@@ -135,6 +146,7 @@ export const heartbeat = mutation({
       emote: args.emote,
       vocal,
       action,
+      animOneShot: animIdOrNull(args.animOneShot),
       mode: args.mode,
       catName: args.catName,
       clan: args.clan,
@@ -174,6 +186,7 @@ export const listOnline = query({
         emote: r.emote,
         vocal: r.vocal,
         action: r.action,
+        animOneShot: r.animOneShot,
         movementState: r.movementState,
         animationState: r.animationState,
         serverTick: r.serverTick,

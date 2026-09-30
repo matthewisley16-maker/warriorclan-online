@@ -21,7 +21,33 @@ export interface CatSkin {
   accColor?: string;         // shared accessory tint
 }
 
-export type CatPose = "walk" | "sit" | "sleep" | "crouch" | "groom" | "stretch" | "swim" | "shake";
+export type CatPose =
+  | "walk" | "sit" | "sleep" | "crouch" | "groom" | "stretch" | "swim" | "shake"
+  // real-animation emotes (spec: the CAT performs every emote — never icons)
+  | "lie" | "yawn" | "sniff" | "stalk" | "pounce" | "leap" | "play" | "bow"
+  | "scratch" | "challenge" | "dance1" | "dance2" | "dance3" | "dance4";
+
+/** Idle-family poses share the upright sitting silhouette anchors. */
+const IDLE_POSES: ReadonlySet<string> = new Set(["sit", "groom", "yawn", "sniff", "scratch"]);
+/** Lying-flat poses: belly on the ground, tucked paws. */
+const LYING_POSES: ReadonlySet<string> = new Set(["sleep", "lie", "play"]);
+/** Low-slung crouched poses (chest dips, rear stays up). */
+const CROUCHED_POSES: ReadonlySet<string> = new Set(["crouch", "stalk", "pounce", "challenge", "bow"]);
+/** Dance lean amplitude (radians) — each dance sways differently. */
+const DANCE_ROT: Record<string, number> = {
+  dance1: 0.05, dance2: 0.1, dance3: 0.16, dance4: 0.22,
+};
+/** Silhouette family for a pose (drives which body anchors are used). */
+function baseFamilyOf(pose: CatPose): "stand" | "sit" | "sleep" | "crouch" | "swim" {
+  if (pose === "swim") return "swim";
+  if (LYING_POSES.has(pose)) return "sleep";
+  if (CROUCHED_POSES.has(pose)) return "crouch";
+  if (IDLE_POSES.has(pose)) return "sit";
+  return "stand";
+}
+function isLie(p: CatPose): boolean {
+  return LYING_POSES.has(p);
+}
 
 /** Dark outline derived from the pelt so sprites read crisply on any ground. */
 function outlineOf(skin: CatSkin): string {
@@ -48,14 +74,22 @@ export function drawCat(
   time: number,
   phase: number,
   /** optional body-level acting overlay: yawn/alert/tail-flick/blink/talk */
-  fx?: { yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean; wet?: boolean; hop?: number },
+  fx?: { yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean; wet?: boolean; hop?: number; head?: "nod" | "shake" | "look" | "sniff"; carry?: boolean },
 ) {
   const size = skin.size ?? 1;
   const moving = pose === "walk" || pose === "swim";
   const SWIM_BOB_HZ = 1.1;
+  const fam = baseFamilyOf(pose);
+  // dances: each has its own beat (bounce + body sway below)
+  const dancePhase = pose === "dance1" ? time * 4.6 : pose === "dance2" ? time * 6.2 : pose === "dance3" ? time * 7.4 : pose === "dance4" ? time * 3.6 : 0;
+  const danceBounce = DANCE_ROT[pose] !== undefined ? Math.abs(Math.sin(dancePhase)) * 3.2 : 0;
   const bob = moving
     ? Math.abs(Math.sin(time * 9 + phase)) * 1.6
-    : Math.sin(time * 1.4 + phase) * 0.5;
+    : pose === "play" || pose === "leap"
+      ? Math.abs(Math.sin(time * 3.2 + phase)) * 3.4
+      : pose === "pounce"
+        ? Math.abs(Math.sin(time * 1.6 + phase)) * 1.8
+        : Math.sin(time * 1.4 + phase) * 0.5 + danceBounce;
   const swimBob = pose === "swim"
     ? Math.sin(time * SWIM_BOB_HZ * Math.PI * 2 + phase) * 1.8
     : 0;
@@ -82,9 +116,25 @@ export function drawCat(
   if (pose === "shake") {
     ctx.translate(shakeWobble, 0);
   }
+  // dance lean: the body rocks around its center to the beat
+  if (DANCE_ROT[pose] !== undefined) {
+    ctx.rotate(Math.sin(dancePhase) * DANCE_ROT[pose]);
+  }
+  // crouched/half-up lean: chest dips, rear rises (pounce/play bow/challenge)
+  if (pose === "stalk" || pose === "pounce") {
+    ctx.rotate(-0.14);
+  } else if (pose === "bow" || pose === "play") {
+    ctx.rotate(0.2);
+  } else if (pose === "challenge") {
+    ctx.rotate(0.08);
+  }
+  // lying flat: drop the whole sprite toward the ground line
+  if (isLie(pose)) {
+    ctx.translate(0, 3.5);
+  }
 
   // breathing: gentle body scale while idle (never while moving)
-  const breath = pose === "walk" || pose === "swim" || pose === "shake"
+  const breath = pose === "walk" || pose === "swim" || pose === "shake" || pose === "dance3"
     ? 1
     : 1 + Math.sin(time * 1.8 + phase) * 0.012;
   // hop squash & stretch: compress at takeoff/landing, extend mid-air
@@ -104,12 +154,16 @@ export function drawCat(
     // tail streams behind, tip above the wake
     ctx.moveTo(-11, -5);
     ctx.quadraticCurveTo(-20 * tailLen, -6 + tailSway * 0.3, -26 * tailLen, -12 + tailSway * 0.6);
-  } else if (pose === "sit") {
+  } else if (fam === "sit") {
     ctx.moveTo(-10, -4);
     ctx.quadraticCurveTo(-18 * tailLen, -2, -16 * tailLen, 6);
-  } else if (pose === "sleep") {
+  } else if (fam === "sleep") {
     ctx.moveTo(-8, -3);
     ctx.quadraticCurveTo(-14, 0, -12 * tailLen, 4);
+  } else if (pose === "dance1" || pose === "dance3") {
+    // upright tail waving high on the beat
+    ctx.moveTo(-10, -8);
+    ctx.quadraticCurveTo(-17 * tailLen, -16 + Math.sin(dancePhase * 2) * 6, -20 * tailLen, -26 + Math.sin(dancePhase * 2) * 8);
   } else {
     ctx.moveTo(-11, -8);
     ctx.quadraticCurveTo(-20 * tailLen, -14 + tailSway * 0.4, -24 * tailLen, -20 + tailSway);
@@ -130,7 +184,7 @@ export function drawCat(
     ctx.ellipse(0, -7, 9, 11, 0, 0, Math.PI * 2);
   } else if (pose === "sleep") {
     ctx.ellipse(0, -5, 12, 6, 0, 0, Math.PI * 2);
-  } else if (pose === "crouch") {
+  } else if (fam === "crouch") {
     ctx.ellipse(0, -5, 12.5, 5.5, 0, 0, Math.PI * 2);
   } else {
     ctx.ellipse(0, -7, 11.5, 7, 0, 0, Math.PI * 2);
@@ -236,7 +290,7 @@ export function drawCat(
   }
 
   // chest
-  if (skin.chest && pose !== "sleep") {
+  if (skin.chest && !isLie(pose)) {
     ctx.fillStyle = skin.chest;
     ctx.beginPath();
     ctx.ellipse(6, pose === "sit" ? -4 : -4.5, 4.5, pose === "sit" ? 7 : 4.5, 0, 0, Math.PI * 2);
@@ -261,11 +315,17 @@ export function drawCat(
     ctx.fillRect(-9, -3, 4, 6);
     ctx.fillStyle = skin.fur;
     ctx.fillRect(5, -3, 4, 6);
-  } else if (pose === "sleep") {
-    // tucked paws — small nubs
+  } else if (isLie(pose)) {
+    // tucked paws — small nubs (sleep AND the lying-down emote)
     ctx.fillStyle = skin.furDark;
     ctx.fillRect(-8, -2, 3, 3);
     ctx.fillRect(5, -2, 3, 3);
+  } else if (pose === "stretch") {
+    // forelegs extended, chest low — the classic play-bow stretch
+    ctx.fillStyle = skin.furDark;
+    ctx.fillRect(-9, -3, 4, 6);
+    ctx.fillStyle = skin.fur;
+    ctx.fillRect(7, -2, 6, 4);
   } else {
     ctx.fillStyle = skin.furDark;
     ctx.fillRect(-9, -4, 4, 7);
@@ -275,7 +335,7 @@ export function drawCat(
 
   // fur fluff: a chest ruff for long coats, drawn just before the head
   const fluff = (skin.furLength ?? 1) >= 1.3;
-  if (fluff && pose !== "swim") {
+  if (fluff && pose !== "swim" && !isLie(pose)) {
     ctx.fillStyle = skin.fur;
     ctx.beginPath();
     const fx = pose === "sit" || pose === "groom" ? 4 : 9;
@@ -290,12 +350,18 @@ export function drawCat(
     ctx.stroke();
   }
 
+  // pounce/leap: the body pitches while the ground point stays put
+  if (pose === "pounce") {
+    ctx.rotate(0.1 + Math.max(0, Math.sin(time * 1.6)) * 0.08);
+  } else if (pose === "leap") {
+    ctx.rotate(-0.16);
+  }
   // head (groom pose dips toward the chest to lick it)
   const groomDip = pose === "groom" ? Math.max(0, Math.sin(time * 5.5)) : 0;
   const stretchOut = pose === "stretch" ? 3.5 + Math.max(0, Math.sin(time * 2.2)) * 2 : 0;
-  const headX = (pose === "sit" || pose === "groom" ? 4 : pose === "stretch" ? 13 : 9) - groomDip * 1.5 + stretchOut * 0.4;
+  const headX = (fam === "sit" || pose === "groom" ? 4 : pose === "stretch" ? 13 : 9) - groomDip * 1.5 + stretchOut * 0.4;
   const headY =
-    (pose === "swim" ? -8 : pose === "sit" ? -16 : pose === "sleep" ? -8 : pose === "crouch" ? -8 : -11) + groomDip * 5;
+    (fam === "swim" ? -8 : fam === "sit" ? -16 : fam === "sleep" ? -8 : fam === "crouch" ? -8 : -11) + groomDip * 5;
   ctx.fillStyle = skin.fur;
   ctx.strokeStyle = outlineOf(skin);
   ctx.lineWidth = 1;
@@ -304,9 +370,20 @@ export function drawCat(
   ctx.fill();
   ctx.stroke();
 
+  // head-acting overlay: nod / head-shake / look-around / sniff move ONLY the
+  // head — everything after this point is drawn inside the head translate
+  let headActDx = 0;
+  let headActDy = 0;
+  if (fx?.head === "nod") headActDy = Math.abs(Math.sin(time * 4.2)) * 2.2;
+  else if (fx?.head === "shake") headActDx = Math.sin(time * 10) * 2.6;
+  else if (fx?.head === "look") headActDx = Math.sin(time * 1.7) * 2.4;
+  else if (fx?.head === "sniff") { headActDy = 3.2; headActDx = 1.4; }
+  ctx.save();
+  ctx.translate(headActDx, headActDy);
+
   // ears (alert pricks both ears upright and forward)
   const earH = skin.ears === "tall" ? 12 : skin.ears === "fold" ? 6 : 10;
-  const earDx = fx?.alert ? -2 : 0;
+  const earDx = (fx?.alert ? -2 : 0) + (fx?.head === "look" ? (Math.sin(time * 1.7) > 0 ? 1 : -1) : 0);
   ctx.beginPath();
   ctx.moveTo(headX - 5.5 + earDx, headY - 3.5);
   ctx.lineTo(headX - 3 + earDx, headY - earH);
@@ -418,7 +495,7 @@ export function drawCat(
 
   // eyes — closed while sleeping, blinking otherwise; both visible (3/4 view)
   const blink =
-    pose === "sleep" ? 0.08 : Math.sin(time * 0.9 + phase * 3) > 0.985 ? 0.15 : 1;
+    isLie(pose) ? 0.08 : Math.sin(time * 0.9 + phase * 3) > 0.985 ? 0.15 : 1;
   const eyeColors = skin.eye2 ? [skin.eye2, skin.eye] : [skin.eye, skin.eye];
   ctx.fillStyle = eyeColors[1]; // far eye
   ctx.beginPath();
@@ -448,15 +525,23 @@ export function drawCat(
   ctx.strokeStyle = "rgba(255,255,255,0.5)";
   ctx.lineWidth = 0.6;
   ctx.beginPath();
-  ctx.moveTo(headX + 6, headY + 1.5);
-  ctx.lineTo(headX + 11, headY + 0.5);
-  ctx.moveTo(headX + 6, headY + 2.5);
-  ctx.lineTo(headX + 11, headY + 3);
+  if (fx?.head === "sniff") {
+    const q = Math.sin(time * 22) * 0.9;
+    ctx.moveTo(headX + 6, headY + 1.5 + q);
+    ctx.lineTo(headX + 11, headY + 0.5 + q);
+    ctx.moveTo(headX + 6, headY + 2.5 - q);
+    ctx.lineTo(headX + 11, headY + 3 - q);
+  } else {
+    ctx.moveTo(headX + 6, headY + 1.5);
+    ctx.lineTo(headX + 11, headY + 0.5);
+    ctx.moveTo(headX + 6, headY + 2.5);
+    ctx.lineTo(headX + 11, headY + 3);
+  }
   ctx.stroke();
 
   // --- white markings (multi-select, pose-anchored) ---
   const mk = new Set(skin.markings ?? []);
-  if (mk.size > 0 && pose !== "swim") {
+  if (mk.size > 0 && pose !== "swim" && !isLie(pose)) {
     ctx.fillStyle = "rgba(244, 238, 226, 0.95)";
     // muzzle / chin / nose / blaze on the head
     if (mk.has("muzzle")) { ctx.beginPath(); ctx.ellipse(headX + 4, headY + 2.5, 3.2, 2.4, 0, 0, Math.PI * 2); ctx.fill(); }
@@ -637,6 +722,22 @@ export function drawCat(
     }
   }
 
+  // prey in the jaws (carry emote): a small mouse hangs from the mouth
+  if (fx?.carry) {
+    ctx.fillStyle = "#8f8f96";
+    ctx.beginPath();
+    ctx.ellipse(headX + 8.5, headY + 3.2, 4.6, 2.4, -0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#9c9ca4";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(headX + 4.5, headY + 3);
+    ctx.quadraticCurveTo(headX + 2, headY + 6.5, headX + 0.5, headY + 8.5);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
+  ctx.restore();
   ctx.restore();
 
   // tail flick: drawn OUTSIDE the mirrored transform so it always sweeps to
