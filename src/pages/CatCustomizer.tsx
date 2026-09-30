@@ -18,20 +18,52 @@ import { Input } from "@/components/ui/input";
 import { drawCat, type CatSkin } from "@/game/draw";
 import {
   ACCESSORY_COLORS,
+  ACCESSORY_SLOTS,
+  ACC_SLOT_CATS,
+  ACC_THEMES,
   CATEGORIES,
   CAT_ITEMS,
+  accessoriesFor,
   itemById,
+  randomSkin,
   searchItems,
+  type AccTheme,
+  type AccessorySlot,
   type CatItem,
   type CustomSkin,
 } from "@/game/catItems";
 import { cn } from "@/lib/utils";
+import type { CatPose } from "@/game/draw";
+
+// Preview poses: let the player walk/lie/swim/dance their cat in the editor to
+// verify accessories track every animation before saving.
+const PREVIEW_POSES: { id: CatPose; name: string }[] = [
+  { id: "sit", name: "Sit" },
+  { id: "walk", name: "Walk" },
+  { id: "sleep", name: "Sleep" },
+  { id: "swim", name: "Swim" },
+  { id: "groom", name: "Groom" },
+  { id: "dance1", name: "Dance" },
+];
+
+// Which slot an accessory category belongs to (for the details strip).
+function slotOfCategory(cat: string): AccessorySlot | undefined {
+  return (Object.entries(ACC_SLOT_CATS) as [AccessorySlot, string][]).find(([, c]) => c === cat)?.[0];
+}
 
 // ---------------------------------------------------------------------------
 // Live cat preview (same sprite renderer as the game)
 // ---------------------------------------------------------------------------
 
-function CatPreviewLarge({ skin, size = 320 }: { skin: CustomSkin; size?: number }) {
+function CatPreviewLarge({
+  skin,
+  pose = "sit",
+  size = 320,
+}: {
+  skin: CustomSkin;
+  pose?: CatPose;
+  size?: number;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [facing, setFacing] = useState<1 | -1>(1);
 
@@ -46,7 +78,7 @@ function CatPreviewLarge({ skin, size = 320 }: { skin: CustomSkin; size?: number
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       const scale = size / 130;
       ctx.scale(scale, scale);
-      drawCat(ctx, skin, 65, 108, facing, "sit", t / 1000, 0);
+      drawCat(ctx, skin, 65, 108, facing, pose, t / 1000, 0);
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
@@ -188,6 +220,9 @@ export function CatCustomizer({
   const [skin, setSkin] = useState<CustomSkin>(initialSkin);
   const [category, setCategory] = useState<string>("fur");
   const [query, setQuery] = useState("");
+  const [pose, setPose] = useState<CatPose>("sit");
+  const [accSlot, setAccSlot] = useState<AccessorySlot | "all">("all");
+  const [accTheme, setAccTheme] = useState<AccTheme | undefined>(undefined);
   const [favorites, setFavorites] = useState<string[]>(initialFavorites);
   const [presets, setPresets] = useState<{ name: string; skin: CustomSkin }[]>(initialPresets);
   const [accColor, setAccColor] = useState<string>(initialSkin.accColor ?? "#d95f5f");
@@ -197,40 +232,33 @@ export function CatCustomizer({
 
   if (!open) return null;
 
+  // Left-nav categories: only ones that actually contain items, plus the
+  // ACCESSORIES umbrella (all six accessory slots in one browsable place).
+  const NAV = useMemo(() => {
+    const list: { id: string; name: string }[] = [];
+    for (const c of CATEGORIES) {
+      if (CAT_ITEMS.some((i) => i.category === c.id)) list.push({ id: c.id, name: c.name });
+      if (c.id === "paw") list.push({ id: "accessories", name: "Accessories" });
+    }
+    list.push({ id: "favorites", name: "Favorites" });
+    return list;
+  }, []);
+
   const items = useMemo(() => {
     if (query.trim()) return searchItems(query, "all");
     if (category === "favorites") return CAT_ITEMS.filter((i) => favorites.includes(i.id));
+    if (category === "accessories") return accessoriesFor(accSlot, accTheme);
     return searchItems("", category as never);
-  }, [query, category, favorites]);
+  }, [query, category, favorites, accSlot, accTheme]);
 
   const toggleFavorite = (id: string) => {
     setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
   };
 
   const randomize = () => {
-    const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
-    const colors = CAT_ITEMS.filter((i) => i.category === "colors");
-    const eyes = CAT_ITEMS.filter((i) => i.category === "eyes" && i.id !== "eye-none");
-    const patterns = CAT_ITEMS.filter((i) => i.category === "patterns");
-    const tails = CAT_ITEMS.filter((i) => i.category === "tail");
-    const ears = CAT_ITEMS.filter((i) => i.category === "ears");
-    const furs = CAT_ITEMS.filter((i) => i.category === "fur");
-    const next: CustomSkin = { ...skin, markings: [], scars: [], acc: {} };
-    pick(colors).apply(next);
-    if (Math.random() < 0.8) pick(patterns).apply(next);
-    pick(eyes).apply(next);
-    if (Math.random() < 0.15) next.eye2 = pick(["#9cc2ea", "#d9a83a"]);
-    pick(tails).apply(next);
-    pick(ears).apply(next);
-    pick(furs).apply(next);
-    const marks = CAT_ITEMS.filter((i) => i.category === "markings");
-    for (const m of marks) if (Math.random() < 0.3) m.apply(next);
-    if (Math.random() < 0.35) {
-      const accs = CAT_ITEMS.filter((i) => ["head", "neck", "ear", "body", "paw", "tailAcc"].includes(i.category));
-      const a = pick(accs);
-      a.apply(next);
-    }
-    setSkin(next);
+    // randomSkin() builds a complete VALID appearance from the real catalog
+    // (coats, patterns, markings, eyes, face, and up to two accessories).
+    setSkin(randomSkin(skin));
   };
 
   const savePreset = (name: string) => {
@@ -274,21 +302,25 @@ export function CatCustomizer({
         <div className="flex min-h-0 flex-1">
           {/* LEFT: categories */}
           <div className="hidden w-40 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-white/10 p-2 sm:flex">
-            {CATEGORIES.map((c) => {
+            {NAV.map((c) => {
               const active = !query && category === c.id;
               const count =
                 c.id === "favorites"
                   ? favorites.length
-                  : CAT_ITEMS.filter((i) => i.category === c.id).length;
+                  : c.id === "accessories"
+                    ? accessoriesFor("all").length
+                    : CAT_ITEMS.filter((i) => i.category === c.id).length;
               return (
                 <button
                   key={c.id}
                   onClick={() => {
                     setCategory(c.id);
                     setQuery("");
+                    if (c.id === "accessories") setAccSlot("all");
                   }}
                   className={cn(
                     "flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition-colors",
+                    c.id === "accessories" && "mt-1 border-t border-white/10 pt-2",
                     active ? "bg-amber-400/20 text-amber-200" : "text-white/60 hover:bg-white/10 hover:text-white",
                   )}
                 >
@@ -304,7 +336,22 @@ export function CatCustomizer({
 
           {/* CENTER: preview */}
           <div className="flex min-w-0 flex-1 flex-col items-center justify-center p-3">
-            <CatPreviewLarge skin={skin} />
+            <CatPreviewLarge skin={skin} pose={pose} />
+            {/* pose switcher: test that every accessory tracks every animation */}
+            <div className="mt-2 flex flex-wrap justify-center gap-1">
+              {PREVIEW_POSES.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setPose(p.id)}
+                  className={cn(
+                    "rounded-full px-2.5 py-0.5 text-[10px] font-semibold transition-colors",
+                    pose === p.id ? "bg-amber-400/25 text-amber-200 ring-1 ring-amber-300/40" : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white",
+                  )}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
             {/* item details strip */}
             {selected && (
               <motion.div
@@ -313,7 +360,11 @@ export function CatCustomizer({
                 className="mt-3 w-full max-w-xs rounded-xl border border-white/10 bg-black/40 p-2.5 text-center"
               >
                 <p className="text-xs font-bold text-white">{selected.name}</p>
-                <p className="text-[10px] uppercase tracking-wider text-white/40">{selected.category}</p>
+                <p className="text-[10px] uppercase tracking-wider text-white/40">
+                  {slotOfCategory(selected.category)
+                    ? `Slot: ${ACCESSORY_SLOTS.find((s) => s.id === slotOfCategory(selected.category))?.name}`
+                    : selected.category}
+                </p>
                 <p className="mt-1 text-[11px] leading-snug text-white/60">{selected.desc}</p>
                 <div className="mt-2 flex justify-center gap-1.5">
                   <Button
@@ -339,8 +390,24 @@ export function CatCustomizer({
                 </div>
               </motion.div>
             )}
+            {/* pattern intensity: live stripe/spot density control */}
+            {category === "patterns" && (
+              <div className="mt-2 flex w-full max-w-xs items-center gap-2">
+                <span className="shrink-0 text-[10px] uppercase tracking-wider text-white/40">Marking density</span>
+                <input
+                  type="range"
+                  min={0.2}
+                  max={1}
+                  step={0.05}
+                  value={skin.patternIntensity ?? 0.7}
+                  onChange={(e) => setSkin((s) => ({ ...s, patternIntensity: Number(e.target.value) }))}
+                  className="h-1 w-full accent-amber-300"
+                  aria-label="Pattern intensity"
+                />
+              </div>
+            )}
             {/* accessory tint */}
-            {["head", "ear", "neck", "paw", "tailAcc"].includes(category) && (
+            {(category === "accessories" || ["head", "ear", "neck", "body", "paw", "tailAcc"].includes(category)) && (
               <div className="mt-2 flex items-center gap-1.5">
                 <span className="text-[10px] uppercase tracking-wider text-white/40">Item color</span>
                 {ACCESSORY_COLORS.map((c) => (
@@ -366,9 +433,60 @@ export function CatCustomizer({
           <div className="flex w-full max-w-[380px] shrink-0 flex-col border-l border-white/10 sm:w-[380px]">
             <div className="border-b border-white/10 px-3 py-1.5">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
-                {query ? `Results for "${query}"` : CATEGORIES.find((c) => c.id === category)?.name ?? "Items"}
+                {query
+                  ? `Results for "${query}"`
+                  : category === "accessories"
+                    ? "Accessories"
+                    : (CATEGORIES.find((c) => c.id === category)?.name ?? "Items")}
                 <span className="ml-1.5 text-white/30">{items.length}</span>
               </p>
+              {category === "accessories" && !query && (
+                <>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {([{ id: "all" as const, name: "All slots" }, ...ACCESSORY_SLOTS]).map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => setAccSlot(s.id as AccessorySlot | "all")}
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors",
+                          accSlot === s.id
+                            ? "bg-amber-400/25 text-amber-200 ring-1 ring-amber-300/40"
+                            : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white",
+                        )}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <button
+                      onClick={() => setAccTheme(undefined)}
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors",
+                        !accTheme
+                          ? "bg-amber-400/25 text-amber-200 ring-1 ring-amber-300/40"
+                          : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white",
+                      )}
+                    >
+                      All themes
+                    </button>
+                    {ACC_THEMES.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => setAccTheme(t.id)}
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors",
+                          accTheme === t.id
+                            ? "bg-amber-400/25 text-amber-200 ring-1 ring-amber-300/40"
+                            : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white",
+                        )}
+                      >
+                        {t.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
             <div className="grid flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 max-[420px]:grid-cols-2 md:grid-cols-3">
               {items.map((item) => {

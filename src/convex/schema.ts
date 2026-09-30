@@ -25,12 +25,15 @@ const appearanceValidator = v.object({
   chest: v.optional(v.string()),
   pattern: v.optional(v.string()),
   furLength: v.number(),
+  furStyle: v.optional(v.string()),
   tail: v.optional(v.string()),
   ears: v.optional(v.string()),
   size: v.number(), // 0.9 - 1.15
   scar: v.boolean(),
   // customization extensions (optional so old saves load unchanged)
   eye2: v.optional(v.string()),
+  nose: v.optional(v.string()),
+  face: v.optional(v.string()),
   patternIntensity: v.optional(v.number()),
   markings: v.optional(v.array(v.string())),
   scars: v.optional(v.array(v.string())),

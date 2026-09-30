@@ -16,7 +16,7 @@ export const ACCESSORY_SLOTS: { id: AccessorySlot; name: string }[] = [
 ];
 
 export type ItemCategory =
-  | "fur" | "colors" | "patterns" | "markings" | "eyes" | "ears" | "tail" | "tailAcc" | "scars"
+  | "fur" | "colors" | "patterns" | "markings" | "eyes" | "face" | "ears" | "tail" | "tailAcc" | "scars"
   | AccessorySlot;
 
 export const CATEGORIES: { id: ItemCategory | "all" | "favorites"; name: string }[] = [
@@ -25,6 +25,7 @@ export const CATEGORIES: { id: ItemCategory | "all" | "favorites"; name: string 
   { id: "patterns", name: "Patterns" },
   { id: "markings", name: "Markings" },
   { id: "eyes", name: "Eyes" },
+  { id: "face", name: "Face" },
   { id: "ears", name: "Ears" },
   { id: "tail", name: "Tail" },
   { id: "tailAcc", name: "Tail Items" },
@@ -47,9 +48,12 @@ export interface CustomSkin {
   chest?: string;
   pattern?: string; // extended pattern id
   patternIntensity?: number; // 0..1
-  furLength?: number; // 0.6 short .. 1.6 fluffy
+  furLength?: number; // 0.55 sleek .. 1.6 fluffy
+  furStyle?: string; // "" (plain) | "thick" | "scruffy" | "tufted" — silhouette variation
   tail?: string; // extended tail id
   ears?: string; // extended ear id
+  nose?: string; // nose color id (undefined = natural pink)
+  face?: string; // face marking id (undefined / "default" = none)
   size?: number;
   scar?: boolean;
   // --- markings (multi-select, white overlay) ---
@@ -89,8 +93,11 @@ const tailOn = (id: string) => (s: CustomSkin) => s.tail === id;
 const setEars = (id: string): ((s: CustomSkin) => void) => (s) => { s.ears = id; };
 const earsOn = (id: string) => (s: CustomSkin) => s.ears === id;
 
-const setFurLen = (v: number): ((s: CustomSkin) => void) => (s) => { s.furLength = v; };
-const furLenOn = (v: number) => (s: CustomSkin) => (s.furLength ?? 1) === v;
+const setFur = (v: number, style = ""): ((s: CustomSkin) => void) => (s) => {
+  s.furLength = v;
+  s.furStyle = style || undefined;
+};
+const furOn = (v: number, style = "") => (s: CustomSkin) => (s.furLength ?? 1) === v && (s.furStyle ?? "") === style;
 
 const toggleMark = (id: string) => ({
   apply: (s: CustomSkin) => {
@@ -172,12 +179,15 @@ export const EYE_COLORS: { hex: string; name: string }[] = [
 // ---------------------------------------------------------------------------
 
 export const CAT_ITEMS: CatItem[] = [
-  // --- FUR LENGTH ----------------------------------------------------------
-  { id: "fur-short", name: "Short Fur", category: "fur", desc: "Sleek and close to the body.", apply: setFurLen(0.7), isOn: furLenOn(0.7), tags: ["short", "sleek"] },
-  { id: "fur-medium", name: "Medium Fur", category: "fur", desc: "The classic forest cat coat.", apply: setFurLen(1), isOn: furLenOn(1), tags: ["medium", "normal"] },
-  { id: "fur-long", name: "Long Fur", category: "fur", desc: "Extra fluff around the chest and tail.", apply: setFurLen(1.3), isOn: furLenOn(1.3), tags: ["long", "fluffy"] },
-  { id: "fur-fluffy", name: "Fluffy Fur", category: "fur", desc: "Maximum floof. Built for leaf-bare.", apply: setFurLen(1.6), isOn: furLenOn(1.6), tags: ["fluffy", "thick", "long"] },
-  { id: "fur-sleek", name: "Sleek Fur", category: "fur", desc: "RiverClan-swimmer smooth.", apply: setFurLen(0.55), isOn: furLenOn(0.55), tags: ["sleek", "smooth", "short"] },
+  // --- FUR (length + silhouette styles) ------------------------------------
+  { id: "fur-short", name: "Short Fur", category: "fur", desc: "Sleek and close to the body.", apply: setFur(0.7), isOn: furOn(0.7), tags: ["short", "sleek"] },
+  { id: "fur-medium", name: "Medium Fur", category: "fur", desc: "The classic forest cat coat.", apply: setFur(1), isOn: furOn(1), tags: ["medium", "normal"] },
+  { id: "fur-long", name: "Long Fur", category: "fur", desc: "Extra fluff around the chest and tail.", apply: setFur(1.3), isOn: furOn(1.3), tags: ["long", "fluffy"] },
+  { id: "fur-fluffy", name: "Fluffy Fur", category: "fur", desc: "Maximum floof. Built for leaf-bare.", apply: setFur(1.6), isOn: furOn(1.6), tags: ["fluffy", "thick", "long"] },
+  { id: "fur-sleek", name: "Sleek Fur", category: "fur", desc: "RiverClan-swimmer smooth.", apply: setFur(0.55), isOn: furOn(0.55), tags: ["sleek", "smooth", "short"] },
+  { id: "fur-thick", name: "Thick Fur", category: "fur", desc: "A heavy, dense double coat.", apply: setFur(1.15, "thick"), isOn: furOn(1.15, "thick"), tags: ["thick", "dense", "winter", "leaf-bare"] },
+  { id: "fur-scruffy", name: "Scruffy Fur", category: "fur", desc: "Tufty, ragged and untamed.", apply: setFur(1.05, "scruffy"), isOn: furOn(1.05, "scruffy"), tags: ["scruffy", "ragged", "messy"] },
+  { id: "fur-tufted", name: "Tufted Fur", category: "fur", desc: "Chest and haunch fur tufts.", apply: setFur(1.3, "tufted"), isOn: furOn(1.3, "tufted"), tags: ["tuft", "ruff", "fluffy"] },
 
   // --- COLORS (primary coat) ----------------------------------------------
   ...COAT_COLORS.map((c) => ({
@@ -238,6 +248,20 @@ export const CAT_ITEMS: CatItem[] = [
   },
   { id: "eye-none", name: "Matching Eyes", category: "eyes", desc: "Remove heterochromia.", apply: (s: CustomSkin) => { delete s.eye2; }, isOn: (s: CustomSkin) => !s.eye2, tags: ["same eyes"] },
 
+  // --- FACE (forehead/cheek markings + nose color) --------------------------
+  { id: "face-default", name: "Natural Face", category: "face", desc: "No extra facial markings.", apply: (s: CustomSkin) => { delete s.face; }, isOn: (s: CustomSkin) => !s.face || s.face === "default", tags: ["plain", "none"] },
+  { id: "face-forehead-tabby", name: "Tabby M", category: "face", desc: "The classic tabby M above the eyes.", apply: (s: CustomSkin) => { s.face = "forehead-tabby"; }, isOn: (s: CustomSkin) => s.face === "forehead-tabby", tags: ["forehead", "tabby", "stripe"] },
+  { id: "face-forehead-dot", name: "Forehead Spot", category: "face", desc: "A small dark forehead spot.", apply: (s: CustomSkin) => { s.face = "forehead-dot"; }, isOn: (s: CustomSkin) => s.face === "forehead-dot", tags: ["forehead", "spot"] },
+  { id: "face-cheek-ruff", name: "Pale Cheek Ruff", category: "face", desc: "Pale fur sweeping down the cheek.", apply: (s: CustomSkin) => { s.face = "cheek-ruff"; }, isOn: (s: CustomSkin) => s.face === "cheek-ruff", tags: ["cheek", "pale", "ruff"] },
+  { id: "face-cheek-patch", name: "Dark Cheek Patch", category: "face", desc: "A darker patch on the cheek.", apply: (s: CustomSkin) => { s.face = "cheek-patch"; }, isOn: (s: CustomSkin) => s.face === "cheek-patch", tags: ["cheek", "dark", "patch"] },
+  { id: "face-eyeshadow", name: "Dark Eye Rims", category: "face", desc: "Kohl-dark rims around the eyes.", apply: (s: CustomSkin) => { s.face = "eyeshadow"; }, isOn: (s: CustomSkin) => s.face === "eyeshadow", tags: ["eyes", "rim", "dark"] },
+  { id: "face-brows", name: "Pale Brows", category: "face", desc: "Two pale brow dots.", apply: (s: CustomSkin) => { s.face = "brows"; }, isOn: (s: CustomSkin) => s.face === "brows", tags: ["brow", "pale"] },
+  { id: "nose-default", name: "Natural Nose", category: "face", desc: "A warm pink nose.", apply: (s: CustomSkin) => { delete s.nose; }, isOn: (s: CustomSkin) => !s.nose, tags: ["nose", "pink"] },
+  { id: "nose-black", name: "Black Nose", category: "face", desc: "A jet-black nose.", apply: (s: CustomSkin) => { s.nose = "black"; }, isOn: (s: CustomSkin) => s.nose === "black", tags: ["nose", "black"] },
+  { id: "nose-liver", name: "Liver Nose", category: "face", desc: "A warm brown nose.", apply: (s: CustomSkin) => { s.nose = "liver"; }, isOn: (s: CustomSkin) => s.nose === "liver", tags: ["nose", "brown"] },
+  { id: "nose-gray", name: "Slate Nose", category: "face", desc: "A cool gray nose.", apply: (s: CustomSkin) => { s.nose = "gray"; }, isOn: (s: CustomSkin) => s.nose === "gray", tags: ["nose", "gray"] },
+  { id: "nose-orange", name: "Ginger Nose", category: "face", desc: "A bright orange nose.", apply: (s: CustomSkin) => { s.nose = "orange"; }, isOn: (s: CustomSkin) => s.nose === "orange", tags: ["nose", "orange"] },
+
   // --- EARS ----------------------------------------------------------------
   { id: "ear-normal", name: "Normal Ears", category: "ears", desc: "Classic pointed ears.", apply: setEars("normal"), isOn: earsOn("normal"), tags: ["pointed"] },
   { id: "ear-tall", name: "Tall Ears", category: "ears", desc: "Long, alert ears.", apply: setEars("tall"), isOn: earsOn("tall"), tags: ["large", "big"] },
@@ -266,12 +290,17 @@ export const CAT_ITEMS: CatItem[] = [
   { id: "hd-leaf", name: "Leaf", category: "head", desc: "One stubborn oak leaf.", ...equipAcc("head", "leaf"), tags: ["leaf", "nature", "leaf-fall"] },
   { id: "hd-feather", name: "Feather", category: "head", desc: "A songbird feather.", ...equipAcc("head", "feather"), tags: ["feather", "bird"] },
   { id: "hd-leafcrown", name: "Leaf Crown", category: "head", desc: "A braided ring of leaves.", ...equipAcc("head", "leafcrown"), tags: ["leaf", "crown", "nature"] },
-  { id: "hd-berries", name: "Berry Sprig", category: "head", desc: "A sprig of bright berries.", ...equipAcc("head", "berries"), tags: ["berry", "nature", "newleaf"] },
+  { id: "hd-berries", name: "Berry Sprig", category: "head", desc: "A sprig of bright berries.", ...equipAcc("head", "berries"), tags: ["berry", "nature", "newleaf", "seasonal"] },
+  { id: "hd-moth", name: "Perched Moth", category: "head", desc: "A dusty moth rests on your head.", ...equipAcc("head", "moth"), tags: ["moth", "fun", "cute", "insect"] },
+  { id: "hd-acorn", name: "Acorn Cap", category: "head", desc: "A tiny acorn, leaf-fall's treasure.", ...equipAcc("head", "acorn"), tags: ["acorn", "seasonal", "leaf-fall"] },
+  { id: "hd-holly", name: "Holly Sprig", category: "head", desc: "Glossy leaves and red berries.", ...equipAcc("head", "holly"), tags: ["holly", "seasonal", "leaf-bare", "berry"] },
 
   // --- EAR ACCESSORIES -----------------------------------------------------
   { id: "er-flower", name: "Ear Flower", category: "ear", desc: "A tiny bloom on one ear.", ...equipAcc("ear", "flower"), tags: ["flower", "nature"] },
   { id: "er-feather", name: "Ear Feather", category: "ear", desc: "A feather tucked at the ear.", ...equipAcc("ear", "feather"), tags: ["feather"] },
   { id: "er-leaf", name: "Ear Leaf", category: "ear", desc: "A small leaf tucked in.", ...equipAcc("ear", "leaf"), tags: ["leaf", "nature"] },
+  { id: "er-berry", name: "Ear Berries", category: "ear", desc: "Two tiny red berries.", ...equipAcc("ear", "berry"), tags: ["berry", "nature", "seasonal"] },
+  { id: "er-ribbon", name: "Ear Ribbon", category: "ear", desc: "A little bow for one ear.", ...equipAcc("ear", "ribbon"), tags: ["ribbon", "bow", "fun", "cute"] },
 
   // --- NECK ACCESSORIES ----------------------------------------------------
   { id: "nk-collar-red", name: "Red Collar", category: "neck", desc: "A kittypet's red collar.", ...equipAcc("neck", "collar-red"), tags: ["collar", "kittypet"] },
@@ -284,22 +313,30 @@ export const CAT_ITEMS: CatItem[] = [
   { id: "nk-tag", name: "Collar with Tag", category: "neck", desc: "A collar with a small name-tag.", ...equipAcc("neck", "tag"), tags: ["collar", "tag", "kittypet"] },
   { id: "nk-ribbon", name: "Neck Ribbon", category: "neck", desc: "A soft cloth ribbon.", ...equipAcc("neck", "ribbon"), tags: ["ribbon", "bow"] },
   { id: "nk-scarf", name: "Leaf Scarf", category: "neck", desc: "A wrap of broad leaves.", ...equipAcc("neck", "scarf"), tags: ["scarf", "wrap", "nature"] },
-  { id: "nk-garland", name: "Flower Garland", category: "neck", desc: "A garland of tiny blooms.", ...equipAcc("neck", "garland"), tags: ["flower", "garland", "greenleaf"] },
+  { id: "nk-garland", name: "Flower Garland", category: "neck", desc: "A garland of tiny blooms.", ...equipAcc("neck", "garland"), tags: ["flower", "garland", "greenleaf", "fun"] },
+  { id: "nk-charm", name: "Charm Collar", category: "neck", desc: "A collar with a swinging charm.", ...equipAcc("neck", "charm"), tags: ["collar", "charm", "fun"] },
+  { id: "nk-bandana", name: "Bandana", category: "neck", desc: "A soft cloth bandana.", ...equipAcc("neck", "bandana"), tags: ["bandana", "cloth", "roleplay"] },
 
   // --- BODY ACCESSORIES ----------------------------------------------------
   { id: "bd-herbs", name: "Herb Bundle", category: "body", desc: "Carried for the medicine cat.", ...equipAcc("body", "herbs"), tags: ["herbs", "medicine", "roleplay"] },
   { id: "bd-leaves", name: "Leaf Bundle", category: "body", desc: "A bundle of fresh leaves.", ...equipAcc("body", "leaves"), tags: ["leaf", "nature"] },
   { id: "bd-moss", name: "Moss Patch", category: "body", desc: "Soft moss clings to the back.", ...equipAcc("body", "moss"), tags: ["moss", "nature"] },
+  { id: "bd-satchel", name: "Herb Satchel", category: "body", desc: "A strapped pouch for herbs.", ...equipAcc("body", "satchel"), tags: ["satchel", "bag", "roleplay", "medicine"] },
+  { id: "bd-flowers", name: "Flower Trail", category: "body", desc: "Little blossoms line the back.", ...equipAcc("body", "flowers"), tags: ["flower", "nature", "fun", "newleaf"] },
 
   // --- PAW/LEG ACCESSORIES -------------------------------------------------
   { id: "pw-band-red", name: "Red Leg Band", category: "paw", desc: "A woven red band.", ...equipAcc("paw", "band-red"), tags: ["band", "leg", "red"] },
   { id: "pw-band-blue", name: "Blue Leg Band", category: "paw", desc: "A woven blue band.", ...equipAcc("paw", "band-blue"), tags: ["band", "leg", "blue"] },
-  { id: "pw-wrap", name: "Paw Wraps", category: "paw", desc: "Cloth wraps for long patrols.", ...equipAcc("paw", "wrap"), tags: ["wrap", "bandage"] },
+  { id: "pw-wrap", name: "Paw Wraps", category: "paw", desc: "Cloth wraps for long patrols.", ...equipAcc("paw", "wrap"), tags: ["wrap", "bandage", "roleplay"] },
+  { id: "pw-bracelet", name: "Leg Bracelet", category: "paw", desc: "A thin woven bracelet.", ...equipAcc("paw", "bracelet"), tags: ["bracelet", "band", "fun", "cute"] },
 
   // --- TAIL ACCESSORIES ----------------------------------------------------
   TACC({ id: "tl-band", name: "Tail Band", desc: "A woven band at the tail base.", ...equipAcc("tail", "band"), tags: ["band", "tail"] }),
   TACC({ id: "tl-ribbon", name: "Tail Ribbon", desc: "A bright ribbon tied on.", ...equipAcc("tail", "ribbon"), tags: ["ribbon", "tail", "bow"] }),
   TACC({ id: "tl-tuft", name: "Tail Tuft Tie", desc: "A tuft of feathers tied on.", ...equipAcc("tail", "tuft"), tags: ["feather", "tail"] }),
+  TACC({ id: "tl-flower", name: "Tail Flower", desc: "A bloom tied at the tail base.", ...equipAcc("tail", "flower"), tags: ["flower", "tail", "nature"] }),
+  TACC({ id: "tl-leaf", name: "Tail Leaves", desc: "Leaves tucked at the tail base.", ...equipAcc("tail", "leaf"), tags: ["leaf", "tail", "nature"] }),
+  TACC({ id: "tl-bow", name: "Tail Bow", desc: "A plump bow for the tail.", ...equipAcc("tail", "bow"), tags: ["bow", "tail", "fun", "cute"] }),
 ];
 
 /** Item color for accessories that honor the accessory tint. */
@@ -332,4 +369,101 @@ export function searchItems(query: string, category: ItemCategory | "all" | "fav
       i.desc.toLowerCase().includes(q) ||
       (i.tags ?? []).some((t) => t.includes(q) || t === q), // exact tag match covers color words
   );
+}
+
+// ---------------------------------------------------------------------------
+// Accessory browsing: slot membership, theme filters, randomizer
+// ---------------------------------------------------------------------------
+
+export type AccTheme = "nature" | "seasonal" | "roleplay" | "fun";
+
+export const ACC_THEMES: { id: AccTheme; name: string }[] = [
+  { id: "nature", name: "Nature" },
+  { id: "seasonal", name: "Seasonal" },
+  { id: "roleplay", name: "Roleplay" },
+  { id: "fun", name: "Fun" },
+];
+
+/** Which catalog category holds each accessory slot's items. */
+export const ACC_SLOT_CATS: Record<AccessorySlot, ItemCategory> = {
+  head: "head",
+  ear: "ear",
+  neck: "neck",
+  body: "body",
+  paw: "paw",
+  tail: "tailAcc",
+};
+
+const THEME_TAGS: Record<AccTheme, string[]> = {
+  nature: ["nature", "leaf", "flower", "herbs", "moss", "berry"],
+  seasonal: ["seasonal", "holly", "acorn", "newleaf", "leaf-fall", "leaf-bare"],
+  roleplay: ["roleplay", "medicine", "kittypet", "bandage", "wrap", "tag", "cloth"],
+  fun: ["fun", "bow", "ribbon", "moth", "cute", "garland", "bracelet"],
+};
+
+/** All accessory items, optionally narrowed to one slot and/or theme. */
+export function accessoriesFor(slot: AccessorySlot | "all", theme?: AccTheme): CatItem[] {
+  let pool =
+    slot === "all"
+      ? CAT_ITEMS.filter((i) => (Object.values(ACC_SLOT_CATS) as ItemCategory[]).includes(i.category))
+      : CAT_ITEMS.filter((i) => i.category === ACC_SLOT_CATS[slot]);
+  if (theme) pool = pool.filter((i) => (i.tags ?? []).some((t) => THEME_TAGS[theme].includes(t)));
+  return pool;
+}
+
+/** The catalog prefix each accessory slot uses for its item ids. */
+const ACC_PREFIX: Record<AccessorySlot, string> = {
+  head: "hd-",
+  ear: "er-",
+  neck: "nk-",
+  body: "bd-",
+  paw: "pw-",
+  tail: "tl-",
+};
+
+/**
+ * Build a complete, valid randomized appearance. Never produces invalid
+ * combinations: accessories come from the real catalog, only one per slot,
+ * and every id matches what the renderer understands.
+ */
+export function randomSkin(prev?: CustomSkin): CustomSkin {
+  const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+  const s: CustomSkin = { ...(prev ?? { fur: "#d96b2f", furDark: "#8a4a20", eye: "#4fae6e" }) };
+  const color = pick(COAT_COLORS);
+  s.fur = color.hex;
+  s.furDark = shade(color.hex, 0.62);
+  s.pattern = Math.random() < 0.7 ? pick(CAT_ITEMS.filter((i) => i.category === "patterns")).id.replace("pat-", "") : "solid";
+  s.patternIntensity = 0.5 + Math.random() * 0.5;
+  pick(CAT_ITEMS.filter((i) => i.category === "fur")).apply(s);
+  s.eye = pick(EYE_COLORS).hex;
+  // heterochromia only when the second eye actually differs from the first
+  if (Math.random() < 0.12) {
+    const h = pick(["#9cc2ea", "#d9a83a"]);
+    if (h !== s.eye) s.eye2 = h;
+  }
+  if (!s.eye2) delete s.eye2;
+  pick(CAT_ITEMS.filter((i) => i.category === "ears")).apply(s);
+  pick(CAT_ITEMS.filter((i) => i.category === "tail")).apply(s);
+  if (Math.random() < 0.2) s.nose = pick(["black", "liver", "gray", "orange"]);
+  else delete s.nose;
+  if (Math.random() < 0.25) s.face = pick(["forehead-tabby", "forehead-dot", "cheek-ruff", "cheek-patch", "eyeshadow", "brows"]);
+  else delete s.face;
+  s.markings = CAT_ITEMS.filter((i) => i.category === "markings")
+    .filter(() => Math.random() < 0.28)
+    .map((i) => i.id.replace("mk-", ""));
+  s.scars = Math.random() < 0.12 ? [pick(CAT_ITEMS.filter((i) => i.category === "scars")).id.replace("sc-", "")] : [];
+  s.acc = {};
+  const accPool = accessoriesFor("all");
+  const n = Math.random() < 0.45 ? (Math.random() < 0.3 ? 2 : 1) : 0;
+  const usedSlots: AccessorySlot[] = [];
+  for (let i = 0; i < n; i++) {
+    const it = pick(accPool);
+    const entry = (Object.entries(ACC_SLOT_CATS) as [AccessorySlot, ItemCategory][]).find(([, c]) => c === it.category);
+    if (!entry || usedSlots.includes(entry[0])) continue;
+    usedSlots.push(entry[0]);
+    const prefix = ACC_PREFIX[entry[0]];
+    s.acc[entry[0]] = it.id.startsWith(prefix) ? it.id.slice(prefix.length) : it.id;
+  }
+  s.accColor = pick(ACCESSORY_COLORS);
+  return s;
 }

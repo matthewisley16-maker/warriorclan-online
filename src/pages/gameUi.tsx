@@ -39,11 +39,14 @@ export function fullSkin(
     chest: string;
     pattern: string;
     furLength: number;
+    furStyle: string;
     tail: string;
     ears: string;
     size: number;
     scar: boolean;
     eye2: string;
+    nose: string;
+    face: string;
     patternIntensity: number;
     markings: string[];
     scars: string[];
@@ -60,12 +63,15 @@ export function fullSkin(
     chest: a.chest,
     pattern: a.pattern ?? "solid",
     furLength: a.furLength ?? 1,
+    furStyle: a.furStyle || undefined,
     tail: a.tail ?? "normal",
     ears: a.ears ?? "normal",
     size: a.size ?? 1,
     scar: a.scar ?? false,
     // extended customization (optional; absent on old saves)
     ...(a.eye2 ? { eye2: a.eye2 } : {}),
+    ...(a.nose ? { nose: a.nose } : {}),
+    ...(a.face ? { face: a.face } : {}),
     ...(a.patternIntensity !== undefined ? { patternIntensity: a.patternIntensity } : {}),
     ...(a.markings?.length ? { markings: a.markings } : {}),
     ...(a.scars?.length ? { scars: a.scars } : {}),
