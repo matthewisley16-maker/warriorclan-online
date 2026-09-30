@@ -157,6 +157,24 @@ step(220); // ~3.7s: cooldown + re-arm window elapsed
 check(g2.interiorId === "smudge-house", "standing at the doorway re-enters after the re-arm window");
 g.exitInterior();
 step(2);
+// leave the doorstep BEFORE the cooldown elapses: the engine intentionally
+// re-arms a doorway you keep standing at (~1.4s), so lingering here would
+// auto re-enter smudge-house and poison the following den test.
+const away = (() => {
+  for (let r = 120; r < 2400; r += 40) {
+    const c = { x: SPAWN.x + r, y: SPAWN.y - r }; // NE diagonal, into open forest
+    const nearAnyDoor = allObjects.some(
+      (o) => o.interior && o.doorAt && Math.hypot(o.x + (o.doorAt.dx ?? 0) * 32 - c.x, o.y + o.h / 2 + (o.doorAt.dy ?? 0) * 32 - c.y) < 140,
+    );
+    if (!nearAnyDoor && !isSolidPoint(c.x, c.y)) return c;
+  }
+  return { x: SPAWN.x + 600, y: SPAWN.y + 600 };
+})();
+eng.px = away.x;
+eng.py = away.y;
+eng.camX = away.x;
+eng.camY = away.y;
+step(120); // let the previous exit's door cooldown (~1.2s) elapse
 
 // ---------- TEST 3b: camp dens (SOLID objects) are enterable ----------
 const warriorsDen = allObjects.find((o) => o.id === "warriors-den")!;

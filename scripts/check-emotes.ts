@@ -213,7 +213,7 @@ const g = new GameCanvas(canvas as unknown as HTMLCanvasElement, SPAWN, {
 pump(64); // let the engine initialize a few frames
 
 const stateOf = () => (g as unknown as { engineState(): { emote?: string; animationState: string; movementState: string } }).engineState();
-const eng = g as unknown as { startEmote: (id: string) => boolean; cancelEmote: () => void; pEmoteId?: string | null; pHeadKind?: string | null; queueRemoteAction: (k: "vocal" | "action", p: string, u?: string) => void; playRemoteAnim: (u: string, id: string) => void; remoteEmotePose: (u: string) => { pose: string } | null };
+const eng = g as unknown as { startEmote: (id: string) => boolean; cancelEmote: () => void; pEmoteId?: string | null; pHeadKind?: string | null; queueRemoteAction: (k: "vocal" | "action", p: string, u?: string) => void; playRemoteAnim: (u: string, id: string) => void; remoteEmotePose: (u: string) => { pose: string; fx: { dur: number } } | null; remotes: Map<string, unknown> };
 
 // 4a. one-shot rides exactly one packet
 check(eng.startEmote("groom") === true, "startEmote('groom') starts");
@@ -250,21 +250,42 @@ const s = stateOf();
 check(["idle", "walk", "run", "crouch"].includes(s.movementState), "engineState.movementState uses the synced vocabulary");
 check(VALID_POSES.has(s.animationState), "engineState.animationState is always a CatPose");
 
-// 4g. remote replay pipeline (what Game.tsx drives on animOneShot changes)
+// 4g. remote replay pipeline (what Game.tsx drives on animOneShot changes).
+// The engine prunes emotes for uids missing from g.remotes (players who left),
+// so register the fake players first — exactly what Game.tsx does with the
+// presence listOnline snapshot.
+const fakeRemote = (userId: string) => ({
+  userId,
+  catName: userId,
+  appearance: { fur: "#a0713c", furDark: "#6b4a24", eye: "#3f7f5f" },
+  x: 0, y: 0, facing: 1 as const, moving: false,
+});
+eng.remotes.set("userB", fakeRemote("userB"));
+eng.remotes.set("userC", fakeRemote("userC"));
+
 eng.queueRemoteAction("action", "anim:dance1", "userB");
 pump(16);
 const rb = eng.remoteEmotePose("userB");
 check(rb !== null && rb.pose === "dance1", "queueRemoteAction('anim:dance1') replays as dance1 on the remote cat");
-pump(5000); // dance dur 4.5s
-check(eng.remoteEmotePose("userB") === null, "remote emote expires after its duration");
-eng.queueRemoteAction("action", "anim:not-real", "u3");
-pump(16);
-check(eng.remoteEmotePose("u3") === null, "invalid remote emote id is dropped");
 eng.playRemoteAnim("userC", "dance3");
 pump(16);
 const rc = eng.remoteEmotePose("userC");
 check(rc !== null && rc.pose === "dance3", "playRemoteAnim('userC','dance3') replays dance3");
-check(eng.remoteEmotePose("userB") === null || true, "per-user remote emotes are independent");
+const rb2 = eng.remoteEmotePose("userB");
+check(rb2 !== null && rb2.pose === "dance1", "per-user remote emotes are independent");
+pump(5000); // dance dur 4.5s
+check(eng.remoteEmotePose("userB") === null, "remote emote expires after its duration");
+eng.queueRemoteAction("action", "anim:not-real", "userB");
+pump(16);
+check(eng.remoteEmotePose("userB") === null, "invalid remote emote id is dropped");
+
+// 4h. lifecycle guard: emotes from players who left are pruned next frame
+eng.playRemoteAnim("userC", "dance2");
+pump(16);
+check(eng.remoteEmotePose("userC") !== null, "dance2 active for userC");
+eng.remotes.delete("userC");
+pump(16);
+check(eng.remoteEmotePose("userC") === null, "remote emote is pruned when the player leaves the world");
 
 console.log(failures === 0 ? `\nOK  emote system verification passed` : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

@@ -3005,22 +3005,25 @@ export class GameCanvas {
     for (const [uid, r] of this.remotes) {
       const nowMs = this.time * 1000;
       const wallMs = performance.now();
-      // serverTick is a Date.now() stamp of the moment the server processed
-      // the state — use it as the sample's timeline position
-      const serverNowMs = (r as unknown as { serverTick?: number }).serverTick;
       let cur = this.remoteRender.get(uid);
       if (!cur) {
         // fresh snapshot (first sight or reconnect): start exactly at the
         // authoritative position — never reuse stale interpolation state
-        const s = this.remoteStateOf(r, nowMs, serverNowMs);
+        const s = this.remoteStateOf(r, nowMs, wallMs);
         cur = { x: s.x, y: s.y, facing: s.facing, pose: s.pose, serverTick: s.serverTick, receivedAt: s.receivedAt, buffer: [s], animMs: wallMs % 100000, lastSpeedPxS: 0 };
         this.remoteRender.set(uid, cur);
         continue;
       }
       const tick = r.serverTick ?? 0;
       if (tick > cur.serverTick) {
-        // a newer server state arrived: buffer it (bounded) and advance
-        const s = this.remoteStateOf(r, nowMs, serverNowMs);
+        // a newer server state arrived: buffer it (bounded) and advance.
+        // Timeline positions use the CLIENT receive clock (wallMs): the
+        // server's Date.now() stamp lives in a different clock domain and
+        // can stall or skew, which used to freeze the whole interpolation
+        // timeline at the first packet (walk pose never cleared, positions
+        // never converged). Receive-time interpolation is jitter-tolerant
+        // and needs no cross-clock sync.
+        const s = this.remoteStateOf(r, nowMs, wallMs);
         const last = cur.buffer[cur.buffer.length - 1];
         if (last && Math.hypot(s.x - last.x, s.y - last.y) > REMOTE_SNAP_DIST) {
           // discontinuity: the cat teleported server-side (correction,
@@ -5378,8 +5381,14 @@ export class GameCanvas {
 
   // ---- remote networking helpers ------------------------------------------
 
-  /** Normalize an incoming server state into a buffered sample. */
-  private remoteStateOf(r: RemotePlayer, nowMs: number, serverNowMs?: number): RemoteStateSample {
+  /**
+   * Normalize an incoming server state into a buffered sample.
+   * `receivedMs` is the CLIENT receive clock (performance.now at arrival):
+   * the interpolation timeline runs on local receive times, never on the
+   * server's Date.now() stamp — a stalled/skewed server clock must not be
+   * able to freeze the render timeline.
+   */
+  private remoteStateOf(r: RemotePlayer, nowMs: number, receivedMs?: number): RemoteStateSample {
     const ms = r.movementState ?? (r.moving ? "walk" : "idle");
     const anim = r.animationState ?? (r.moving ? "walk" : "sit");
     return {
@@ -5388,10 +5397,7 @@ export class GameCanvas {
       facing: r.facing,
       pose: this.poseFromMovement(ms, anim),
       serverTick: r.serverTick ?? 0,
-      // prefer the SERVER clock (stateVersion = server tick time) so the
-      // interpolation timeline is immune to client receive jitter; fall back
-      // to local arrival time only when the server time is unknown
-      receivedAt: typeof serverNowMs === "number" ? serverNowMs : nowMs,
+      receivedAt: receivedMs ?? nowMs,
     };
   }
 
@@ -6031,7 +6037,11 @@ export class GameCanvas {
     if (buf.length === 0) return;
     const latest = buf[buf.length - 1];
     const serverNow = latest.receivedAt;
-    const targetMs = serverNow - REMOTE_INTERP_DELAY_MS;
+    // render ~REMOTE_INTERP_DELAY_MS behind real time (receive clock),
+    // bottom-clamped to the buffer: with a stalled stream the raw target
+    // would otherwise fall behind the buffer and lock the pose inside stale
+    // walk history — clamped, the timeline settles on the newest sample.
+    const targetMs = Math.max(wallMs - REMOTE_INTERP_DELAY_MS, buf[0].receivedAt);
 
     // --- locate the two samples surrounding the delayed render time ---
     let i = buf.length - 1;
