@@ -400,24 +400,34 @@ type InteriorPropStyle =
   | "nest" | "herbs" | "stone" | "moss" | "plank" | "hay" | "bowl"
   | "vines" | "toy" | "carpet" | "lamp"
   | "sofa" | "chair" | "table" | "bed" | "cabinet" | "shelf" | "books"
-  | "box" | "window" | "plant" | "post" | "blanket";
+  | "box" | "window" | "plant" | "post" | "blanket"
+  | "tub" | "toilet" | "stove";
+
+/** A named room zone on the room grid (inclusive cell bounds). */
+interface RoomZone { name: string; x0: number; y0: number; x1: number; y1: number }
+/** A walk-in stair portal between two floors (cells). */
+interface StairPortal { x: number; y: number; w: number; h: number; toX: number; toY: number; target: string }
 
 interface InteriorDef {
   id: string;
   name: string;
   /** wall layout in a 24x18 room of 32px cells; 1 = wall */
   walls: string[];
-  props: { id: string; x: number; y: number; label: string; style: InteriorPropStyle }[];
+  props: { id: string; x: number; y: number; label: string; style: InteriorPropStyle; interact?: string }[];
   /** text shown when entering */
   desc: string;
   npcs?: string[]; // npc ids positioned here
+  /** named rooms on the floor plan (the HUD shows "I am in the kitchen") */
+  rooms?: RoomZone[];
+  /** walk-in stair portals (physical floor changes — no teleporting UI) */
+  stairs?: StairPortal[];
 }
 
 const ROOM_W = 24;
 const ROOM_H = 18;
 
 /** Wall rows for a w x h room with a door in the bottom wall. */
-function roomSized(w: number, h: number, cave = false): string[] {
+function roomSized(w: number, h: number, cave = false, frontDoor = true): string[] {
   const rows: string[] = [];
   for (let y = 0; y < h; y++) {
     let row = "1".repeat(w);
@@ -431,12 +441,136 @@ function roomSized(w: number, h: number, cave = false): string[] {
     }
     rows.push(row);
   }
-  // doorway: two-cell gap in the bottom wall
-  const mid = Math.floor(w / 2) - 1;
-  const bottom = rows[h - 1];
-  rows[h - 1] = bottom.slice(0, mid) + "00" + bottom.slice(mid + 2);
+  if (frontDoor) {
+    // doorway: two-cell gap in the bottom wall
+    const mid = Math.floor(w / 2) - 1;
+    const bottom = rows[h - 1];
+    rows[h - 1] = bottom.slice(0, mid) + "00" + bottom.slice(mid + 2);
+  }
   return rows;
 }
+
+/** An interior wall segment: horizontal (row y) or vertical (column x), with door gaps. */
+type WallSeg =
+  | { h: true; y: number; x0: number; x1: number; doors: number[] }
+  | { h: false; x: number; y0: number; y1: number; doors: number[] };
+
+/** Carve interior walls (with doorway gaps) into a room's wall grid. */
+function applyWallSegs(rows: string[], segs: WallSeg[]): string[] {
+  const out = [...rows];
+  for (const s of segs) {
+    if (s.h) {
+      if (out[s.y] === undefined) continue;
+      const chars = out[s.y].split("");
+      for (let x = Math.max(1, s.x0); x <= Math.min(chars.length - 2, s.x1); x++) chars[x] = "1";
+      for (const d of s.doors) {
+        if (chars[d] !== undefined) chars[d] = "0";
+        if (chars[d + 1] !== undefined) chars[d + 1] = "0";
+      }
+      out[s.y] = chars.join("");
+    } else {
+      for (let y = Math.max(1, s.y0); y <= Math.min(out.length - 2, s.y1); y++) {
+        const row = out[y];
+        if (row === undefined || row[s.x] === undefined) continue;
+        const chars = row.split("");
+        chars[s.x] = "1";
+        out[y] = chars.join("");
+      }
+      for (const d of s.doors) {
+        const row = out[d];
+        if (row === undefined) continue;
+        const chars = row.split("");
+        chars[s.x] = "0";
+        out[d] = chars.join("");
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Per-house floor plans: interior partition walls that turn each Twoleg home
+ * into real, separate rooms (kitchen, bedrooms, bathroom...) connected by
+ * doorways. Coordinates are cells; doors list gap starts (2 cells wide on
+ * horizontal walls, 1 cell tall on vertical walls).
+ */
+const PLAN_WALLS: Record<string, WallSeg[]> = {
+  // Rusty's family home (22x16): living / kitchen / dining / bedroom
+  "rusty-house": [
+    { h: true, y: 9, x0: 1, x1: 20, doors: [5, 15] },
+    { h: false, x: 14, y0: 10, y1: 14, doors: [12] },
+  ],
+  // Smudge's small home (17x12): living / bedroom / kitchen
+  "smudge-house": [
+    { h: true, y: 6, x0: 1, x1: 15, doors: [4, 12] },
+  ],
+  // Henry's home (18x13): kitchen / living / bedroom / bathroom
+  "henry-house": [
+    { h: false, x: 10, y0: 1, y1: 6, doors: [3] },
+    { h: true, y: 7, x0: 1, x1: 16, doors: [4, 12] },
+  ],
+  // Princess's cozy home (16x12): living / bedroom / kitchen
+  "princess-house": [
+    { h: true, y: 5, x0: 1, x1: 14, doors: [10] },
+  ],
+  // Marmalade's large home (21x15): kitchen / living / dining / bedroom
+  "marmalade-house": [
+    { h: false, x: 11, y0: 1, y1: 7, doors: [4] },
+    { h: true, y: 8, x0: 1, x1: 19, doors: [5, 14] },
+    { h: false, x: 11, y0: 9, y1: 13, doors: [11] },
+  ],
+  // Ginger's home (16x12): kitchen / living / bedroom
+  "ginger-house": [
+    { h: true, y: 5, x0: 1, x1: 14, doors: [5] },
+  ],
+  "house-a": [
+    { h: true, y: 5, x0: 1, x1: 13, doors: [4] },
+  ],
+  // house-b (23x17): kitchen / living / dining / bedroom
+  "house-b": [
+    { h: false, x: 12, y0: 1, y1: 8, doors: [4] },
+    { h: true, y: 9, x0: 1, x1: 21, doors: [5, 15] },
+    { h: false, x: 12, y0: 10, y1: 15, doors: [12] },
+  ],
+  // house-c (18x13): living / bedroom / kitchen
+  "house-c": [
+    { h: true, y: 6, x0: 1, x1: 16, doors: [8] },
+    { h: false, x: 9, y0: 7, y1: 11, doors: [9] },
+  ],
+  // house-d (20x15) GROUND floor: living / kitchen / entry / dining + stairs up
+  "house-d": [
+    { h: false, x: 12, y0: 1, y1: 13, doors: [3, 9] },
+    { h: true, y: 7, x0: 1, x1: 11, doors: [5] },
+  ],
+  // house-d-up (20x15) UPstairs: landing / master bedroom / child's room / bathroom
+  "house-d-up": [
+    { h: false, x: 9, y0: 1, y1: 13, doors: [4, 10] },
+    { h: true, y: 6, x0: 10, x1: 18, doors: [13] },
+    { h: true, y: 10, x0: 10, x1: 18, doors: [15] },
+  ],
+  "house-e": [
+    { h: false, x: 11, y0: 1, y1: 7, doors: [4] },
+    { h: true, y: 8, x0: 1, x1: 19, doors: [5, 14] },
+    { h: false, x: 11, y0: 9, y1: 13, doors: [11] },
+  ],
+  // house-j (18x13): kitchen / living / bedroom / bathroom
+  "house-j": [
+    { h: false, x: 9, y0: 1, y1: 6, doors: [3] },
+    { h: true, y: 7, x0: 1, x1: 16, doors: [4, 12] },
+  ],
+  // house-k (19x14): living / bedroom / kitchen / study
+  "house-k": [
+    { h: true, y: 6, x0: 1, x1: 17, doors: [5, 13] },
+    { h: false, x: 10, y0: 7, y1: 12, doors: [9] },
+    { h: false, x: 14, y0: 7, y1: 12, doors: [10] },
+  ],
+  // house-l (20x15): living / kitchen / dining / bedroom
+  "house-l": [
+    { h: false, x: 9, y0: 1, y1: 7, doors: [3] },
+    { h: true, y: 8, x0: 1, x1: 18, doors: [5, 13] },
+    { h: false, x: 13, y0: 9, y1: 13, doors: [11] },
+  ],
+};
 
 function emptyRoom(): string[] {
   return roomSized(ROOM_W, ROOM_H);
@@ -453,6 +587,10 @@ interface RoomGeo {
   cave: boolean;
   floor: [string, string, string]; // base, speckle, accent
   wall: [string, string]; // face, top edge
+  /** no front-door gap in the bottom wall (upper floors) */
+  frontDoor?: boolean;
+  /** props are authored directly in this room's cell coords */
+  cellProps?: boolean;
 }
 const ROOM_GEO: Record<string, RoomGeo> = {
   // Clan dens — natural scooped shapes with earth/sand floors (book: sandy ravine)
@@ -490,6 +628,11 @@ const ROOM_GEO: Record<string, RoomGeo> = {
   "house-i":          { w: 20, h: 15, cave: false, floor: ["#a2764a", "#966e44", "#ae8256"], wall: ["#c6b694", "#d6c8a8"] },
   "barn":             { w: 24, h: 18, cave: false, floor: ["#96703f", "#8a6639", "#a27a46"], wall: ["#8a5a3a", "#9c6a46"] },
   "moonstone-cave":   { w: 15, h: 12, cave: true,  floor: ["#5c5e66", "#50525a", "#686a72"], wall: ["#33343c", "#43454f"] },
+  // original floor-plan homes added by the house-interiors upgrade
+  "house-j":          { w: 18, h: 13, cave: false, floor: ["#a87c50", "#9c724a", "#b4865a"], wall: ["#cec0a2", "#ded2b6"], cellProps: true },
+  "house-k":          { w: 19, h: 14, cave: false, floor: ["#b48454", "#a87a4e", "#c0905e"], wall: ["#d4c4a4", "#e2d4b6"], cellProps: true },
+  "house-l":          { w: 20, h: 15, cave: false, floor: ["#a2764a", "#966e44", "#ae8256"], wall: ["#c6b694", "#d6c8a8"], cellProps: true },
+  "house-d-up":       { w: 20, h: 15, cave: false, frontDoor: false, floor: ["#b88a58", "#ac7e4e", "#c49662"], wall: ["#d8c8ac", "#e6d8be"], cellProps: true },
 };
 
 /**
@@ -501,9 +644,37 @@ function propPx(
   prop: { x: number; y: number },
 ): { x: number; y: number } {
   const geo = ROOM_GEO[roomId];
+  if (geo?.cellProps) {
+    // plan-authored rooms: props sit on exact cells (clamped inside the walls)
+    const cx = Math.max(1, Math.min(geo.w - 2, prop.x));
+    const cy = Math.max(1, Math.min(geo.h - 2, prop.y));
+    return { x: cx * 32 + 16, y: cy * 32 + 16 };
+  }
   const gx = geo ? (prop.x / 24) * geo.w : prop.x;
   const gy = geo ? (prop.y / 18) * geo.h : prop.y;
   return { x: gx * 32 + 16, y: gy * 32 + 16 };
+}
+
+/**
+ * Furniture is interactive (spec: objects actually DO things). Every prop
+ * style maps to a real cat action; per-prop overrides win.
+ */
+export function defaultFurnitureAction(style: string): string | undefined {
+  switch (style) {
+    case "bed": case "hay": case "moss": case "nest": case "blanket": return "f-sleep";
+    case "sofa": case "carpet": return "f-lie";
+    case "chair": case "plank": case "stone": return "f-sit";
+    case "post": return "f-scratch";
+    case "bowl": return "f-eat";
+    case "tub": case "toilet": return "f-drink";
+    case "stove": return "f-warm";
+    case "window": return "f-look";
+    case "box": return "f-hide";
+    case "toy": return "f-play";
+    case "plant": case "vines": case "herbs": case "books": case "shelf":
+    case "cabinet": case "table": case "lamp": return "f-sniff";
+    default: return undefined;
+  }
 }
 
 export const interiors: Record<string, InteriorDef> = {
@@ -794,22 +965,30 @@ export const interiors: Record<string, InteriorDef> = {
     name: "Rusty's Twoleg Nest",
     walls: roomWithDoor("bottom", 12),
     props: [
-      // living room + kitchen + hallway in one small nest
-      { id: "rh-carpet", x: 12, y: 9, label: "Worn rug by the fire", style: "carpet" },
-      { id: "rh-sofa", x: 17, y: 7, label: "Twoleg sleeping-soft (sofa)", style: "sofa" },
-      { id: "rh-chair", x: 7, y: 5, label: "Twoleg perch (chair)", style: "chair" },
-      { id: "rh-table", x: 12, y: 5, label: "Twoleg eating-table", style: "table" },
-      { id: "rh-lamp", x: 19, y: 12, label: "Glowing lamp", style: "lamp" },
-      { id: "rh-counter", x: 5, y: 10, label: "Kitchen counter", style: "cabinet" },
-      { id: "bowl", x: 6, y: 8, label: "Your food bowl", style: "bowl" },
-      { id: "bowl2", x: 8, y: 8, label: "Water bowl", style: "bowl" },
-      { id: "rh-toy", x: 14, y: 12, label: "A woolly mouse toy", style: "toy" },
-      { id: "rh-toy2", x: 10, y: 13, label: "Rolling twoleg ball", style: "toy" },
-      { id: "rh-cushion", x: 15, y: 10, label: "Soft cushion", style: "blanket" },
-      { id: "rh-books", x: 19, y: 4, label: "Twoleg leaf-clusters (books)", style: "books" },
-      { id: "rh-window", x: 4, y: 13, label: "Sunny window ledge", style: "window" },
+      // living room (north-west) / kitchen (north-east) / hall (south-west) / bedroom (south-east)
+      { id: "rh-sofa", x: 4, y: 7, label: "Twoleg sleeping-soft (sofa)", style: "sofa" },
+      { id: "rh-chair", x: 8, y: 6, label: "Twoleg perch (chair)", style: "chair" },
+      { id: "rh-carpet", x: 10, y: 7, label: "Worn rug by the fire", style: "carpet" },
+      { id: "rh-window", x: 2, y: 1, label: "Sunny window ledge", style: "window" },
+      { id: "rh-lamp", x: 12, y: 2, label: "Glowing lamp", style: "lamp" },
+      { id: "rh-books", x: 12, y: 7, label: "Twoleg leaf-clusters (books)", style: "books" },
+      { id: "rh-counter", x: 16, y: 2, label: "Kitchen counter", style: "cabinet" },
+      { id: "rh-coldbox", x: 19, y: 2, label: "The humming cold box", style: "cabinet" },
+      { id: "rh-stove", x: 17, y: 5, label: "Warm stove", style: "stove" },
+      { id: "rh-table", x: 19, y: 6, label: "Twoleg eating-table", style: "table" },
+      { id: "rh-bowl", x: 4, y: 11, label: "Your food bowl", style: "bowl" },
+      { id: "rh-bowl2", x: 6, y: 11, label: "Water bowl", style: "bowl" },
+      { id: "rh-toy", x: 9, y: 12, label: "A woolly mouse toy", style: "toy" },
+      { id: "rh-bed", x: 17, y: 11, label: "The Twolegs' big sleeping-nest", style: "bed" },
+      { id: "rh-drawer", x: 20, y: 13, label: "Wooden drawers", style: "cabinet" },
     ],
     desc: "Warm, soft, and safe — and unbearably small. The Twolegs are out; the garden door is open.",
+    rooms: [
+      { name: "Rusty's Front Room", x0: 1, y0: 1, x1: 13, y1: 8 },
+      { name: "Rusty's Kitchen", x0: 15, y0: 1, x1: 20, y1: 8 },
+      { name: "Rusty's Hallway", x0: 1, y0: 10, x1: 13, y1: 14 },
+      { name: "The Twolegs' Bedroom", x0: 15, y0: 10, x1: 20, y1: 14 },
+    ],
     npcs: [],
   },
   "smudge-house": {
@@ -817,125 +996,161 @@ export const interiors: Record<string, InteriorDef> = {
     name: "Smudge's Cozy Home",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "sh-carpet", x: 12, y: 8, label: "Thick soft carpet", style: "carpet" },
-      { id: "sh-bed", x: 12, y: 5, label: "Smudge's plush cat bed", style: "nest" },
-      { id: "sh-bowl", x: 7, y: 7, label: "Food bowl, always full", style: "bowl" },
-      { id: "sh-bowl2", x: 9, y: 7, label: "Fresh water bowl", style: "bowl" },
-      { id: "sh-toy", x: 15, y: 9, label: "Feather wand toy", style: "toy" },
-      { id: "sh-toy2", x: 16, y: 11, label: "Catnip mouse", style: "toy" },
-      { id: "sh-toy3", x: 9, y: 12, label: "Jingly ball", style: "toy" },
-      { id: "sh-sofa", x: 18, y: 6, label: "Twoleg sofa", style: "sofa" },
-      { id: "sh-lamp", x: 5, y: 12, label: "Warm reading lamp", style: "lamp" },
-      { id: "sh-window", x: 19, y: 13, label: "Window over the garden", style: "window" },
+      // living room (west) / kitchenette (east) over a full-width bedroom below
+      { id: "sh-sofa", x: 3, y: 4, label: "Twoleg sofa", style: "sofa" },
+      { id: "sh-carpet", x: 8, y: 3, label: "Thick soft carpet", style: "carpet" },
+      { id: "sh-lamp", x: 14, y: 3, label: "Warm reading lamp", style: "lamp" },
+      { id: "sh-window", x: 15, y: 1, label: "Window over the garden", style: "window" },
+      { id: "sh-bowl", x: 13, y: 4, label: "Food bowl, always full", style: "bowl" },
+      { id: "sh-bowl2", x: 14, y: 4, label: "Fresh water bowl", style: "bowl" },
+      { id: "sh-bed", x: 4, y: 8, label: "Smudge's plush cat bed", style: "nest" },
+      { id: "sh-toy", x: 7, y: 9, label: "Feather wand toy", style: "toy" },
+      { id: "sh-toy2", x: 6, y: 8, label: "Catnip mouse", style: "toy" },
+      { id: "sh-toy3", x: 8, y: 8, label: "Jingly ball", style: "toy" },
     ],
     desc: "Smudge's Twolegs dote on him. Toys everywhere, a plush bed, and the best view of the garden.",
-    npcs: [],
+    rooms: [
+      { name: "Smudge's Living Room", x0: 1, y0: 1, x1: 11, y1: 5 },
+      { name: "Smudge's Kitchen Nook", x0: 12, y0: 1, x1: 15, y1: 5 },
+      { name: "Smudge's Bedroom", x0: 1, y0: 7, x1: 15, y1: 10 },
+    ],
+    npcs: ["smudge"],
   },
   "henry-house": {
     id: "henry-house",
     name: "Henry's House",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "hh-bed", x: 8, y: 5, label: "Henry's large cat bed", style: "nest" },
-      { id: "hh-post", x: 16, y: 6, label: "Tall scratching post", style: "post" },
-      { id: "hh-bowl", x: 7, y: 9, label: "Food bowl", style: "bowl" },
-      { id: "hh-bowl2", x: 9, y: 9, label: "Water bowl", style: "bowl" },
-      { id: "hh-toy", x: 13, y: 11, label: "Springy toy", style: "toy" },
-      { id: "hh-toy2", x: 15, y: 12, label: "Crinkle ball", style: "toy" },
-      { id: "hh-carpet", x: 11, y: 8, label: "Hearth rug", style: "carpet" },
-      { id: "hh-shelf", x: 19, y: 5, label: "Twoleg shelf of curious objects", style: "shelf" },
-      { id: "hh-table", x: 6, y: 13, label: "Kitchen table", style: "table" },
-      { id: "hh-lamp", x: 20, y: 12, label: "Corner lamp", style: "lamp" },
+      // kitchen (west) / living room (east) over a hall + bedroom
+      { id: "hh-counter", x: 3, y: 2, label: "Kitchen counter", style: "cabinet" },
+      { id: "hh-stove", x: 5, y: 2, label: "Polished stove", style: "stove" },
+      { id: "hh-table", x: 7, y: 5, label: "Kitchen table", style: "table" },
+      { id: "hh-sofa", x: 13, y: 4, label: "Firm upright sofa", style: "sofa" },
+      { id: "hh-carpet", x: 14, y: 2, label: "Hearth rug", style: "carpet" },
+      { id: "hh-shelf", x: 15, y: 1, label: "Twoleg shelf of curious objects", style: "shelf" },
+      { id: "hh-post", x: 2, y: 10, label: "Tall scratching post", style: "post" },
+      { id: "hh-bowl", x: 6, y: 9, label: "Food bowl", style: "bowl" },
+      { id: "hh-bowl2", x: 8, y: 9, label: "Water bowl", style: "bowl" },
+      { id: "hh-lamp", x: 9, y: 11, label: "Corner lamp", style: "lamp" },
+      { id: "hh-bed", x: 14, y: 10, label: "Henry's large cat bed", style: "nest" },
     ],
     desc: "Henry's Twolegs keep a tidy house with a scratching post he is too dignified to use.",
-    npcs: [],
+    rooms: [
+      { name: "Henry's Kitchen", x0: 1, y0: 1, x1: 9, y1: 6 },
+      { name: "Henry's Living Room", x0: 11, y0: 1, x1: 16, y1: 6 },
+      { name: "Henry's Hallway", x0: 1, y0: 8, x1: 11, y1: 11 },
+      { name: "Henry's Bedroom", x0: 12, y0: 8, x1: 16, y1: 11 },
+    ],
+    npcs: ["henry"],
   },
   "princess-house": {
     id: "princess-house",
     name: "Princess's Sunny House",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "ph-window", x: 12, y: 4, label: "Wide sunny windowsill", style: "window" },
-      { id: "ph-bed", x: 12, y: 6, label: "Princess's cushioned bed", style: "nest" },
-      { id: "ph-plant", x: 6, y: 5, label: "Houseplants (not for eating)", style: "moss" },
-      { id: "ph-plant2", x: 18, y: 5, label: "Fern on a stand", style: "moss" },
-      { id: "ph-bowl", x: 8, y: 10, label: "Porcelain food bowl", style: "bowl" },
-      { id: "ph-bowl2", x: 10, y: 10, label: "Porcelain water bowl", style: "bowl" },
-      { id: "ph-carpet", x: 13, y: 10, label: "Pale delicate carpet", style: "carpet" },
-      { id: "ph-shelf", x: 19, y: 9, label: "Shelves of twoleg ornaments", style: "shelf" },
-      { id: "ph-toy", x: 16, y: 12, label: "A single dignified toy", style: "toy" },
-      { id: "ph-chair", x: 6, y: 12, label: "Upholstered chair", style: "chair" },
+      // living room (west) / sunroom (east) over a bedchamber
+      { id: "ph-chair", x: 3, y: 3, label: "Upholstered chair", style: "chair" },
+      { id: "ph-window", x: 6, y: 1, label: "Wide sunny windowsill", style: "window" },
+      { id: "ph-plant", x: 2, y: 1, label: "Houseplants (not for eating)", style: "moss" },
+      { id: "ph-window2", x: 12, y: 1, label: "Sunroom glass, warm with light", style: "window" },
+      { id: "ph-plant2", x: 13, y: 3, label: "Fern on a stand", style: "moss" },
+      { id: "ph-bed2", x: 11, y: 3, label: "Sunroom napping cushion", style: "nest" },
+      { id: "ph-bed", x: 3, y: 8, label: "Princess's cushioned bed", style: "nest" },
+      { id: "ph-bowl", x: 6, y: 8, label: "Porcelain food bowl", style: "bowl" },
+      { id: "ph-bowl2", x: 7, y: 8, label: "Porcelain water bowl", style: "bowl" },
+      { id: "ph-carpet", x: 10, y: 8, label: "Pale delicate carpet", style: "carpet" },
+      { id: "ph-shelf", x: 13, y: 7, label: "Shelves of twoleg ornaments", style: "shelf" },
+      { id: "ph-toy", x: 12, y: 9, label: "A single dignified toy", style: "toy" },
     ],
     desc: "Bright, quiet, and full of sun. Princess's Twolegs keep an immaculate, gentle home.",
-    npcs: [],
+    rooms: [
+      { name: "Princess's Living Room", x0: 1, y0: 1, x1: 8, y1: 4 },
+      { name: "Princess's Sunroom", x0: 10, y0: 1, x1: 14, y1: 4 },
+      { name: "Princess's Bedchamber", x0: 1, y0: 6, x1: 14, y1: 10 },
+    ],
+    npcs: ["princess"],
   },
   "marmalade-house": {
     id: "marmalade-house",
     name: "Marmalade's House",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "mh-bed", x: 10, y: 6, label: "Marmalade's worn barn-style bed", style: "nest" },
-      { id: "mh-blanket", x: 14, y: 6, label: "Piled blankets", style: "blanket" },
-      { id: "mh-box", x: 17, y: 8, label: "A twoleg box (his favorite)", style: "box" },
-      { id: "mh-box2", x: 19, y: 10, label: "Another box (also his)", style: "box" },
-      { id: "mh-bowl", x: 6, y: 8, label: "Food bowl, licked clean", style: "bowl" },
-      { id: "mh-bowl2", x: 8, y: 8, label: "Water bowl", style: "bowl" },
-      { id: "mh-toy", x: 12, y: 11, label: "Chewed toy mouse", style: "toy" },
-      { id: "mh-toy2", x: 9, y: 13, label: "Ball under the table", style: "toy" },
-      { id: "mh-table", x: 12, y: 9, label: "Heavy wooden table", style: "table" },
-      { id: "mh-counter", x: 5, y: 12, label: "Kitchen counter to spy from", style: "cabinet" },
-      { id: "mh-lamp", x: 19, y: 13, label: "Kitchen lamp", style: "lamp" },
+      // kitchen (west) / living room (east) over a hall + bedroom
+      { id: "mh-counter", x: 3, y: 2, label: "Kitchen counter to spy from", style: "cabinet" },
+      { id: "mh-stove", x: 6, y: 2, label: "Big warm stove", style: "stove" },
+      { id: "mh-table", x: 8, y: 6, label: "Heavy wooden table", style: "table" },
+      { id: "mh-sofa", x: 15, y: 4, label: "Dented old sofa", style: "sofa" },
+      { id: "mh-box", x: 18, y: 2, label: "A twoleg box (his favorite)", style: "box" },
+      { id: "mh-window", x: 19, y: 1, label: "Kitchen-garden window", style: "window" },
+      { id: "mh-bowl", x: 3, y: 11, label: "Food bowl, licked clean", style: "bowl" },
+      { id: "mh-bowl2", x: 5, y: 11, label: "Water bowl", style: "bowl" },
+      { id: "mh-toy", x: 8, y: 12, label: "Chewed toy mouse", style: "toy" },
+      { id: "mh-bed", x: 16, y: 11, label: "Marmalade's worn barn-style bed", style: "nest" },
+      { id: "mh-blanket", x: 14, y: 12, label: "Piled blankets", style: "blanket" },
+      { id: "mh-box2", x: 18, y: 12, label: "Another box (also his)", style: "box" },
     ],
     desc: "A big, busy kitchen-house. Marmalade rules it from the top of the table and naps in boxes.",
-    npcs: [],
+    rooms: [
+      { name: "Marmalade's Kitchen", x0: 1, y0: 1, x1: 10, y1: 7 },
+      { name: "Marmalade's Living Room", x0: 12, y0: 1, x1: 19, y1: 7 },
+      { name: "The Back Hallway", x0: 1, y0: 9, x1: 10, y1: 13 },
+      { name: "Marmalade's Bedroom", x0: 12, y0: 9, x1: 19, y1: 13 },
+    ],
+    npcs: ["marmalade"],
   },
   "ginger-house": {
     id: "ginger-house",
     name: "Ginger's House",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "gh-bed", x: 8, y: 6, label: "Ginger's traveling basket bed", style: "nest" },
-      { id: "gh-carpet", x: 12, y: 9, label: "Bright patterned rug", style: "carpet" },
-      { id: "gh-bowl", x: 7, y: 10, label: "Food bowl", style: "bowl" },
-      { id: "gh-bowl2", x: 9, y: 10, label: "Water bowl", style: "bowl" },
-      { id: "gh-toy", x: 14, y: 7, label: "Dangling feather toy", style: "toy" },
-      { id: "gh-toy2", x: 16, y: 12, label: "Stuffed fish", style: "toy" },
-      { id: "gh-books", x: 19, y: 5, label: "Stacked twoleg scrolls (books)", style: "books" },
-      { id: "gh-sofa", x: 17, y: 8, label: "Long sofa", style: "sofa" },
-      { id: "gh-lamp", x: 5, y: 5, label: "Hallway lamp", style: "lamp" },
-      { id: "gh-window", x: 4, y: 12, label: "Front-window perch", style: "window" },
+      // kitchen (west) / living room (east) over a bedroom
+      { id: "gh-counter", x: 2, y: 2, label: "Kitchen counter", style: "cabinet" },
+      { id: "gh-stove", x: 4, y: 2, label: "Old ticking stove", style: "stove" },
+      { id: "gh-bowl", x: 6, y: 3, label: "Food bowl", style: "bowl" },
+      { id: "gh-bowl2", x: 7, y: 3, label: "Water bowl", style: "bowl" },
+      { id: "gh-sofa", x: 11, y: 3, label: "Long sofa", style: "sofa" },
+      { id: "gh-books", x: 14, y: 1, label: "Stacked twoleg scrolls (books)", style: "books" },
+      { id: "gh-lamp", x: 9, y: 2, label: "Hallway lamp", style: "lamp" },
+      { id: "gh-bed", x: 4, y: 8, label: "Ginger's traveling basket bed", style: "nest" },
+      { id: "gh-toy", x: 8, y: 8, label: "Dangling feather toy", style: "toy" },
+      { id: "gh-window", x: 12, y: 7, label: "Front-window perch", style: "window" },
+      { id: "gh-carpet", x: 10, y: 9, label: "Bright patterned rug", style: "carpet" },
     ],
     desc: "A well-walked house with a view of the whole street — Ginger patrols it twice a day.",
-    npcs: [],
+    rooms: [
+      { name: "Ginger's Kitchen", x0: 1, y0: 1, x1: 7, y1: 4 },
+      { name: "Ginger's Living Room", x0: 9, y0: 1, x1: 14, y1: 4 },
+      { name: "Ginger's Bedroom", x0: 1, y0: 6, x1: 14, y1: 10 },
+    ],
+    npcs: ["ginger"],
   },
   // ---------------------------------------------------------------------------
-  // Twoleg house archetypes A-E. Genuinely different floor plans and
-  // furnishings — House A: snug living room + kitchen nook; B: large lounge,
-  // separate bedrooms; C: cluttered old house, storage; D: kittypet-focused;
-  // E: hallway + two bedrooms + sunroom. No two layouts match.
+  // Twoleg house archetypes A-L. Genuinely different floor plans and
+  // furnishings; props are authored on exact cell coordinates (cellProps).
   // ---------------------------------------------------------------------------
   "house-a": {
     id: "house-a",
     name: "A Snug Twoleg Nest",
     walls: roomWithDoor("bottom", 12),
     props: [
-      // small living room (west) with a hearth
-      { id: "ha-rug", x: 7, y: 8, label: "Round braided rug", style: "carpet" },
-      { id: "ha-armchair", x: 4, y: 5, label: "Worn armchair", style: "chair" },
-      { id: "ha-lamp", x: 4, y: 10, label: "Floor lamp", style: "lamp" },
-      { id: "ha-books", x: 20, y: 4, label: "Twoleg leaf-clusters (books)", style: "books" },
-      // tiny kitchen nook (northeast)
-      { id: "ha-counter", x: 18, y: 5, label: "Kitchen counter", style: "cabinet" },
-      { id: "ha-counter2", x: 20, y: 7, label: "Cupboard with clinking dishes", style: "cabinet" },
-      { id: "ha-bowl", x: 16, y: 6, label: "Kittypet food bowl", style: "bowl" },
-      { id: "ha-bowl2", x: 17, y: 7, label: "Water bowl", style: "bowl" },
-      // kittypet corner
-      { id: "ha-bed", x: 12, y: 6, label: "Cushioned cat bed by the warmth", style: "nest" },
-      { id: "ha-toy", x: 10, y: 11, label: "Lost ball under the table", style: "toy" },
-      { id: "ha-table", x: 12, y: 11, label: "Small eating-table", style: "table" },
-      { id: "ha-window", x: 8, y: 13, label: "Window over the yard", style: "window" },
+      // living room (west) / kitchen nook (east) over one bedroom
+      { id: "ha-armchair", x: 3, y: 3, label: "Worn armchair", style: "chair" },
+      { id: "ha-rug", x: 6, y: 3, label: "Round braided rug", style: "carpet" },
+      { id: "ha-lamp", x: 2, y: 1, label: "Floor lamp", style: "lamp" },
+      { id: "ha-counter", x: 11, y: 2, label: "Kitchen counter", style: "cabinet" },
+      { id: "ha-counter2", x: 12, y: 3, label: "Cupboard with clinking dishes", style: "cabinet" },
+      { id: "ha-bowl", x: 11, y: 4, label: "Kittypet food bowl", style: "bowl" },
+      { id: "ha-bed", x: 5, y: 8, label: "Cushioned cat bed by the warmth", style: "nest" },
+      { id: "ha-table", x: 9, y: 8, label: "Small eating-table", style: "table" },
+      { id: "ha-toy", x: 11, y: 8, label: "Lost ball under the table", style: "toy" },
+      { id: "ha-window", x: 2, y: 8, label: "Window over the yard", style: "window" },
     ],
     desc: "A small, warm nest. Twoleg scents of toast and laundry; a kettle ticks on the counter.",
+    rooms: [
+      { name: "The Front Room", x0: 1, y0: 1, x1: 9, y1: 4 },
+      { name: "The Kitchen Nook", x0: 10, y0: 1, x1: 12, y1: 4 },
+      { name: "The Back Room", x0: 1, y0: 6, x1: 12, y1: 9 },
+    ],
     npcs: [],
   },
   "house-b": {
@@ -943,25 +1158,29 @@ export const interiors: Record<string, InteriorDef> = {
     name: "A Grand Twoleg Nest",
     walls: roomWithDoor("bottom", 12),
     props: [
-      // large lounge (center-south)
-      { id: "hb-sofa", x: 7, y: 10, label: "Long velvet sofa", style: "sofa" },
-      { id: "hb-sofa2", x: 17, y: 12, label: "Matching loveseat", style: "sofa" },
-      { id: "hb-table", x: 12, y: 10, label: "Low table with a twoleg picture-box (TV)", style: "table" },
-      { id: "hb-rug", x: 12, y: 11, label: "Huge soft rug", style: "carpet" },
-      { id: "hb-lamp", x: 5, y: 13, label: "Standing lamp", style: "lamp" },
-      { id: "hb-shelf", x: 20, y: 4, label: "Shelves of ornaments", style: "shelf" },
-      // bedroom corner (northwest)
-      { id: "hb-bed", x: 4, y: 4, label: "Twoleg sleeping-nest (bed)", style: "bed" },
-      { id: "hb-blanket", x: 6, y: 5, label: "Heaped blankets", style: "blanket" },
+      // bedroom (north-west) / kitchen (north-east) / grand lounge (south) / dining (south-east)
+      { id: "hb-bed", x: 4, y: 3, label: "Twoleg sleeping-nest (bed)", style: "bed" },
+      { id: "hb-blanket", x: 6, y: 3, label: "Heaped blankets", style: "blanket" },
       { id: "hb-drawer", x: 8, y: 4, label: "Wooden drawers", style: "cabinet" },
-      // kitchen strip (northeast)
-      { id: "hb-counter", x: 16, y: 4, label: "Polished counter", style: "cabinet" },
-      { id: "hb-cabinet", x: 20, y: 7, label: "Tall cabinet", style: "cabinet" },
-      { id: "hb-bowl", x: 14, y: 6, label: "Food bowl", style: "bowl" },
-      { id: "hb-bowl2", x: 15, y: 7, label: "Water bowl", style: "bowl" },
-      { id: "hb-toy", x: 10, y: 8, label: "Cat tunnel of crinkly paper", style: "toy" },
+      { id: "hb-counter", x: 15, y: 2, label: "Polished counter", style: "cabinet" },
+      { id: "hb-cabinet", x: 20, y: 4, label: "Tall cabinet", style: "cabinet" },
+      { id: "hb-bowl", x: 16, y: 5, label: "Food bowl", style: "bowl" },
+      { id: "hb-bowl2", x: 17, y: 5, label: "Water bowl", style: "bowl" },
+      { id: "hb-sofa", x: 5, y: 12, label: "Long velvet sofa", style: "sofa" },
+      { id: "hb-sofa2", x: 9, y: 13, label: "Matching loveseat", style: "sofa" },
+      { id: "hb-table", x: 7, y: 11, label: "Low table with a twoleg picture-box", style: "table" },
+      { id: "hb-rug", x: 7, y: 12, label: "Huge soft rug", style: "carpet" },
+      { id: "hb-table2", x: 17, y: 12, label: "Dining table", style: "table" },
+      { id: "hb-lamp", x: 21, y: 10, label: "Standing lamp", style: "lamp" },
+      { id: "hb-toy", x: 3, y: 10, label: "Cat tunnel of crinkly paper", style: "toy" },
     ],
     desc: "A big family nest — two sofas, a picture-box, and endless warm smells from the kitchen.",
+    rooms: [
+      { name: "The Master Bedroom", x0: 1, y0: 1, x1: 10, y1: 7 },
+      { name: "The Kitchen", x0: 13, y0: 1, x1: 21, y1: 7 },
+      { name: "The Grand Lounge", x0: 1, y0: 10, x1: 10, y1: 15 },
+      { name: "The Dining Corner", x0: 14, y0: 10, x1: 21, y1: 15 },
+    ],
     npcs: [],
   },
   "house-c": {
@@ -969,20 +1188,26 @@ export const interiors: Record<string, InteriorDef> = {
     name: "An Old Twoleg Nest",
     walls: roomWithDoor("bottom", 12),
     props: [
-      // cluttered storage feel: boxes everywhere, old furniture
-      { id: "hc-box", x: 5, y: 5, label: "Stacked cardboard boxes", style: "box" },
-      { id: "hc-box2", x: 6, y: 7, label: "Box with a cat-sized hole", style: "box" },
-      { id: "hc-box3", x: 19, y: 5, label: "More boxes, dust on top", style: "box" },
-      { id: "hc-chair", x: 12, y: 5, label: "Broken-backed chair", style: "chair" },
-      { id: "hc-dresser", x: 4, y: 11, label: "Scuffed old dresser", style: "cabinet" },
-      { id: "hc-rug", x: 12, y: 9, label: "Faded threadbare rug", style: "carpet" },
-      { id: "hc-cabinet", x: 20, y: 9, label: "Paint-peeling cabinet", style: "cabinet" },
-      { id: "hc-bowl", x: 8, y: 12, label: "Chipped food bowl", style: "bowl" },
-      { id: "hc-bowl2", x: 9, y: 13, label: "Stained water bowl", style: "bowl" },
-      { id: "hc-lamp", x: 18, y: 12, label: "Flickering corner lamp", style: "lamp" },
-      { id: "hc-plant", x: 16, y: 6, label: "Leggy houseplant, half-wild", style: "moss" },
+      // storage room (north-west) / living room (north-east) / hall + back bedroom
+      { id: "hc-box", x: 3, y: 3, label: "Stacked cardboard boxes", style: "box" },
+      { id: "hc-box2", x: 5, y: 4, label: "Box with a cat-sized hole", style: "box" },
+      { id: "hc-plant", x: 7, y: 2, label: "Leggy houseplant, half-wild", style: "moss" },
+      { id: "hc-chair", x: 12, y: 3, label: "Broken-backed chair", style: "chair" },
+      { id: "hc-lamp", x: 15, y: 2, label: "Flickering corner lamp", style: "lamp" },
+      { id: "hc-cabinet", x: 15, y: 5, label: "Paint-peeling cabinet", style: "cabinet" },
+      { id: "hc-dresser", x: 3, y: 9, label: "Scuffed old dresser", style: "cabinet" },
+      { id: "hc-rug", x: 7, y: 9, label: "Faded threadbare rug", style: "carpet" },
+      { id: "hc-bowl", x: 4, y: 11, label: "Chipped food bowl", style: "bowl" },
+      { id: "hc-bowl2", x: 6, y: 11, label: "Stained water bowl", style: "bowl" },
+      { id: "hc-bed", x: 13, y: 10, label: "A bed under a dust sheet", style: "bed" },
     ],
     desc: "A quiet old nest full of boxes and dust-shapes. Something small rustles behind the dresser.",
+    rooms: [
+      { name: "The Storage Room", x0: 1, y0: 1, x1: 8, y1: 5 },
+      { name: "The Old Parlor", x0: 10, y0: 1, x1: 16, y1: 5 },
+      { name: "The Main Hall", x0: 1, y0: 7, x1: 8, y1: 11 },
+      { name: "The Back Bedroom", x0: 10, y0: 7, x1: 16, y1: 11 },
+    ],
     npcs: [],
   },
   "house-d": {
@@ -990,21 +1215,57 @@ export const interiors: Record<string, InteriorDef> = {
     name: "A Kittypet's Paradise",
     walls: roomWithDoor("bottom", 12),
     props: [
-      // completely cat-focused home
-      { id: "hd-tower", x: 6, y: 5, label: "Floor-to-ceiling cat tree", style: "post" },
-      { id: "hd-post", x: 9, y: 4, label: "Second scratching post (well used)", style: "post" },
-      { id: "hd-bed", x: 12, y: 5, label: "Round quilted cat bed", style: "nest" },
-      { id: "hd-bed2", x: 18, y: 6, label: "Window-hammock bed", style: "nest" },
-      { id: "hd-toy", x: 8, y: 8, label: "Pompoms in a basket", style: "toy" },
-      { id: "hd-toy2", x: 15, y: 8, label: "Feather teaser on a stick", style: "toy" },
-      { id: "hd-toy3", x: 17, y: 11, label: "Wind-up mouse", style: "toy" },
-      { id: "hd-bowl", x: 5, y: 11, label: "Raised food bowl stand", style: "bowl" },
-      { id: "hd-bowl2", x: 7, y: 12, label: "Water fountain, always running", style: "bowl" },
-      { id: "hd-blanket", x: 12, y: 12, label: "Pile of fleece blankets", style: "blanket" },
-      { id: "hd-sofa", x: 18, y: 13, label: "Sofa with a cat-shaped dent", style: "sofa" },
-      { id: "hd-lamp", x: 4, y: 8, label: "Sunset-colored lamp", style: "lamp" },
+      // living room (west) / kitchen (east) over entry + dining; stairs to the bedrooms upstairs
+      { id: "hd-tower", x: 3, y: 3, label: "Floor-to-ceiling cat tree", style: "post" },
+      { id: "hd-post", x: 6, y: 2, label: "Second scratching post (well used)", style: "post" },
+      { id: "hd-bed", x: 8, y: 4, label: "Round quilted cat bed", style: "nest" },
+      { id: "hd-toy", x: 4, y: 5, label: "Pompoms in a basket", style: "toy" },
+      { id: "hd-lamp", x: 2, y: 5, label: "Sunset-colored lamp", style: "lamp" },
+      { id: "hd-counter", x: 15, y: 2, label: "Kitchen counter", style: "cabinet" },
+      { id: "hd-coldbox", x: 18, y: 2, label: "Cold box full of fish-things", style: "cabinet" },
+      { id: "hd-bowl", x: 16, y: 5, label: "Raised food bowl stand", style: "bowl" },
+      { id: "hd-bowl2", x: 17, y: 5, label: "Water fountain, always running", style: "bowl" },
+      { id: "hd-bed2", x: 18, y: 11, label: "Window-hammock bed", style: "nest" },
+      { id: "hd-toy2", x: 15, y: 10, label: "Feather teaser on a stick", style: "toy" },
+      { id: "hd-table", x: 17, y: 13, label: "Dining table", style: "table" },
+      { id: "hd-blanket", x: 7, y: 11, label: "Pile of fleece blankets", style: "blanket" },
+      { id: "hd-sofa", x: 3, y: 9, label: "Sofa with a cat-shaped dent", style: "sofa" },
     ],
-    desc: "Every corner belongs to the cats here — towers, hammocks, a running water fountain, toys underfoot.",
+    desc: "Every corner belongs to the cats here — towers, hammocks, a running water fountain, toys underfoot. A staircase climbs to the bedrooms.",
+    rooms: [
+      { name: "The Cat Parlor", x0: 1, y0: 1, x1: 10, y1: 6 },
+      { name: "The Kitchen", x0: 14, y0: 1, x1: 18, y1: 6 },
+      { name: "The Entry Hall", x0: 1, y0: 8, x1: 10, y1: 13 },
+      { name: "The Dining Room", x0: 14, y0: 8, x1: 18, y1: 13 },
+    ],
+    stairs: [{ x: 3, y: 12, w: 2, h: 2, toX: 5, toY: 12, target: "house-d-up" }],
+    npcs: [],
+  },
+  "house-d-up": {
+    id: "house-d-up",
+    name: "Upstairs Bedrooms",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // landing (west) / master bedroom (north-east) / child's room (mid-east) / bathroom (south-east)
+      { id: "hdu-window", x: 2, y: 1, label: "Landing window over the street", style: "window" },
+      { id: "hdu-bed", x: 14, y: 3, label: "The Twolegs' great bed", style: "bed" },
+      { id: "hdu-cabinet", x: 17, y: 4, label: "Wardrobe", style: "cabinet" },
+      { id: "hdu-lamp", x: 12, y: 4, label: "Bedside lamp", style: "lamp" },
+      { id: "hdu-bed2", x: 14, y: 8, label: "A kitten's small bed", style: "bed" },
+      { id: "hdu-toy", x: 16, y: 8, label: "Scattered toys", style: "toy" },
+      { id: "hdu-box", x: 17, y: 7, label: "Toy chest", style: "box" },
+      { id: "hdu-tub", x: 14, y: 12, label: "Big white water-tub", style: "tub" },
+      { id: "hdu-toilet", x: 17, y: 12, label: "Twoleg water-seat", style: "toilet" },
+      { id: "hdu-sink", x: 18, y: 10, label: "Wash-basin", style: "cabinet" },
+    ],
+    desc: "The quiet upstairs: two bedrooms, a kitten's room, and a bathroom full of strange water-things.",
+    rooms: [
+      { name: "The Upstairs Landing", x0: 1, y0: 1, x1: 8, y1: 13 },
+      { name: "The Master Bedroom", x0: 10, y0: 1, x1: 18, y1: 5 },
+      { name: "The Kitten's Room", x0: 10, y0: 7, x1: 18, y1: 9 },
+      { name: "The Bathroom", x0: 10, y0: 11, x1: 18, y1: 13 },
+    ],
+    stairs: [{ x: 3, y: 11, w: 2, h: 2, toX: 5, toY: 13, target: "house-d" }],
     npcs: [],
   },
   "house-e": {
@@ -1012,28 +1273,115 @@ export const interiors: Record<string, InteriorDef> = {
     name: "A Sunny Twoleg Nest",
     walls: roomWithDoor("bottom", 12),
     props: [
-      // hallway + two bedrooms + sunroom layout
-      { id: "he-runner", x: 12, y: 9, label: "Long hallway runner rug", style: "carpet" },
-      { id: "he-bed", x: 5, y: 4, label: "First bedroom's bed", style: "bed" },
-      { id: "he-nightstand", x: 8, y: 5, label: "Nightstand with a ticking clock", style: "cabinet" },
-      { id: "he-bed2", x: 5, y: 12, label: "Second bedroom's bed", style: "bed" },
-      { id: "he-drawer", x: 8, y: 13, label: "Drawers of folded twoleg pelts", style: "cabinet" },
-      // sunroom (east)
-      { id: "he-window", x: 19, y: 4, label: "Sunroom glass, warm with light", style: "window" },
-      { id: "he-window2", x: 20, y: 7, label: "Another wide pane", style: "window" },
-      { id: "he-plant", x: 17, y: 5, label: "Potted fern", style: "moss" },
-      { id: "he-plant2", x: 19, y: 10, label: "Tall palm in a clay pot", style: "moss" },
-      { id: "he-chair", x: 16, y: 8, label: "Wicker sun chair", style: "chair" },
-      { id: "he-bowl", x: 11, y: 6, label: "Food bowl by the hallway", style: "bowl" },
-      { id: "he-bowl2", x: 13, y: 7, label: "Water bowl", style: "bowl" },
-      { id: "he-lamp", x: 10, y: 11, label: "Hall lamp", style: "lamp" },
+      // kitchen (north-west) / sunroom (north-east) / bedroom (south-west) / reading den (south-east)
+      { id: "he-counter", x: 3, y: 2, label: "Kitchen counter", style: "cabinet" },
+      { id: "he-stove", x: 5, y: 2, label: "Warm stove", style: "stove" },
+      { id: "he-table", x: 7, y: 5, label: "Breakfast table", style: "table" },
+      { id: "he-window", x: 16, y: 1, label: "Sunroom glass, warm with light", style: "window" },
+      { id: "he-window2", x: 19, y: 3, label: "Another wide pane", style: "window" },
+      { id: "he-plant", x: 14, y: 3, label: "Potted fern", style: "moss" },
+      { id: "he-plant2", x: 18, y: 5, label: "Tall palm in a clay pot", style: "moss" },
+      { id: "he-chair", x: 16, y: 4, label: "Wicker sun chair", style: "chair" },
+      { id: "he-bed", x: 4, y: 11, label: "First bedroom's bed", style: "bed" },
+      { id: "he-nightstand", x: 7, y: 11, label: "Nightstand with a ticking clock", style: "cabinet" },
+      { id: "he-bowl", x: 9, y: 9, label: "Food bowl by the hallway", style: "bowl" },
+      { id: "he-bowl2", x: 10, y: 9, label: "Water bowl", style: "bowl" },
+      { id: "he-books", x: 15, y: 11, label: "Twoleg leaf-clusters (books)", style: "books" },
+      { id: "he-lamp", x: 17, y: 12, label: "Reading lamp", style: "lamp" },
     ],
-    desc: "A bright nest with a glass sunroom. Dust motes drift over two bedrooms and a warm hallway.",
+    desc: "A bright nest with a glass sunroom. Dust motes drift over the bedrooms and a warm hallway.",
+    rooms: [
+      { name: "The Kitchen", x0: 1, y0: 1, x1: 9, y1: 6 },
+      { name: "The Sunroom", x0: 13, y0: 1, x1: 19, y1: 6 },
+      { name: "The Bedroom", x0: 1, y0: 8, x1: 9, y1: 13 },
+      { name: "The Reading Den", x0: 13, y0: 8, x1: 19, y1: 13 },
+    ],
     npcs: [],
   },
-  // --- Twoleg interiors added in the world-scale upgrade: every house on
-  // Smudge's street now has its own intentional floor plan (props are on the
-  // 24x18 design grid and remap proportionally per room). ---
+  "house-j": {
+    id: "house-j",
+    name: "A Quiet Twoleg Nest",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // kitchen (west) / living room (east) over hall + bedroom
+      { id: "hj-counter", x: 3, y: 2, label: "Kitchen counter", style: "cabinet" },
+      { id: "hj-stove", x: 5, y: 2, label: "Black stove", style: "stove" },
+      { id: "hj-table", x: 7, y: 5, label: "Kitchen table", style: "table" },
+      { id: "hj-sofa", x: 13, y: 4, label: "Sagging comfortable sofa", style: "sofa" },
+      { id: "hj-carpet", x: 14, y: 2, label: "Worn sitting-rug", style: "carpet" },
+      { id: "hj-window", x: 16, y: 1, label: "Window over the back garden", style: "window" },
+      { id: "hj-post", x: 2, y: 10, label: "Well-clawed scratching post", style: "post" },
+      { id: "hj-bowl", x: 5, y: 9, label: "Food bowl", style: "bowl" },
+      { id: "hj-bowl2", x: 7, y: 9, label: "Water bowl", style: "bowl" },
+      { id: "hj-bed", x: 14, y: 10, label: "Round cat bed", style: "nest" },
+      { id: "hj-toy", x: 12, y: 11, label: "Springy toy", style: "toy" },
+    ],
+    desc: "A quiet, tidy nest. The clock on the wall ticks louder than anything else in the street.",
+    rooms: [
+      { name: "The Kitchen", x0: 1, y0: 1, x1: 8, y1: 6 },
+      { name: "The Living Room", x0: 11, y0: 1, x1: 16, y1: 6 },
+      { name: "The Hallway", x0: 1, y0: 8, x1: 11, y1: 11 },
+      { name: "The Bedroom", x0: 12, y0: 8, x1: 16, y1: 11 },
+    ],
+    npcs: [],
+  },
+  "house-k": {
+    id: "house-k",
+    name: "A Cluttered Twoleg Nest",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // living room (west) / bedroom (center-east) / kitchen (south-center) / study (south-east)
+      { id: "hk-sofa", x: 4, y: 3, label: "Deep old sofa", style: "sofa" },
+      { id: "hk-rug", x: 7, y: 4, label: "Crooked rug", style: "carpet" },
+      { id: "hk-window", x: 2, y: 1, label: "Window over the porch", style: "window" },
+      { id: "hk-bed", x: 12, y: 3, label: "Unmade bed", style: "bed" },
+      { id: "hk-drawer", x: 16, y: 3, label: "Overfull dresser", style: "cabinet" },
+      { id: "hk-counter", x: 4, y: 9, label: "Kitchen counter", style: "cabinet" },
+      { id: "hk-stove", x: 6, y: 9, label: "Stove with a whistling kettle", style: "stove" },
+      { id: "hk-bowl", x: 11, y: 10, label: "Food bowl", style: "bowl" },
+      { id: "hk-shelf", x: 16, y: 9, label: "Tall bookshelf", style: "shelf" },
+      { id: "hk-books", x: 16, y: 11, label: "Stack of books", style: "books" },
+      { id: "hk-chair", x: 13, y: 11, label: "Reading chair", style: "chair" },
+    ],
+    desc: "Books drift across every table and the sofa has swallowed many a lost sock.",
+    rooms: [
+      { name: "The Front Room", x0: 1, y0: 1, x1: 9, y1: 5 },
+      { name: "The Bedroom", x0: 11, y0: 1, x1: 17, y1: 5 },
+      { name: "The Kitchen", x0: 1, y0: 7, x1: 9, y1: 12 },
+      { name: "The Study", x0: 15, y0: 7, x1: 17, y1: 12 },
+    ],
+    npcs: [],
+  },
+  "house-l": {
+    id: "house-l",
+    name: "A Roomy Twoleg Nest",
+    walls: roomWithDoor("bottom", 12),
+    props: [
+      // kitchen (north-west) / living room (north-east) / dining (south-west) / bedroom (south-east)
+      { id: "hl-counter", x: 3, y: 2, label: "Kitchen counter", style: "cabinet" },
+      { id: "hl-stove", x: 5, y: 2, label: "Big stove", style: "stove" },
+      { id: "hl-coldbox", x: 7, y: 2, label: "Humming cold box", style: "cabinet" },
+      { id: "hl-sofa", x: 13, y: 3, label: "Wide family sofa", style: "sofa" },
+      { id: "hl-table", x: 17, y: 4, label: "Low table", style: "table" },
+      { id: "hl-window", x: 18, y: 1, label: "Picture window", style: "window" },
+      { id: "hl-table2", x: 4, y: 11, label: "Dining table", style: "table" },
+      { id: "hl-chair", x: 6, y: 12, label: "Dining chair", style: "chair" },
+      { id: "hl-bowl", x: 9, y: 10, label: "Food bowl", style: "bowl" },
+      { id: "hl-bed", x: 15, y: 11, label: "Twoleg bed", style: "bed" },
+      { id: "hl-blanket", x: 17, y: 12, label: "Folded blankets", style: "blanket" },
+      { id: "hl-toy", x: 11, y: 12, label: "Rolling twoleg ball", style: "toy" },
+    ],
+    desc: "A roomy nest with four good rooms and a kitchen that always smells of bread.",
+    rooms: [
+      { name: "The Kitchen", x0: 1, y0: 1, x1: 8, y1: 7 },
+      { name: "The Living Room", x0: 11, y0: 1, x1: 18, y1: 7 },
+      { name: "The Dining Room", x0: 1, y0: 9, x1: 12, y1: 13 },
+      { name: "The Bedroom", x0: 14, y0: 9, x1: 18, y1: 13 },
+    ],
+    npcs: [],
+  },
+  // --- single-room cottages kept from the world-scale upgrade (smaller homes
+  // on the street's edge): cozy, but not partitioned. ---
   "rusty-living": {
     id: "rusty-living",
     name: "Rusty's Front Room",
@@ -1085,12 +1433,12 @@ export const interiors: Record<string, InteriorDef> = {
     desc: "Cold floor tiles, a towering cold box, and a bowl that smells faintly of fish.",
     walls: roomWithDoor("bottom", 12),
     props: [
-      { id: "hh-cabinet-1", x: 3, y: 4, label: "Kitchen counter", style: "cabinet" },
-      { id: "hh-cabinet-2", x: 9, y: 4, label: "Kitchen counter", style: "cabinet" },
-      { id: "hh-coldbox", x: 18, y: 4, label: "The humming cold box", style: "cabinet" },
-      { id: "hh-bowl-1", x: 12, y: 9, label: "Water bowl", style: "bowl" },
-      { id: "hh-bowl-2", x: 20, y: 12, label: "Food bowl", style: "bowl" },
-      { id: "hh-plant", x: 4, y: 12, label: "Window plant", style: "plant" },
+      { id: "hh2-cabinet-1", x: 3, y: 4, label: "Kitchen counter", style: "cabinet" },
+      { id: "hh2-cabinet-2", x: 9, y: 4, label: "Kitchen counter", style: "cabinet" },
+      { id: "hh2-coldbox", x: 18, y: 4, label: "The humming cold box", style: "cabinet" },
+      { id: "hh2-bowl-1", x: 12, y: 9, label: "Water bowl", style: "bowl" },
+      { id: "hh2-bowl-2", x: 20, y: 12, label: "Food bowl", style: "bowl" },
+      { id: "hh2-plant", x: 4, y: 12, label: "Window plant", style: "plant" },
     ],
   },
   "house-i": {
@@ -1126,10 +1474,15 @@ export const interiors: Record<string, InteriorDef> = {
 };
 
 // Fit every room's wall grid to its geometry (rounded cave dens, varied
-// sizes) — the doorway gap stays centered in the bottom wall.
+// sizes), then carve the floor plan's interior walls with their doorways.
+// Upper floors (frontDoor: false) have a fully closed bottom wall.
 for (const room of Object.values(interiors)) {
   const geo = ROOM_GEO[room.id];
-  if (geo) room.walls = roomSized(geo.w, geo.h, geo.cave);
+  if (!geo) continue;
+  let rows = roomSized(geo.w, geo.h, geo.cave, geo.frontDoor !== false);
+  const plan = PLAN_WALLS[room.id];
+  if (plan) rows = applyWallSegs(rows, plan);
+  room.walls = rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -1639,6 +1992,10 @@ export class GameCanvas {
   private huntedCount = 0;
   /** prevents instant re-enter when stepping back out through a doorway */
   private doorCooldownUntil = 0;
+  /** the room the player entered from outside (walk-out only works here) */
+  private groundFloorId: string | null = null;
+  /** stair-portal cooldown (prevents up/down ping-pong on one step) */
+  private stairCooldownUntil = 0;
   /** re-armed once the player steps away from every doorway */
   private doorArmed = true;
   /** active waypoint in world px (set from the map's real tile coordinates) */
@@ -1832,6 +2189,66 @@ export class GameCanvas {
     respawnBothDirections(this.time);
   }
 
+  /** "I am in the kitchen": the room label for the player's current cell. */
+  private roomNameAt(room: InteriorDef | undefined, px: number, py: number): string {
+    if (!room) return "Inside";
+    const cx = Math.floor(px / 32);
+    const cy = Math.floor(py / 32);
+    for (const z of room.rooms ?? []) {
+      if (cx >= z.x0 && cx <= z.x1 && cy >= z.y0 && cy <= z.y1) return z.name;
+    }
+    return room.name;
+  }
+
+  /**
+   * Interactive furniture (spec: objects actually do things). The cat
+   * performs the REAL animation — never a text-only stub.
+   */
+  furnitureAction(kind: string): string | null {
+    switch (kind) {
+      case "f-sleep":
+        this.setPose("sleep", 10);
+        return "You curl up on the softness and drift into a warm doze.";
+      case "f-lie":
+        this.setPose("lie", 6);
+        return "You flop down where it's soft and let your fur sink in.";
+      case "f-sit":
+        this.setPose("sit", 5);
+        return "You settle in comfortably and tuck your paws under you.";
+      case "f-groom":
+        this.startEmote("groom");
+        return "You groom the dust of the street off your fur.";
+      case "f-eat":
+        this.eat(25);
+        this.engineSfx("eat", { volume: 0.6, throttleMs: 800 });
+        return "Crunch, crunch. The Twolegs' bowl food isn't fresh-kill, but it fills the belly.";
+      case "f-drink":
+        this.drink();
+        this.engineSfx("drink", { volume: 0.5, throttleMs: 800 });
+        return "You lap up the cool water.";
+      case "f-play":
+        this.startEmote("play");
+        return "You bat the toy around like true prey. Somewhere, a warrior would judge you.";
+      case "f-look":
+        this.startEmote("look");
+        return "You watch the world move beyond the glass.";
+      case "f-sniff":
+        this.startEmote("sniff");
+        return "You sniff carefully. Interesting. Twoleg-things smell of everything at once.";
+      case "f-hide":
+        this.setPose("crouch", 4);
+        return "You squeeze inside. Nothing can see you now.";
+      case "f-scratch":
+        this.startEmote("scratch");
+        return "You scratch that itch just right.";
+      case "f-warm":
+        this.setPose("lie", 6);
+        return "The leftover warmth soaks into your fur.";
+      default:
+        return null;
+    }
+  }
+
   enterInterior(id: string, fromObj?: { x: number; y: number; w: number; h: number; id?: string }) {
     const room = interiors[id];
     if (!room) return;
@@ -1846,6 +2263,7 @@ export class GameCanvas {
     }
     // traffic is world-persistent: cars keep driving while the cat is indoors
     this.interiorId = id;
+    this.groundFloorId = id; // walking out the front door works from here
     const geo = ROOM_GEO[id];
     this.px = ((geo?.w ?? ROOM_W) / 2) * 32;
     this.py = ((geo?.h ?? ROOM_H) - 3) * 32;
@@ -2718,9 +3136,28 @@ export class GameCanvas {
           this.px = nx;
           this.py = ny;
         }
+        // stair portals: walk onto the steps and you arrive on the other
+        // floor — a real physical transition (the cat walks, no teleport UI)
+        if (this.time > this.stairCooldownUntil) {
+          for (const st of room.stairs ?? []) {
+            const scx = Math.floor(this.px / 32);
+            const scy = Math.floor(this.py / 32);
+            if (scx >= st.x && scx < st.x + st.w && scy >= st.y && scy < st.y + st.h) {
+              this.stairCooldownUntil = this.time + 0.9;
+              this.interiorId = st.target;
+              this.px = st.toX * 32 + 16;
+              this.py = st.toY * 32 + 16;
+              this.engineSfx("npcstep", { volume: 0.5, throttleMs: 400 });
+              this.cb.onInteriorChange(this.interiorId);
+              break;
+            }
+          }
+        }
         // walk-out: step into the doorway gap at the bottom wall to leave —
-        // no key press needed (mirrors the walk-in entrances outside)
+        // no key press needed (mirrors the walk-in entrances outside).
+        // Only the GROUND floor has a front door; upstairs you must walk down.
         if (
+          this.interiorId === this.groundFloorId &&
           this.py > ((geo?.h ?? ROOM_H) - 2.1) * 32 + (this.swimming ? 90 : 0) &&
           Math.abs(this.px - gw / 2) < (this.swimming ? 100 : 40)
         ) {
@@ -3160,7 +3597,7 @@ export class GameCanvas {
     // --- area + nearby detection ---
     const area = areaAt(this.px, this.py);
     const areaName = this.interiorId
-      ? interiors[this.interiorId]?.name ?? "Inside"
+      ? this.roomNameAt(interiors[this.interiorId], this.px, this.py)
       : area?.name ?? "Warrior Territories";
     if (areaName !== this.lastArea) {
       this.lastArea = areaName;
@@ -3250,7 +3687,12 @@ export class GameCanvas {
         const d = Math.hypot(pp.x - this.px, pp.y - this.py);
         if (d < bestD) {
           bestD = d;
-          near = { kind: "object", label: prop.label };
+          // furniture is interactive: E performs the real cat action
+          near = {
+            kind: "object",
+            label: prop.label,
+            interact: (prop.interact ?? defaultFurnitureAction(prop.style)) as unknown as InteractableKind,
+          };
         }
       }
       // NPCs inside (same stable in-room positions as the renderer)
