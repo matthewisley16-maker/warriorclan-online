@@ -509,12 +509,12 @@ const otherClanObjects: WorldObject[] = [
   { id: "house-2", x: t(63.6), y: t(138), w: t(3.8), h: t(3.2), label: "Twoleg nest", interior: "house-a", style: "house", solid: true, scale: 1.1, doorAt: { dx: 0, dy: 0 }},
   { id: "house-3", x: t(92.4), y: t(138), w: t(3.8), h: t(3.2), label: "Twoleg nest", interior: "house-c", style: "house", solid: true, scale: 0.95, doorAt: { dx: 0, dy: 0 }},
   { id: "house-4", x: t(70), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", interior: "house-b", style: "house", solid: true, scale: 1, doorAt: { dx: 0, dy: 0 }},
-  { id: "house-5", x: t(85), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", interior: "house-e", style: "house", solid: true, scale: 1.05, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-5", x: t(85), y: t(134), w: t(4), h: t(3), label: "Twoleg nest", interior: "house-k", style: "house", solid: true, scale: 1.05, doorAt: { dx: 0, dy: 0 }},
   // Southern street row (across the main street)
-  { id: "house-6", x: t(58), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-a", style: "house", solid: true, scale: 1, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-6", x: t(58), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-j", style: "house", solid: true, scale: 1, doorAt: { dx: 0, dy: 0 }},
   { id: "house-7", x: t(70), y: t(160), w: t(4), h: t(3), label: "Twoleg nest", interior: "house-d", style: "house", solid: true, scale: 1.1, doorAt: { dx: 0, dy: 0 }},
-  { id: "house-8", x: t(84), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-b", style: "house", solid: true, scale: 0.9, doorAt: { dx: 0, dy: 0 }},
-  { id: "house-9", x: t(96), y: t(160), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-e", style: "house", solid: true, scale: 1.05, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-8", x: t(84), y: t(158), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-e", style: "house", solid: true, scale: 0.9, doorAt: { dx: 0, dy: 0 }},
+  { id: "house-9", x: t(96), y: t(160), w: t(4.4), h: t(3.2), label: "Twoleg nest", interior: "house-l", style: "house", solid: true, scale: 1.05, doorAt: { dx: 0, dy: 0 }},
   // Porches — front doors of a few nests (rendered as small wooden slabs)
   { id: "porch-1", x: t(78), y: t(142.4), w: t(1.6), h: t(1), label: "Rusty's porch", style: "log" },
   { id: "porch-2", x: t(92), y: t(140.2), w: t(1.6), h: t(1), label: "Nest porch", style: "log" },
@@ -1181,7 +1181,7 @@ export const npcs: NPCDef[] = [
   {
     id: "smudge", name: "Smudge", role: "Kittypet friend", clan: "kittypet", wander: false,
     fur: "#9c9ca4", furDark: "#7c7c85", eye: "#5b8fd6",
-    home: { x: t(74), y: t(142) },
+    home: { x: t(74.7), y: t(145) },
     lines: [
       "Rusty? Is that you? You look… wild. Henry says the forest cats eat bones and have fighting claws!",
       "Come back to Twolegplace before dark, Rusty. The forest isn't for house cats.",
@@ -1192,7 +1192,7 @@ export const npcs: NPCDef[] = [
   {
     id: "henry", name: "Henry", role: "Kittypet", clan: "kittypet", wander: true,
     fur: "#e3c088", furDark: "#c19c5f", eye: "#5b8fd6", pattern: "tabby",
-    home: { x: t(64), y: t(143) },
+    home: { x: t(60.9), y: t(145) },
     schedule: [
       { h: 8, x: t(64), y: t(143) },
       { h: 12, x: t(68), y: t(150), activity: "sunning on the garden wall" },
@@ -1207,7 +1207,7 @@ export const npcs: NPCDef[] = [
   {
     id: "marmalade", name: "Marmalade", role: "Kittypet", clan: "kittypet", wander: true,
     fur: "#d96b2f", furDark: "#b04f1d", eye: "#d9c04a", pattern: "tabby",
-    home: { x: t(92), y: t(143) },
+    home: { x: t(95.7), y: t(145) },
     schedule: [
       { h: 7, x: t(92), y: t(143) },
       { h: 11, x: t(88), y: t(150), activity: "patrolling the back fence" },
@@ -1222,7 +1222,7 @@ export const npcs: NPCDef[] = [
   {
     id: "princess", name: "Princess", role: "Kittypet", clan: "kittypet", wander: false,
     fur: "#e8e6e0", furDark: "#c9c6bd", eye: "#4fae6e", chest: "#f4e9d8",
-    home: { x: t(70), y: t(152) },
+    home: { x: t(70.6), y: t(139.3) },
     lines: [
       "Oh! You startled me. I was watching the birds on the fence.",
       "My Twolegs brush me every day. I'm far too refined for forest adventures.",
@@ -1247,7 +1247,7 @@ export const npcs: NPCDef[] = [
   {
     id: "ginger", name: "Ginger", role: "Kittypet", clan: "kittypet", wander: true,
     fur: "#e8963f", furDark: "#c2752a", eye: "#7fae4e",
-    home: { x: t(84), y: t(161) },
+    home: { x: t(84.6), y: t(163.7) },
     schedule: [
       { h: 8, x: t(84), y: t(161) },
       { h: 12, x: t(78), y: t(150), activity: "walking the main street" },
@@ -1917,19 +1917,10 @@ function buildTownDetail() {
     { id: "ew-hidden-clearing", x: t(220), y: t(128), w: t(2), h: t(1.6), label: "Secluded clearing", interact: "mossy-hollow", style: "flowerbed" },
   );
 
-  // ---- Distinct Twoleg interiors: the five rooms themselves live in
-  // engine.ts (InteriorDef/ROOM_GEO schema); here we wire each house to its
-  // new private room so "house-6..9" no longer share floor plans. ----
-  const rewire: Record<string, string> = {
-    "rusty-house": "rusty-living",
-    "house-6": "house-f",
-    "house-7": "house-g",
-    "house-8": "house-h",
-    "house-9": "house-i",
-  };
-  for (const o of allObjects) {
-    if (rewire[o.id]) o.interior = rewire[o.id];
-  }
+  // ---- House interiors: every Twoleg house carries its own authored
+  // multi-room floor plan directly on its `interior` field (defined in
+  // engine.ts). The old build-time rewire is gone — it overrode doors in
+  // every mode and left several plans unreachable. ----
 }
 
 // ---------------------------------------------------------------------------

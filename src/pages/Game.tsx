@@ -1057,6 +1057,13 @@ export default function Game() {
           gameRef.current?.exitInterior();
           return;
         }
+        // interactive furniture: the cat performs the REAL action (sleep on
+        // the bed, drink at the tub, bat the toy...) — per-object behavior
+        if (interiorRef.current && (target.interact as string ?? "").startsWith("f-")) {
+          const msg = (gameRef.current as unknown as { furnitureAction?: (k: string) => string | null }).furnitureAction?.(target.interact as string);
+          if (msg) setDialogue({ name: target.label, text: msg });
+          return;
+        }
         // fresh-kill pile: eat your fill
         if (target.interact === "fresh-kill") {
           gameRef.current?.eat(30);

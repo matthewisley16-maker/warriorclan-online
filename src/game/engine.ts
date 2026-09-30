@@ -535,7 +535,9 @@ const PLAN_WALLS: Record<string, WallSeg[]> = {
   // house-c (18x13): living / bedroom / kitchen
   "house-c": [
     { h: true, y: 6, x0: 1, x1: 16, doors: [8] },
-    { h: false, x: 9, y0: 7, y1: 11, doors: [9] },
+    // door on the SPAWN row (10) so the bedroom doorway never walls in the
+    // player spawning from the front door
+    { h: false, x: 9, y0: 7, y1: 11, doors: [10] },
   ],
   // house-d (20x15) GROUND floor: living / kitchen / entry / dining + stairs up
   "house-d": [
@@ -1193,6 +1195,7 @@ export const interiors: Record<string, InteriorDef> = {
       { id: "hc-box2", x: 5, y: 4, label: "Box with a cat-sized hole", style: "box" },
       { id: "hc-plant", x: 7, y: 2, label: "Leggy houseplant, half-wild", style: "moss" },
       { id: "hc-chair", x: 12, y: 3, label: "Broken-backed chair", style: "chair" },
+      { id: "hc-window", x: 12, y: 1, label: "Dusty parlor window", style: "window" },
       { id: "hc-lamp", x: 15, y: 2, label: "Flickering corner lamp", style: "lamp" },
       { id: "hc-cabinet", x: 15, y: 5, label: "Paint-peeling cabinet", style: "cabinet" },
       { id: "hc-dresser", x: 3, y: 9, label: "Scuffed old dresser", style: "cabinet" },
@@ -1521,7 +1524,10 @@ const PREY_MAX = 38;
 type NpcAiMode =
   | "idle" | "wander" | "patrol" | "hunt_stalk" | "hunt_chase"
   | "carry_home" | "deliver" | "return_home" | "go_eat" | "after_eat" | "go_drink"
-  | "go_den" | "in_den" | "exit_den";
+  | "go_den" | "in_den" | "exit_den"
+  // kittypet house life: a real indoors schedule (enter / move between
+  // rooms / enjoy a spot / walk out) — physically pathed, never teleported
+  | "house_door" | "house_travel" | "house_enjoy" | "house_exit";
 
 interface NPCState {
   def: NPCDef;
@@ -1570,9 +1576,13 @@ interface NPCState {
   yawnFxUntil: number;
   tailFxUntil: number;
   alertFxUntil: number;
-  // --- role-differentiated behavior (Book 1 camp life) ---
-  role: "leader" | "deputy" | "medicine" | "queen" | "elder" | "apprentice" | "warrior" | "kit" | "kittypet" | "other";
-  campSpots: CampSpots | null;
+  role: "leader" | "deputy" | "medicine" | "queen" | "elder" | "apprentice" | "warrior" | "kit" | "kittypet" | "other" | undefined;
+  campSpots: { x: number; y: number }[] | null;
+  // --- kittypet house life (undefined for every other cat) ---
+  houseInterior?: string;
+  houseGoal?: { kind: "door" | "spot" | "exit"; room?: string; propId?: string; x: number; y: number };
+  houseGoalPx?: { x: number; y: number };
+  houseArriveAt?: number;
   // --- after an emergency nudge, ignore stuck detection briefly so the cat
   // can pick a reachable target instead of grinding the same wall again ---
   stuckCooldown: number;
@@ -1683,6 +1693,36 @@ function scheduleTarget(def: NPCDef, hour: number): { x: number; y: number } | n
     if (hour >= s.h) slot = s;
   }
   return { x: slot.x, y: slot.y };
+}
+
+/** The interior id of the house a kittypet lives in (its def.home is inside). */
+function kittyHouseFor(n: NPCState): string | undefined {
+  if ((n.def.clan ?? "") !== "kittypet") return undefined;
+  for (const [id, room] of Object.entries(interiors)) {
+    if ((room.npcs ?? []).includes(n.def.id)) return id;
+  }
+  return undefined;
+}
+
+/**
+ * A "furniture spot" = the cell just BELOW a prop (cats stand in front of
+ * furniture), filtered to cells that are actually walkable floor.
+ */
+function findKittySpots(roomId: string): { propId: string; x: number; y: number; style: string }[] {
+  const room = interiors[roomId];
+  const geo = ROOM_GEO[roomId];
+  if (!room || !geo) return [];
+  const spots: { propId: string; x: number; y: number; style: string }[] = [];
+  for (const pr of room.props) {
+    const cx = Math.max(1, Math.min(geo.w - 2, pr.x));
+    const cy = Math.max(1, Math.min(geo.h - 2, pr.y)) + 1;
+    if (cy >= geo.h - 1) continue;
+    const row = room.walls[cy];
+    const at = Math.max(1, Math.min(geo.w - 2, cx));
+    if (row?.[at] === "1") continue; // spot must be floor
+    spots.push({ propId: pr.id, x: at, y: cy, style: pr.style });
+  }
+  return spots;
 }
 
 // ---------------------------------------------------------------------------
@@ -2065,6 +2105,23 @@ export class GameCanvas {
       wetnessUntil: 0,
       lastNpcShakeAt: 0,
     }));
+    // kittypets live in their houses (authored interiors list them in npcs)
+    for (const n of this.npcStates) {
+      const house = kittyHouseFor(n);
+      if (house) {
+        n.houseInterior = house;
+        // start the day OUTSIDE in the yard: place at the house doorstep
+        const owner = allObjects.find((o) => o.interior === house);
+        if (owner) {
+          n.x = owner.x;
+          n.y = owner.y + owner.h / 2 + 18;
+          n.tx = n.x;
+          n.ty = n.y;
+        }
+        n.ai = "idle";
+        n.waitUntil = this.time + 2 + Math.random() * 6;
+      }
+    }
     this.spawnPrey(80);
 
     window.addEventListener("keydown", this.onKeyDown);
@@ -3245,6 +3302,7 @@ export class GameCanvas {
         if (Math.hypot(n.x - this.px, n.y - this.py) < 300) this.engineSfx("shake", { volume: 0.5, throttleMs: 1500 });
       }
       // scheduled destinations still apply (dens/night spots) when idle
+      // schedule slots only move wanderers (and only real wanderers)
       const target = scheduleTarget(n.def, hr);
       if (target && hr !== n.lastScheduleHour && n.ai === "idle" && n.def.wander) {
         n.tx = target.x;
@@ -3342,6 +3400,12 @@ export class GameCanvas {
       if (n.ai === "in_den") {
         // asleep inside a den: skip movement + rendering entirely
         if (this.nightAlpha() < 0.4 || this.time > n.waitUntil) this.npcAct(n, dt);
+        continue;
+      }
+      // kittypet house life runs EVERY FRAME (real per-frame walking) and
+      // replaces the outdoor sim while the cat is inside its house
+      if (n.houseInterior && (n.ai === "house_door" || n.ai === "house_travel" || n.ai === "house_enjoy" || n.ai === "house_exit")) {
+        this.stepHouseLife(n, dt);
         continue;
       }
       this.npcAct(n, dt);
@@ -3657,6 +3721,8 @@ export class GameCanvas {
       }
       for (const n of this.npcStates) {
         if (n.gone) continue;
+        // an indoor kitty can't be chatted with from the street
+        if (n.ai === "house_travel" || n.ai === "house_enjoy") continue;
         const d = Math.hypot(n.x - this.px, n.y - this.py);
         if (d < bestD) {
           bestD = d;
@@ -4246,6 +4312,9 @@ export class GameCanvas {
     for (const n of this.npcStates) {
       if (n.x < viewL - 60 || n.x > viewR + 60 || n.y < viewT - 60 || n.y > viewB + 60) continue;
       if (n.gone) continue;
+      // a cat INSIDE its house is not outdoors (it renders in the room);
+      // house_door/house_exit are outdoor states and must stay visible
+      if (n.ai === "house_travel" || n.ai === "house_enjoy") continue;
       ents.push({
         y: n.y,
         draw: () => {
@@ -5996,9 +6065,245 @@ export class GameCanvas {
    * each rank has its own day, and camp cats stay recognizably themselves
    * instead of every cat rolling the same generic hunt/patrol dice.
    */
+  /**
+   * BFS path for one indoor kitty: 8-directional walk through floor cells.
+   * Walls, furniture-cell blockage (none — props are decor) and room bounds
+   * all respected. Returns waypoints from just after (fx,fy) to (tx,ty).
+   */
+  private houseBFS(roomId: string, fx: number, fy: number, tx: number, ty: number): { x: number; y: number }[] {
+    const room = interiors[roomId];
+    const geo = ROOM_GEO[roomId];
+    if (!room || !geo) return [];
+    const W = geo.w;
+    const H = geo.h;
+    const at = (x: number, y: number) => x >= 0 && x < W && y >= 0 && y < H && room.walls[y]?.[x] !== "1";
+    if (!at(fx, fy) || !at(tx, ty)) return [];
+    const prev = new Map<number, number>();
+    const seen = new Set<number>([fy * W + fx]);
+    let frontier = [fy * W + fx];
+    const goal = ty * W + tx;
+    let found = false;
+    while (frontier.length && !found) {
+      const next: number[] = [];
+      for (const cur of frontier) {
+        if (cur === goal) { found = true; break; }
+        const cx = cur % W;
+        const cy = Math.floor(cur / W);
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nxp = cx + dx;
+            const nyp = cy + dy;
+            const key = nyp * W + nxp;
+            if (seen.has(key) || !at(nxp, nyp)) continue;
+            // no corner-cutting through wall diagonals
+            if (dx && dy && (!at(cx + dx, cy) || !at(cx, cy + dy))) continue;
+            seen.add(key);
+            prev.set(key, cur);
+            next.push(key);
+          }
+        }
+      }
+      frontier = next;
+    }
+    if (!found) return [];
+    const path: { x: number; y: number }[] = [];
+    let cur = goal;
+    while (cur !== fy * W + fx) {
+      path.push({ x: cur % W, y: Math.floor(cur / W) });
+      const up = prev.get(cur);
+      if (up === undefined) break;
+      cur = up;
+    }
+    path.reverse();
+    return path;
+  }
+
+  /** Decide the next indoor goal for this kitty (hourly house schedule). */
+  private houseNextGoal(n: NPCState): boolean {
+    const roomId = n.houseInterior;
+    if (!roomId) return false;
+    const room = interiors[roomId];
+    const geo = ROOM_GEO[roomId];
+    if (!room || !geo) return false;
+    const hr = this.hourF();
+    // hourly rhythm: sleep deep at night (in the bedroom spot), otherwise
+    // rotate through the house's fun spots — food, windows, toys, sofas
+    const spots = findKittySpots(roomId);
+    if (spots.length === 0) return false;
+    const bedroomFirst = spots.find((s) => s.style === "bed" || s.style === "nest" || s.style === "blanket");
+    let goal: { x: number; y: number };
+    if ((hr >= 21 || hr < 6) && bedroomFirst) {
+      goal = { x: bedroomFirst.x, y: bedroomFirst.y };
+      n.houseGoal = { kind: "spot", room: room.rooms?.find((z) => z.x0 <= goal.x && z.x1 >= goal.x && z.y0 <= goal.y && z.y1 >= goal.y)?.name, propId: bedroomFirst.propId, x: goal.x, y: goal.y };
+    } else {
+      const pool = spots.filter((s) => s.propId !== n.houseGoal?.propId);
+      const pick = (pool.length ? pool : spots)[Math.floor(Math.random() * (pool.length ? pool.length : spots.length))];
+      goal = { x: pick.x, y: pick.y };
+      n.houseGoal = { kind: "spot", room: room.rooms?.find((z) => z.x0 <= goal.x && z.x1 >= goal.x && z.y0 <= goal.y && z.y1 >= goal.y)?.name, propId: pick.propId, x: goal.x, y: goal.y };
+    }
+    // physical route: BFS from the cat's current cell to the goal cell,
+    // converted to pixel waypoints the cat actually WALKS along
+    const fromCx = Math.max(0, Math.min(geo.w - 1, Math.floor(n.x / 32)));
+    const fromCy = Math.max(0, Math.min(geo.h - 1, Math.floor(n.y / 32)));
+    const path = this.houseBFS(roomId, fromCx, fromCy, goal.x, goal.y).map((c) => ({ x: c.x * 32 + 16, y: c.y * 32 + 16 }));
+    if (path.length === 0) return false; // unroutable: try again later
+    n.patrolPoints = path;
+    n.patrolIdx = 0;
+    n.ai = "house_travel";
+    n.activity = n.houseGoal.room ? "inside — " + n.houseGoal.room.toLowerCase() : "inside the house";
+    return true;
+  }
+
+  /** Advance one indoor kitty: path-walk to goals, enjoy them, repeat. */
+  private stepHouseLife(n: NPCState, dt: number) {
+    const roomId = n.houseInterior;
+    const geo = roomId ? ROOM_GEO[roomId] : undefined;
+    const room = roomId ? interiors[roomId] : undefined;
+    if (!roomId || !geo || !room) { n.ai = "idle"; return; }
+    const walk = 60;
+
+    const advancePath = (): boolean => {
+      // walk along n.patrolPoints (cell waypoints), one segment per frame set
+      const wp = n.patrolPoints[n.patrolIdx];
+      if (!wp) return true; // path finished
+      const dx = wp.x - n.x;
+      const dy = wp.y - n.y;
+      const d = Math.hypot(dx, dy);
+      const step = walk * dt;
+      if (d <= Math.max(3, step)) {
+        n.x = wp.x;
+        n.y = wp.y;
+        n.patrolIdx++;
+        return n.patrolIdx >= n.patrolPoints.length;
+      }
+      n.x += (dx / d) * step;
+      n.y += (dy / d) * step;
+      if (Math.abs(dx) > 0.2) n.facing = dx > 0 ? 1 : -1;
+      n.pose = "walk";
+      return false;
+    };
+
+    switch (n.ai) {
+      case "house_door": {
+        // walking from the doorstep INTO the house: target is just inside the
+        // front door, then switch to room travel
+        const d = Math.hypot(n.tx - n.x, n.ty - n.y);
+        const step = walk * dt;
+        if (d <= Math.max(4, step)) {
+          // inside: park world coords at the doorway, continue indoors
+          n.x = geo.w * 32 / 2;
+          n.y = (geo.h - 2.5) * 32;
+          n.patrolPoints = [];
+          n.patrolIdx = 0;
+          if (!this.houseNextGoal(n)) {
+            n.ai = "idle";
+            n.activity = "inside the house";
+            n.waitUntil = this.time + 4;
+          }
+        } else {
+          n.x += ((n.tx - n.x) / d) * step;
+          n.y += ((n.ty - n.y) / d) * step;
+          n.facing = n.ty >= n.y ? 1 : -1;
+          n.pose = "walk";
+        }
+        break;
+      }
+      case "house_travel": {
+        if (!n.houseGoal || n.patrolPoints.length === 0) {
+          if (!this.houseNextGoal(n)) { n.ai = "idle"; n.waitUntil = this.time + 6; }
+          break;
+        }
+        if (advancePath()) {
+          // arrived: enjoy the spot
+          n.ai = "house_enjoy";
+          n.houseArriveAt = this.time;
+          const style = room.props.find((pr) => pr.id === n.houseGoal?.propId)?.style;
+          if (style === "bowl") {
+            n.pose = "sit";
+            n.activity = "eating from the bowl";
+          } else if (style === "window") {
+            n.pose = "sit";
+            n.activity = "looking out the window";
+          } else if (style === "toy") {
+            n.pose = "play";
+            n.activity = "batting a toy around";
+          } else if (style === "bed" || style === "nest" || style === "blanket" || style === "moss") {
+            const hrNow2 = this.hourF();
+            n.pose = (hrNow2 >= 21 || hrNow2 < 6) ? "sleep" : Math.random() < 0.5 ? "lie" : "sleep";
+            n.activity = "curled up, sleeping";
+          } else if (style === "sofa" || style === "carpet" || style === "chair") {
+            n.pose = Math.random() < 0.6 ? "lie" : "sit";
+            n.activity = "lounging";
+          } else {
+            n.pose = "sit";
+            n.activity = "sniffing around";
+          }
+        }
+        break;
+      }
+      case "house_enjoy": {
+        // stay a while, then move on (or head out if the day says so)
+        const hrNow = this.hourF();
+        const night = hrNow >= 21 || hrNow < 6;
+        const stay = night ? 26 + Math.random() * 30 : 5 + Math.random() * 9;
+        if (this.time > (n.houseArriveAt ?? 0) + stay) {
+          if (!night && Math.random() < 0.3) {
+            // outside time: walk out through the front door (real walking)
+            n.ai = "house_exit";
+            n.activity = "heading outside";
+            const outCx = Math.max(0, Math.min(geo.w - 1, Math.floor(n.x / 32)));
+            const outCy = Math.max(0, Math.min(geo.h - 1, Math.floor(n.y / 32)));
+            n.patrolPoints = this.houseBFS(roomId, outCx, outCy, Math.floor(geo.w / 2) - 1, geo.h - 2)
+              .map((c) => ({ x: c.x * 32 + 16, y: c.y * 32 + 16 }));
+            n.patrolIdx = 0;
+          } else if (!this.houseNextGoal(n)) {
+            n.ai = "house_enjoy";
+            n.houseArriveAt = this.time;
+          }
+        }
+        break;
+      }
+      case "house_exit": {
+        if (advancePath()) {
+          // step out to the doorstep in the world
+          const owner = allObjects.find((o) => o.interior === roomId);
+          n.x = owner ? owner.x : geo.w * 32 / 2;
+          n.y = owner ? owner.y + owner.h / 2 + 18 : (geo.h + 1) * 32;
+          n.ai = "idle";
+          n.pose = "sit";
+          n.activity = "in the yard";
+          n.waitUntil = this.time + 8 + Math.random() * 14;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
   private npcThink(n: NPCState, _hr: number, night: boolean) {
     if (n.ai !== "idle") return; // mid-activity cats finish first
     if (this.time < n.waitUntil) return;
+    // kittypets with a house: split time between the yard and INSIDE the
+    // house (a real schedule — enter, roam rooms, come back out)
+    if (n.houseInterior) {
+      const hrNow = this.hourF();
+      const wantInside = (hrNow >= 12 && hrNow < 21) || night || Math.random() < 0.4;
+      if (wantInside) {
+        const owner = allObjects.find((o) => o.interior === n.houseInterior);
+        if (owner) {
+          n.ai = "house_door";
+          n.activity = "padded through the cat flap";
+          n.tx = owner.x;
+          n.ty = owner.y + 6; // just inside the entrance
+          return;
+        }
+      }
+      n.activity = "watching the street";
+      n.waitUntil = this.time + 6 + Math.random() * 10;
+      return;
+    }
     if (n.role === undefined || n.campSpots === null) this.refreshNpcRoles(n);
     const r = n.role;
     const lazy = n.trait === "lazy" ? 0.5 : 1;
@@ -6400,12 +6705,17 @@ export class GameCanvas {
             n.pose = "walk";
             n.activity = "leaving the den";
           } else {
+            // den object vanished (session restart): resume at the CAMP, not
+            // at stale coordinates that may be far away or inside a house
             n.denId = null;
             n.denSeat = -1;
             n.pose = "stretch";
             n.ai = "idle";
             n.activity = "waking up";
             n.waitUntil = this.time + 2;
+            const home = n.def.home;
+            const near = this.nearestFreeNpcSpot(home.x, home.y + 40);
+            if (near) { n.x = near.x; n.y = near.y; n.tx = near.x; n.ty = near.y; }
           }
         }
         break;
