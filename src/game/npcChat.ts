@@ -16,8 +16,8 @@ import { profileFor, type CharacterProfile } from "./characters";
 import { knows, starClanReply, type DialogueContext } from "./dialogue";
 import {
   identityActivity, identityAge, identityClan, identityFamily, identityFriends,
-  identityLeader, identityMentor, identityName, identityRank, opinionOf,
-  relationTo, type Relation,
+  identityLeader, identityLocation, identityMentor, identityName, identityRank,
+  opinionOf, relationTo, type Relation,
 } from "./npcChatIdentity";
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ type Topic =
   | "player" | "greeting" | "smalltalk" | "gossip" | "unknown"
   | "identity-name" | "identity-age" | "identity-rank" | "identity-leader"
   | "identity-mentor" | "identity-family" | "identity-friends"
-  | "identity-activity" | "opinion";
+  | "identity-activity" | "identity-location" | "opinion";
 
 /** Topic classifier table (exported for test suites). */
 export const TOPIC_WORDS: [Topic, RegExp][] = [
@@ -67,7 +67,8 @@ export const TOPIC_WORDS: [Topic, RegExp][] = [
   ["identity-mentor", /who trained you|your mentor|who.?s your mentor|who do you mentor|who.?s your apprentice|did you have a mentor/i],
   ["identity-family", /your family|your kin|your mother|your father|your parents|your siblings|your kits|family\?/i],
   ["identity-friends", /your friends|who are your friends|who do you hang|any friends|who.?s your friend|got friends/i],
-  ["identity-activity", /what were you doing|what are you doing|where are you going|why are you here|busy/i],
+  ["identity-activity", /what were you doing|what are you doing|why are you here|busy/i],
+  ["identity-location", /where are you|where.?ve you been|your location|what part of|which territory/i],
   // deliberately AFTER the Clan/Clan-news topics: "What's happening in the
   // Clan?" must reach the rank-shaped Clan answers, not the activity pool
   // (NOTE: no bare "what happened" here — it would swallow event questions
@@ -328,6 +329,8 @@ export function npcChatReply(npcId: string, message: string, ctx: DialogueContex
       return { text: identityFriends(p, ctx, seed) };
     case "identity-activity":
       return { text: withFlavorText(p, identityActivity(p, ctx, seed), seed) };
+    case "identity-location":
+      return { text: withFlavorText(p, identityLocation(p, ctx, seed), seed) };
     case "opinion": {
       // which cat is the player asking about? scan the message for names
       const NAMES: [string, RegExp][] = [
@@ -509,6 +512,7 @@ const GROUP_ASKS: AskCandidate[] = [
   { id: "g-clan", label: "What Clan are you in?", weight: 12, when: (p) => p.clan !== "kittypet" && p.clan !== "rogue", reply: (p, ctx) => ({ text: identityClan(p, ctx, seedFor(p, "g-clan", ctx)) }) },
   { id: "g-rank", label: "What rank are you?", weight: 10, when: (p) => p.clan !== "kittypet" && p.clan !== "rogue", reply: (p, ctx) => ({ text: identityRank(p, ctx, seedFor(p, "g-rank", ctx)) }) },
   { id: "g-activity", label: "What are you doing?", weight: 16, reply: (p, ctx) => ({ text: identityActivity(p, ctx, seedFor(p, "g-activity", ctx)) }) },
+  { id: "g-where", label: "Where are you?", weight: 9, reply: (p, ctx) => ({ text: identityLocation(p, ctx, seedFor(p, "g-where", ctx)) }) },
   { id: "g-going", label: "Where are you going?", weight: 8, reply: (p, ctx) => ({ text: identityActivity(p, ctx, seedFor(p, "g-going", ctx)) }) },
   { id: "g-friends", label: "Who are your friends?", weight: 7, reply: (p, ctx) => ({ text: identityFriends(p, ctx, seedFor(p, "g-friends", ctx)) }) },
   { id: "g-leader", label: "Who is your leader?", weight: 8, when: (p) => p.clan !== "kittypet" && p.clan !== "rogue", reply: (p, ctx) => ({ text: identityLeader(p, ctx, seedFor(p, "g-leader", ctx)) }) },

@@ -34,6 +34,7 @@ export const reply = action({
     npcApprentice: v.optional(v.string()),
     npcRelationships: v.optional(v.string()),
     npcActivity: v.optional(v.string()),
+    npcLocation: v.optional(v.string()),
     rememberedFacts: v.optional(v.array(v.string())),
     message: v.string(),
   },
@@ -51,7 +52,7 @@ export const reply = action({
       `Topics this cat knows and enjoys: ${args.npcTopics}`,
       `Knowledge flags: ${args.npcKnowledge}. Things this cat does NOT know or avoids: ${args.npcAvoid}.`,
       `Identity: ${args.npcSex ?? "cat"}; age: ${args.npcAgePhrase ?? "adult"}.${args.npcMentor ? ` Mentored by ${args.npcMentor}.` : ""}${args.npcApprentice ? ` Currently mentoring ${args.npcApprentice}.` : ""}${args.npcRelationships ? ` Notable ties: ${args.npcRelationships}.` : ""}`,
-      `Current activity: ${args.npcActivity ?? "resting in camp"}.${(args.rememberedFacts ?? []).length > 0 ? ` The player has told this cat before: ${args.rememberedFacts!.join("; ")}.` : ""}`,
+      `Current activity: ${args.npcActivity ?? "resting in camp"}.${args.npcLocation ? ` Current location: ${args.npcLocation}.` : ""}${(args.rememberedFacts ?? []).length > 0 ? ` The player has told this cat before: ${args.rememberedFacts!.join("; ")}.` : ""}`,
       `The player is ${args.playerName}, a ${args.playerRank} of ${args.playerClan}. Bond with the player: ${args.bond} on a scale of -3 (hostile) to 3 (trusted friend). World mode: ${args.mode}, timeline step: ${args.storyStep}.`,
       `RULES: Reply ONLY as ${args.npcName} speaking directly to the player, in first person, 1-2 short sentences (max ~40 words). No narration, no stage directions unless brief cat body language, no out-of-character talk, no mention of AI, games, developers or books. If this cat would not know something, say so naturally in-character or deflect. Stay warm/wary/gruff per personality. Never reveal secrets or future events.`,
     ].join("\n");

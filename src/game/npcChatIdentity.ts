@@ -390,6 +390,23 @@ export function identityStarClan(p: CharacterProfile, ctx: DialogueContext, seed
   return "";
 }
 
+/** "Where are you?" — uses the engine's live location label (§26). */
+export function identityLocation(p: CharacterProfile, ctx: DialogueContext, seed: number): string {
+  const relation = relationTo(p, ctx);
+  const loc = ctx.npcLocation?.trim();
+  if (!loc) {
+    return tone(relation, seedPick([
+      `Wherever the day takes me — why do you ask?`,
+      `Under the sky somewhere. Does it matter?`,
+    ], seed));
+  }
+  return tone(relation, seedPick([
+    `I'm ${loc} — look around, you'll find me.`,
+    `${loc[0].toUpperCase()}${loc.slice(1)}, if you must know.`,
+    `Right here — ${loc}. You walked straight past me.`,
+  ], seed));
+}
+
 /** "What were you doing?" — uses the engine's live activity label. */
 export function identityActivity(p: CharacterProfile, ctx: DialogueContext, seed: number): string {
   const act = ctx.npcActivity?.trim();

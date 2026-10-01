@@ -1586,6 +1586,12 @@ interface NPCState {
   // --- after an emergency nudge, ignore stuck detection briefly so the cat
   // can pick a reachable target instead of grinding the same wall again ---
   stuckCooldown: number;
+  // --- den discipline (§6/§7/§8): entry attempts are limited and a failed
+  // route is shelved for a while instead of being retried forever ---
+  denCooldownUntil: number; // engine time until which this cat won't choose a den
+  lastIdleActAt: number; // engine time of the last idle micro-behavior
+  idleActUntil: number; // engine time until which the current idle pose holds
+  sidestepCount: number; // consecutive sidesteps without reaching the target (§7 limit)
   // --- wet-coat timer (performance.now ms): rain soaks, clear dries; drives
   // the wet shake-off droplets ---
   wetnessUntil: number;
@@ -2117,6 +2123,10 @@ export class GameCanvas {
       prevTx: n.home.x,
       prevTy: n.home.y,
       stuckSince: null,
+      denCooldownUntil: 0,
+      lastIdleActAt: 0,
+      idleActUntil: 0,
+      sidestepCount: 0,
       lastStuckX: n.home.x,
       lastStuckY: n.home.y,
       sidestepUntil: 0,
@@ -2606,6 +2616,135 @@ export class GameCanvas {
   getNpcActivity(npcId: string): string | null {
     const n = this.npcStates.find((s) => s.def.id === npcId);
     return n?.activity ?? null;
+  }
+
+  /**
+   * Where this cat currently IS (§26): nearest named area or object label —
+   "inside the warriors' den", "by the river", "in the ThunderClan camp" —
+   * for the location-aware character chat. Null when nowhere notable.
+   */
+  getNpcLocation(npcId: string): string | null {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n) return null;
+    if (n.houseInterior && (n.ai === "house_travel" || n.ai === "house_enjoy")) return "inside a Twoleg house";
+    if (n.ai === "in_den" && n.denId) {
+      const den = allObjects.find((o) => o.id === n.denId);
+      return den?.label ? `inside the ${den.label.toLowerCase()}` : "inside a den";
+    }
+    let bestLabel: string | null = null;
+    let bestD = 150;
+    for (const o of allObjects) {
+      if (o.style === "house") continue; // houses read via areas below
+      const d = Math.hypot(o.x - n.x, o.y - n.y) - Math.max(o.w, o.h) / 2;
+      if (d < bestD) { bestD = d; bestLabel = o.label ?? null; }
+    }
+    if (bestLabel && n.ai !== "in_den") {
+      const l = bestLabel.toLowerCase();
+      if (/fresh-kill|pile/.test(l)) return "by the fresh-kill pile";
+      if (/river|stream|pool/.test(l)) return "by the water";
+      if (/den/.test(l)) return `by the ${l}`;
+      return `by the ${l}`;
+    }
+    const area = areas.find((a) => n.x >= a.rect.x && n.x <= a.rect.x + a.rect.w && n.y >= a.rect.y && n.y <= a.rect.y + a.rect.h);
+    if (area) return area.id === "camp" ? "in the ThunderClan camp" : `in ${area.name.toLowerCase()}`;
+    return null;
+  }
+
+  /**
+   * Whether this cat can currently be found for a conversation (sleeping in
+   * a den, inside a house, or gone from the timeline = not approachable).
+   */
+  isNpcApproachable(npcId: string): boolean {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n || n.gone) return false;
+    if (n.ai === "in_den") return false;
+    if (n.houseInterior && n.ai !== "idle" && n.ai !== "wander") return false;
+    return true;
+  }
+
+  /**
+   * Developer diagnostics for one NPC (§37) — the AI state, the stall book-
+   * keeping, the den assignment and the animation state in one snapshot.
+   * Used only by the hidden debug panel; exposes nothing to normal players.
+   */
+  getNpcDebugInfo(npcId: string) {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n) return null;
+    const territory = territoryAt(n.x, n.y);
+    return {
+      id: n.def.id,
+      name: n.def.name,
+      ai: n.ai,
+      pose: n.pose as string,
+      activity: n.activity,
+      trait: n.trait,
+      role: n.role ?? null,
+      target: n.ai === "wander" || n.ai === "return_home" || n.ai === "go_drink" ? { x: n.tx, y: n.ty } : null,
+      den: n.denId,
+      denSeat: n.denSeat,
+      denOnCooldown: this.time < n.denCooldownUntil,
+      patrolIdx: n.ai === "patrol" ? n.patrolIdx : null,
+      stuck: n.stuckSince !== null ? Math.max(0, this.time - n.stuckSince) : 0,
+      sidestepActive: n.sidestepPt !== null && this.time < n.sidestepUntil,
+      lastPathFailure: n.stuckCooldown > this.time ? "unreachable target (re-deciding)" : null,
+      homeTerritory: n.homeTerritory,
+      currentTerritory: territory,
+      houseInterior: n.houseInterior ?? null,
+      convoActive: n.convoActive,
+      gone: !!n.gone,
+      position: { x: n.x, y: n.y },
+      distanceToPlayer: Math.hypot(n.x - this.px, n.y - this.py),
+    };
+  }
+
+  /** All live NPC ids (debug panel roster). */
+  get npcIdList(): string[] {
+    return this.npcStates.map((n) => n.def.id);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Idle micro-behaviors (§11/§14/§30): an idle cat LIVES — it grooms, sniffs,
+  // stretches, yawns, scratches, looks around — instead of just sitting.
+  // Personality weights the mix; energetic cats move more, calm cats rest more.
+  // ---------------------------------------------------------------------------
+  private npcIdleAct(n: NPCState) {
+    const lively = n.trait === "playful" || n.trait === "brave"; // the energetic mix
+    const lazy = n.trait === "lazy";
+    const curious = n.trait === "curious";
+    const cautious = n.trait === "cautious";
+    // weighted micro-behavior menu (weights sum to 1)
+    const menu: [CatPose | null, number][] = [
+      ["groom", lazy ? 0.3 : lively ? 0.1 : 0.2],
+      ["sniff", curious ? 0.28 : 0.12],
+      ["stretch", lively ? 0.16 : 0.1],
+      ["yawn", lazy ? 0.2 : 0.08],
+      ["scratch", 0.08],
+      [null, cautious ? 0.28 : 0.18], // stay sitting, just watch the camp
+    ];
+    let roll = Math.random();
+    let chosen: CatPose | null = null;
+    for (const [pose, w] of menu) {
+      roll -= w;
+      if (roll <= 0) { chosen = pose; break; }
+    }
+    // durations vary per cat: energetic cats hold poses briefly, lazy cats linger
+    const hold = lively ? 1.6 + Math.random() * 2 : lazy ? 4 + Math.random() * 5 : 2.4 + Math.random() * 3.4;
+    if (chosen) {
+      n.pose = chosen;
+      n.activity =
+        chosen === "groom" ? "grooming" :
+        chosen === "sniff" ? "sniffing the air" :
+        chosen === "stretch" ? "stretching" :
+        chosen === "yawn" ? "yawning" : "scratching an itch";
+    } else {
+      n.pose = "sit";
+      n.activity = cautious ? "watching the camp" : "sharing tongues";
+    }
+    // NOTE: waitUntil is deliberately NOT extended here — micro-behaviors are
+    // filler BETWEEN decisions. Extending it would preempt the decision tick
+    // forever and the cat would never hunt, patrol, eat or den again.
+    n.idleActUntil = this.time + hold;
+    n.lastIdleActAt = this.time;
   }
 
   /** Facing for the player during a conversation (API for the UI). */
@@ -3343,6 +3482,16 @@ export class GameCanvas {
         n.pose = "sit";
         n.shakeUntil = undefined;
       }
+      // idle micro-behaviors (§11/§14/§30): a cat between activities LIVES —
+      // it grooms, sniffs, stretches, yawns, scratches, watches — instead of
+      // sitting frozen until its next decision tick
+      if (
+        !this.paused && !n.convoActive && n.ai === "idle" &&
+        this.time > n.waitUntil && this.time >= n.idleActUntil &&
+        n.pose !== "sleep"
+      ) {
+        this.npcIdleAct(n);
+      }
       // decision tick: distant cats think every ~4s, nearby every ~1.2s
       const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
       const cadence = dPlayer < 700 ? 1.2 : 4;
@@ -3375,6 +3524,7 @@ export class GameCanvas {
           n.stuckSince = null;
           n.lastStuckX = n.x;
           n.lastStuckY = n.y;
+          n.sidestepCount = 0;
         } else if (n.stuckSince === null) {
           n.stuckSince = this.time;
         } else if (this.time - n.stuckSince > 8) {
@@ -3405,9 +3555,24 @@ export class GameCanvas {
             }
           }
         } else if (this.time - n.stuckSince > 1.4 && this.time >= n.sidestepUntil) {
-          // stalled 1.4s: try walking AROUND whatever is in the way
+          // stalled 1.4s: try walking AROUND whatever is in the way — but a
+          // hard limit (§7 PATH_ATTEMPT_LIMIT) stops endless sidestep cycles:
+          // after 4 failed attempts the cat abandons this target entirely
+          if (n.sidestepCount >= 4) {
+            n.sidestepCount = 0;
+            n.stuckSince = null;
+            n.tx = n.x;
+            n.ty = n.y;
+            n.ai = "idle";
+            n.activity = "rethinking the route";
+            n.waitUntil = this.time + 2;
+            n.aiThinkAt = this.time + 2;
+            n.stuckCooldown = this.time + 12;
+            break;
+          }
           const st = this.npcSidestep(n);
           n.sidestepPt = st;
+          n.sidestepCount += 1;
           n.sidestepUntil = this.time + (st ? 1.8 : 2.5);
         }
       }
@@ -6382,7 +6547,11 @@ export class GameCanvas {
       }
       // §31/§32: walk to THIS cat's own role den inside its own camp —
       // never merely the nearest den, and never another Clan's den.
-      const den = this.roleDenFor(n) ?? this.denInteriorNear(n.def.home.x, n.def.home.y);
+      // A recently-failed den route is shelved (§7): the cat sleeps where it
+      // is instead of retrying a broken entrance all night.
+      const den = this.time < n.denCooldownUntil
+        ? null
+        : this.roleDenFor(n) ?? this.denInteriorNear(n.def.home.x, n.def.home.y);
       if (den) {
         n.ai = "go_den";
         n.preyId = den.interior; // reused as the den interior id while travelling
@@ -6504,6 +6673,14 @@ export class GameCanvas {
       n.waitUntil = this.time + 6 + Math.random() * 8;
       return;
     }
+    if (roll < 0.5) {
+      // stretch, sniff and scratch like a stiff old cat (§11 cat care)
+      const stiff = roll < 0.37 ? "stretch" : roll < 0.44 ? "sniff" : "scratch";
+      n.pose = stiff as CatPose;
+      n.activity = stiff === "stretch" ? "stretching old bones" : stiff === "sniff" ? "sniffing the breeze" : "scratching an itch";
+      n.waitUntil = this.time + 2 + Math.random() * 3;
+      return;
+    }
     this.returnToCampSpots(n, roleActivity("elder", roll < 0.65 ? "sharing tongues" : "sunning"));
   }
 
@@ -6528,6 +6705,24 @@ export class GameCanvas {
       n.activity = roleActivity("apprentice", roll < 0.45 ? "battle-training" : "playing");
       return;
     }
+    if (roll < 0.62) {
+      // §11/§13 training drill: crouch → stalk → pounce — real cat poses,
+      // state-driven (the pose sequence plays out where the cat stands)
+      n.pose = "crouch";
+      n.activity = "practice-pouncing at the training stump";
+      n.waitUntil = this.time + 1.2;
+      n.idleActUntil = this.time + 1.2;
+      const stump = allObjects.find((o) => o.id === "tc-stump-app") ?? allObjects.find((o) => o.style === "stump");
+      if (stump) {
+        n.ai = "wander";
+        n.tx = stump.x + (stump.w / 2 + 26);
+        n.ty = stump.y + stump.h / 2 + 12;
+        n.activity = "heading to the training stump";
+      } else {
+        n.ai = "idle";
+      }
+      return;
+    }
     this.huntOrPatrol(n, 0.9, roll, true);
   }
 
@@ -6539,9 +6734,24 @@ export class GameCanvas {
   /** Shared hunt/patrol/social roll for outdoor cats. */
   private huntOrPatrol(n: NPCState, huntChance: number, roll: number, _apprentice: boolean) {
     const goodWeather = this.weather === "clear" || this.weather === "cloudy" || this.weather === "wind";
+    // §33: steady rain/storm — cats seek cover (under a den's south face) or
+    // hunker down; they do NOT trek to another Clan's camp for it.
+    const wet = this.weather === "rain" || this.weather === "heavy-rain" || this.weather === "storm";
+    if (wet && n.role !== undefined && n.role !== "kittypet" && n.role !== "other" && roll < 0.5) {
+      // shelter in the cat's OWN den south face (§33) — never a foreign camp
+      const den = this.roleDenFor(n);
+      if (den) {
+        n.preyId = den.interior;
+        n.ai = "go_den";
+        n.activity = "sheltering from the rain";
+        return;
+      }
+    }
     if (roll < huntChance && goodWeather) {
+      // §13 hunting opens with a crouch → stalk; real poses, state-driven
       n.ai = "hunt_stalk";
-      n.activity = "hunting";
+      n.pose = "crouch";
+      n.activity = "hunting — belly low to the ground";
       const ang = Math.random() * Math.PI * 2;
       const rad = 300 + Math.random() * 800;
       const pt = clampTerritoryTarget(n.def, n.homeTerritory, n.territoryLeash, n.def.home.x + Math.cos(ang) * rad, n.def.home.y + Math.sin(ang) * rad);
@@ -6701,9 +6911,8 @@ export class GameCanvas {
       }
       case "deliver": {
         if (this.time > n.waitUntil) {
-          n.pose = "groom";
           n.ai = "idle";
-          n.waitUntil = this.time + 3 + Math.random() * 4;
+          this.npcIdleAct(n); // deliver-prey pride becomes real grooming/sniffing
         }
         break;
       }
@@ -6732,11 +6941,47 @@ export class GameCanvas {
       case "go_den": {
         const denObj = allObjects.find((o) => o.interior && o.interior === n.preyId);
         if (!denObj) { n.preyId = null; n.ai = "wander"; break; }
+        // §8 den-entry validation: the den must have a real entrance and a
+        // reachable approach mouth. A failing target is abandoned ONCE here
+        // (activity says why) instead of being retried forever (§7).
+        if (!denObj.doorAt) {
+          n.preyId = null;
+          n.denId = null;
+          n.denSeat = -1;
+          n.ai = "idle";
+          n.activity = "den unavailable";
+          n.waitUntil = this.time + 2;
+          break;
+        }
+        const mouthV = { x: denObj.x, y: denObj.y + denObj.h / 2 + 14 };
+        const mouthReachable = !isSolidPoint(mouthV.x, mouthV.y);
+        if (!mouthReachable) {
+          n.preyId = null;
+          n.denId = null;
+          n.denSeat = -1;
+          n.ai = "idle";
+          n.activity = "rethinking where to rest";
+          n.waitUntil = this.time + 2;
+          break;
+        }
         // §25 phases: 1) approach the entrance mouth  2) walk through it and
         // tuck into the claimed seat. The phases are split so the mouth walk
         // never fights the seat walk (two stepTo calls per frame canceled out
         // and the stuck detector forever re-routed the cat — it never got in).
-        const mouth = { x: denObj.x, y: denObj.y + denObj.h / 2 + 14 };
+        const mouth = mouthV;
+        if (n.denSeat >= 0 && n.stuckSince !== null && this.time - n.stuckSince > 4) {
+          // §7: the tuck-in is not converging (crowded doorway, blocked
+          // corridor) — give up on THIS entrance for a while and do something
+          // else. Never an infinite den-entry loop.
+          n.denId = null;
+          n.denSeat = -1;
+          n.preyId = null;
+          n.denCooldownUntil = this.time + 90;
+          n.ai = "idle";
+          n.activity = "settling near the den instead";
+          n.waitUntil = this.time + 2;
+          break;
+        }
         if (n.denSeat < 0) {
           // PHASE 1 — approach the entrance (a real navigation point)
           const d = stepTo(mouth.x, mouth.y, walkSpeed);

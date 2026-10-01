@@ -59,6 +59,7 @@ import {
 } from "./gameUi";
 import { FriendsDMsPanel, type SocialScreen } from "./FriendsDMs";
 import { useNavigate } from "react-router";
+import { NpcDebugPanel } from "@/components/NpcDebugPanel";
 import type { CatSkin } from "@/game/draw";
 
 // ---------------------------------------------------------------------------
@@ -1007,6 +1008,7 @@ export default function Game() {
         setChatMsgs([{ from: "npc", text: built.opening }]);
         const dCtx = dialogueCtx();
         dCtx.npcActivity = gameRef.current?.getNpcActivity(npc.id) ?? undefined;
+        dCtx.npcLocation = gameRef.current?.getNpcLocation(npc.id) ?? undefined;
         setAskOptions(buildAskMenu(npc.id, dCtx));
         setNpcConvo({ npcId: npc.id, name: npc.name, role: profileFor(npc.id).rank, line: built.opening, choices: built.choices });
         const nextTalked = { ...talkedRef.current, [npc.id]: (talkedRef.current[npc.id] ?? 0) + 1 };
@@ -1199,6 +1201,7 @@ export default function Game() {
           npcApprentice: p.apprentice,
           npcRelationships: (p.relationships ?? []).join("; "),
           npcActivity: gameRef.current?.getNpcActivity(c.npcId) ?? undefined,
+          npcLocation: gameRef.current?.getNpcLocation(c.npcId) ?? undefined,
           rememberedFacts: (ctx.facts ?? [])
             .filter((f) => f.startsWith(`${c.npcId}:`))
             .map((f) => FACT_LABELS[f.slice(c.npcId.length + 1)] ?? f.slice(c.npcId.length + 1)),
@@ -1703,6 +1706,7 @@ export default function Game() {
                           ev.stopPropagation();
                           const dCtx2 = dialogueCtx();
                           dCtx2.npcActivity = gameRef.current?.getNpcActivity(npcConvo.npcId) ?? undefined;
+                          dCtx2.npcLocation = gameRef.current?.getNpcLocation(npcConvo.npcId) ?? undefined;
                           setAskOptions(buildAskMenu(npcConvo.npcId, dCtx2));
                           setConvoView("ask");
                         }}
@@ -2149,6 +2153,8 @@ export default function Game() {
           />
         )}
       </AnimatePresence>
+      {/* dev-only NPC diagnostics (Ctrl+Shift+N) — hidden from players */}
+      <NpcDebugPanel game={gameRef} />
     </main>
   );
 }

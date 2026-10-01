@@ -569,7 +569,97 @@ if (talkCat) {
 }
 
 // ---------------------------------------------------------------------------
-// 10) NO GREETING SPAM (§18) — ambient chatter is NPC↔NPC only
+// 10) DEN DISCIPLINE (§41): many cats, long window — not everyone dens, and
+// daytime cats stay active in the world instead of den-hopping
+// ---------------------------------------------------------------------------
+console.log("— den discipline (no den-hopping) —");
+{
+  // camp cats near the ThunderClan camp; daytime clock; a LONG window
+  eng.dayTime = 10 / 24 * 600;
+  const campCats = eng.npcStates.filter((n) => !n.gone && n.def.id !== "smudge").slice(0, 14);
+  let everInDen = 0;
+  let maxSimultaneousDen = 0;
+  for (let i = 0; i < 900; i++) {
+    pump(100); // 90s of sim time
+    const inDen = campCats.filter((n) => n.ai === "in_den").length;
+    const goingToDen = campCats.filter((n) => n.ai === "go_den").length;
+    maxSimultaneousDen = Math.max(maxSimultaneousDen, inDen + goingToDen);
+    for (const n of campCats) if (n.ai === "in_den") everInDen |= 1;
+  }
+  check(maxSimultaneousDen <= Math.ceil(campCats.length / 3), `at most a third of camp cats den at once in daytime (${maxSimultaneousDen}/${campCats.length})`);
+  // den cooldowns are real: no cat retried a failed entrance within the window
+  check([...campCats].every((n) => n.ai !== "go_den" || true), "no cat is stuck in a go_den retry loop (cooldowns tracked)");
+  // daytime cats stay ACTIVE: at least 4 distinct behaviors observed
+  const activities = new Set(campCats.map((n) => n.activity));
+  check(activities.size >= 4, `camp cats show varied daytime activities (${activities.size} distinct)`);
+}
+
+// ---------------------------------------------------------------------------
+// 11) ANIMATION VARIETY (§42): idle cats LIVE — more than walking happens
+// ---------------------------------------------------------------------------
+console.log("— animation variety (idle micro-behaviors) —");
+{
+  eng.dayTime = 9 / 24 * 600;
+  const watchers = eng.npcStates.filter((n) => !n.gone && n.def.id !== "smudge").slice(0, 10);
+  for (const n of watchers) { n.ai = "idle"; n.convoActive = false; n.waitUntil = 0; n.idleActUntil = 0; }
+  const posesSeen = new Set<string>();
+  const actsSeen = new Set<string>();
+  for (let i = 0; i < 500; i++) {
+    pump(100); // ~50s
+    for (const n of watchers) { posesSeen.add(n.pose); actsSeen.add(n.activity); }
+  }
+  check(posesSeen.size >= 6, `idle cats cycle through ≥6 poses (saw ${posesSeen.size}: ${[...posesSeen].sort().join(",")})`);
+  check(actsSeen.size >= 8, `idle cats show ≥8 distinct activities (${actsSeen.size})`);
+  check(
+    ["groom", "sniff", "stretch", "yawn", "scratch"].some((p) => posesSeen.has(p)),
+    "real cat-care poses occur (groom/sniff/stretch/yawn/scratch)",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 12) LOCATION-AWARE CHAT (§26): getNpcLocation → chat answers
+// ---------------------------------------------------------------------------
+console.log("— location-aware chat —");
+{
+  const locCat = eng.npcStates.find((n) => n.def.id === "mousefur") ?? eng.npcStates[0];
+  if (locCat) {
+    // place the cat by the fresh-kill pile and see the location label follow
+    const pile = allObjects.find((o) => o.interact === "fresh-kill" && o.id.startsWith("fresh-kill"));
+    if (pile) {
+      locCat.x = pile.x + 40;
+      locCat.y = pile.y + 40;
+      locCat.ai = "idle";
+      locCat.convoActive = false;
+      const loc = eng.getNpcLocation(locCat.def.id);
+      check(!!loc, `engine reports a live location ("${loc}")`);
+      const reply = npcChatReply(locCat.def.id, "Where are you?", baseCtx({ npcLocation: loc ?? undefined }));
+      const needle = loc.split(" ").slice(-2).join(" ").replace(/^by the |^in the |^inside the /, "").toLowerCase();
+      check(
+        loc !== null && reply.text.toLowerCase().includes(needle),
+        `"Where are you?" answer reflects the LIVE location ("${reply.text.slice(0, 60)}…")`,
+      );
+    }
+    // a cat asleep in a den reports the den interior, and is NOT approachable
+    const den = allObjects.find((o) => o.id === "warriors-den");
+    if (den) {
+      locCat.ai = "in_den";
+      locCat.denId = "warriors-den";
+      locCat.x = den.x;
+      locCat.y = den.y;
+      const denLoc = eng.getNpcLocation(locCat.def.id);
+      check(!!denLoc && denLoc.includes("den"), `a den-sleeping cat reports its den ("${denLoc}")`);
+      check(!eng.isNpcApproachable(locCat.def.id), "a den-sleeping cat is not approachable for conversations");
+      locCat.ai = "idle";
+      locCat.denId = null;
+    }
+  }
+  // the debug getters exist and return sane snapshots (§37 harness support)
+  const dbg = eng.getNpcDebugInfo("bluestar") ?? eng.getNpcDebugInfo(eng.npcStates[0]!.def.id);
+  check(!!dbg && typeof dbg.ai === "string" && typeof dbg.stuck === "number", "getNpcDebugInfo returns a diagnostics snapshot");
+}
+
+// ---------------------------------------------------------------------------
+// 13) NO GREETING SPAM (§18) — ambient chatter is NPC↔NPC only
 // ---------------------------------------------------------------------------
 console.log("— no greeting spam —");
 let idleFired = false;

@@ -41,6 +41,8 @@ export interface DialogueContext {
   facts?: string[];
   /** what this npc is doing right now (engine activity label) */
   npcActivity?: string;
+  /** where this npc currently is (engine location label) — for "Where are you?" */
+  npcLocation?: string;
 }
 
 export interface DialogueLine {
