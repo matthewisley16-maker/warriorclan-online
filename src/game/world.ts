@@ -908,6 +908,21 @@ function buildCollision() {
     blockRect({ x: tr.x - 12, y: tr.y - 10, w: 24, h: 20 });
   }
 
+  // §26/§27: a den with a door is a REAL navigation point, not a decoration —
+  // carve a narrow walkable mouth into its south face so cats physically pass
+  // through the entrance (no more grinding against a sealed footprint, and no
+  // teleporting in/out). Houses are excluded: entering them is the walk-in
+  // trigger into a separate interior scene, not a walk-through doorway.
+  for (const o of allObjects) {
+    if (!o.solid || !o.interior || !o.doorAt || o.style === "house") continue;
+    const south = o.y + o.h / 2;
+    // full tile rows spanning the mouth band (at least one row) — a ceil-only
+    // range silently skipped dens whose face aligned high inside a tile row
+    const y0 = Math.floor((south - 20) / 32) * 32;
+    const y1 = Math.max(Math.ceil((south + 4) / 32) * 32, y0 + 32);
+    unblockRect({ x: o.x - 12, y: y0, w: 24, h: y1 - y0 });
+  }
+
   // --- openings so every territory is reachable ---
   // Stepping stones across the west river
   unblockRect({ x: 0, y: t(56), w: t(5), h: t(2) });

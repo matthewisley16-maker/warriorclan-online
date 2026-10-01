@@ -1599,14 +1599,15 @@ interface NPCState {
   gone?: boolean;
 }
 
-/** Stable rest seats inside a den's footprint (an arc, not one shared spot). */
+/** Stable rest seats inside a den: tucked into the WALKABLE mouth corridor
+ *  (south face), not the sealed interior — cats physically reach them by
+ *  walking through the entrance (§25/§27), staggered so six cats fit. */
 function denSeatsFor(o: WorldObject): { x: number; y: number }[] {
   const seats: { x: number; y: number }[] = [];
+  const south = o.y + o.h / 2;
+  const xs = [-10, 0, 10];
   for (let i = 0; i < 6; i++) {
-    seats.push({
-      x: o.x - (o.w / 2 - 12) + (i % 3) * ((o.w - 24) / 2),
-      y: o.y - o.h / 4 + Math.floor(i / 3) * (o.h / 3),
-    });
+    seats.push({ x: o.x + xs[i % 3], y: south - 4 + Math.floor(i / 3) * 7 });
   }
   return seats;
 }
@@ -3380,6 +3381,7 @@ export class GameCanvas {
           // genuinely trapped for 8+ seconds: emergency nudge to the nearest
           // walkable tile (last-resort recovery, not normal pathing)
           const free = this.nearestFreeNpcSpot(n.x, n.y);
+          const movedFar = free && Math.hypot(free.x - n.x, free.y - n.y) > 2;
           if (free) {
             n.x = free.x;
             n.y = free.y;
@@ -3388,9 +3390,20 @@ export class GameCanvas {
           n.lastStuckX = n.x;
           n.lastStuckY = n.y;
           n.sidestepUntil = this.time + 1;
-          // long cool-down: the nudge means the TARGET is likely unreachable,
-          // so let the cat idle here and re-decide instead of grinding back
           n.stuckCooldown = this.time + 12;
+          if (!movedFar) {
+            // the rescue could not relocate the cat (e.g. walled in against a
+            // border): the TARGET is unreachable — abandon it and re-decide
+            // rather than grinding here forever (§29 alternate route)
+            n.tx = n.x;
+            n.ty = n.y;
+            if (n.ai === "wander" || n.ai === "patrol") {
+              n.ai = "idle";
+              n.activity = "rethinking the route";
+              n.waitUntil = this.time + 2;
+              n.aiThinkAt = this.time + 2;
+            }
+          }
         } else if (this.time - n.stuckSince > 1.4 && this.time >= n.sidestepUntil) {
           // stalled 1.4s: try walking AROUND whatever is in the way
           const st = this.npcSidestep(n);
@@ -5986,9 +5999,15 @@ export class GameCanvas {
    * den is closest", and never another Clan's den.
    */
   private roleDenFor(n: NPCState) {
+    const inOwnCamp = (o: { id: string }) => {
+      if (n.def.clan === "windclan") return o.id.startsWith("wc-");
+      if (n.def.clan === "riverclan") return o.id.startsWith("rc-");
+      if (n.def.clan === "shadowclan") return o.id.startsWith("sc-");
+      return true;
+    };
     for (const id of roleDenIds(n.def.role, n.def.clan)) {
       const o = allObjects.find((d) => d.id === id);
-      if (o?.interior) return { id: o.id, interior: o.interior, x: o.x, y: o.y, h: o.h };
+      if (o?.interior && inOwnCamp(o)) return { id: o.id, interior: o.interior, x: o.x, y: o.y, h: o.h };
     }
     return null;
   }
@@ -6719,12 +6738,25 @@ export class GameCanvas {
         const mouth = { x: denObj.x, y: denObj.y + denObj.h / 2 + 14 };
         const d = stepTo(mouth.x, mouth.y, walkSpeed);
         if (d <= arrive) {
-          // someone still entering this doorway: wait politely behind them
-          const blocker = this.npcStates.some(
-            (o) => o !== n && o.denId === denObj.id && o.ai === "go_den" && Math.hypot(o.x - mouth.x, o.y - mouth.y) < 40,
-          );
+          // someone still entering this doorway: wait politely behind them —
+          // but only for cats STRICTLY closer to the mouth (deterministic
+          // alphabetical tie-break), so two cats never deadlock waiting on
+          // each other at the same doorway
+          const blocker = this.npcStates.some((o) => {
+            if (o === n || o.denId !== denObj.id || o.ai !== "go_den") return false;
+            const dO = Math.hypot(o.x - mouth.x, o.y - mouth.y);
+            if (dO < d - 4) return true;
+            if (Math.abs(dO - d) <= 4) return o.def.id < n.def.id;
+            return false;
+          });
           if (blocker) {
             n.pose = "sit";
+            // a deliberate polite wait is NOT a stall: anchor the stuck
+            // detector here so a queued cat is never "rescued" away from the
+            // doorway it is patiently standing in front of
+            n.stuckSince = null;
+            n.lastStuckX = n.x;
+            n.lastStuckY = n.y;
             break;
           }
           // reserve the seat ONLY on arrival, then tuck in

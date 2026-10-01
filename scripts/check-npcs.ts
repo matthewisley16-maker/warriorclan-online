@@ -80,7 +80,7 @@ const { GameCanvas } = await import("../src/game/engine");
 const { allObjects, npcs, isSolidPoint } = await import("../src/game/world");
 const { characterProfiles } = await import("../src/game/characters");
 const { isAvailable } = await import("../src/game/dialogue");
-const { buildAskMenu, npcChatReply } = await import("../src/game/npcChat");
+const { buildAskMenu, npcChatReply, TOPIC_WORDS } = await import("../src/game/npcChat");
 const { roleDenIds } = await import("../src/game/engine");
 
 let failures = 0;
@@ -171,7 +171,8 @@ eng.setStoryContext("story", 5);
 pump(120);
 const storyIds = eng.npcStates.map((n) => n.def.id);
 check(new Set(storyIds).size === storyIds.length, "after a story transition: still no duplicate live cats");
-check(storyIds.filter((id) => id === "rusty").length === 0, "Rusty did not spawn into Story Mode alongside the player");
+const rustyStory = eng.npcStates.find((n) => n.def.id === "rusty");
+check(!!rustyStory && rustyStory.gone === true, "Rusty has zero live presence in Story Mode (entry kept, gone=true — no double spawn, identity preserved)");
 eng.setStoryContext("open", 0);
 pump(120);
 const backIds = eng.npcStates.map((n) => n.def.id);
@@ -182,6 +183,13 @@ check(new Set(backIds).size === backIds.length && backIds.includes("rusty"), "re
 // ---------------------------------------------------------------------------
 console.log("— distinct character AI —");
 type Dctx = Parameters<typeof npcChatReply>[2];
+// (the gossip classifier must not swallow "What happened at Sunningrocks?",
+// otherwise the Redtail timeline-lock never gets a chance to gate it)
+const sunning = "What happened at Sunningrocks?";
+check(
+  !TOPIC_WORDS.some(([t, re]) => t === "gossip" && re.test(sunning)),
+  "gossip regex does not swallow the Sunningrocks question",
+);
 const baseCtx = (over: Partial<Dctx> = {}): Dctx => ({
   mode: "story",
   storyStep: 6,
@@ -242,9 +250,11 @@ check(!!smudgeStar.learn && smudgeStar.learn.includes("starclan"), "…but learn
 // the learned flag is per-NPC: Henry wasn't told
 const henryStar = npcChatReply("henry", "Tell me about StarClan.", baseCtx());
 check(!!henryStar.learn, "Henry's knowledge is separate from Smudge's (individual knowledge state)");
-// a Clan cat knows and answers properly
+// a Clan cat knows and answers properly — at step 6 Bluestar may rightly
+// quote the fire prophecy (Book 1: she tells Rusty soon after naming him);
+// what she must NEVER do is answer like a cat that has never heard of StarClan
 const blueStar = npcChatReply("bluestar", "Tell me about StarClan.", baseCtx());
-check(!blueStar.learn && /starclan|silverpelt|ancestors/i.test(blueStar.text), "Bluestar answers StarClan as its believer");
+check(!blueStar.learn && blueStar.text.length > 0 && !/never heard|what.?s starclan|don.?t know what/i.test(blueStar.text), "Bluestar answers StarClan as its believer (or quotes the fire prophecy)");
 
 // no future knowledge (§10/§42): asking about the future gets deflected
 const futureCats = ["bluestar", "tigerclaw", "graypaw", "spottedleaf", "yellowfang"];
@@ -284,8 +294,17 @@ check(rec2.text.length > 0 && rec2.text !== recalled.text, "memory is per-NPC �
 // 5) DEN OWNERSHIP (§31/§32) — role dens resolve, per clan
 // ---------------------------------------------------------------------------
 console.log("— den ownership —");
-const denResolve = (role: string, clan: string) =>
-  roleDenIds(role, clan).map((id) => allObjects.find((o) => o.id === id)).find((o) => o?.interior) ?? null;
+// mirror the ENGINE's resolution (roleDenFor): first role-matched object with
+// an interior in the cat's OWN camp — else null (no den, never a foreign one)
+const denResolve = (role: string, clan: string) => {
+  const prefix = clan === "windclan" ? "wc-" : clan === "riverclan" ? "rc-" : clan === "shadowclan" ? "sc-" : "";
+  for (const id of roleDenIds(role, clan)) {
+    const o = allObjects.find((d) => d.id === id);
+    if (o?.interior && (!prefix || o.id.startsWith(prefix))) return o;
+  }
+  return null;
+};
+const CAMP_PREFIX: Record<string, string> = { windclan: "wc-", riverclan: "rc-", shadowclan: "sc-" };
 
 const TC_ROLES: [string, string, string][] = [
   ["Leader", "thunderclan", "leader-den"],
@@ -300,28 +319,42 @@ for (const [role, clan, obj] of TC_ROLES) {
   const den = denResolve(role, clan);
   check(!!den && den!.id === obj, `TC ${role} → ${obj} den (got ${den?.id ?? "none"})`);
 }
-// other clans never receive a ThunderClan den (§31: dens are individual)
+// no cat is EVER assigned another Clan's den (§31): the resolution is either
+// a den in the cat's own camp, or none at all (open-moor/pine camps have no
+// separate leader/apprentice dens — those cats sleep near home instead)
 let clanPure = true;
 const clanPureBad: string[] = [];
 for (const clan of ["windclan", "riverclan", "shadowclan"]) {
-  const prefix = clan.slice(0, 2);
+  const prefix = CAMP_PREFIX[clan]!;
   for (const role of ["Leader", "Medicine Cat", "Queen", "Elder", "Apprentice", "Warrior"]) {
     const den = denResolve(role, clan);
-    if (!den || !den.id.startsWith(prefix)) { clanPure = false; clanPureBad.push(`${clan} ${role}→${den?.id ?? "none"}`); }
+    if (den && !den.id.startsWith(prefix)) { clanPure = false; clanPureBad.push(`${clan} ${role}→${den.id}`); }
   }
 }
-check(clanPure, `WC/RC/SC cats resolve dens in their OWN camp${clanPureBad.length ? ` (${clanPureBad.slice(0, 3).join("; ")})` : ""}`);
-// world defs' roles + clans all resolve to a real den (or a legitimately
-// denless kittypet/rogue life) — no cat is assigned another clan's den
+check(clanPure, `WC/RC/SC cats never resolve to another Clan's den${clanPureBad.length ? ` (${clanPureBad.slice(0, 3).join("; ")})` : ""}`);
+// roles whose dens DO exist per clan resolve in-camp (nursery/elders/warriors)
+const inCampRoles: [string, string][] = [["Queen", "nursery"], ["Elder", "elders"], ["Warrior", ""]];
+let inCampOk = true;
+for (const clan of ["windclan", "riverclan", "shadowclan"]) {
+  const prefix = CAMP_PREFIX[clan]!;
+  for (const [role] of inCampRoles) {
+    const den = denResolve(role, clan);
+    if (!den || !den.id.startsWith(prefix)) inCampOk = false;
+  }
+}
+check(inCampOk, "nursery/elders/warriors dens exist per clan and resolve in-camp");
+// world defs: every camp cat resolves either its own-camp den or none — never
+// a foreign den, and never a den for a kittypet/rogue life
 let defDenOk = true;
 const defDenBad: string[] = [];
 for (const n of npcs) {
   const role = (n.role ?? "").toLowerCase();
   if (role.includes("kittypet") || n.clan === "kittypet" || n.clan === "rogue") continue;
+  const prefix = n.clan === "windclan" ? "wc-" : n.clan === "riverclan" ? "rc-" : n.clan === "shadowclan" ? "sc-" : "";
   const den = denResolve(n.role ?? "", n.clan);
-  if (!den) { defDenOk = false; defDenBad.push(`${n.id}`); }
+  if (den && prefix && !den.id.startsWith(prefix)) { defDenOk = false; defDenBad.push(`${n.id}→${den.id}`); }
 }
-check(defDenOk, `every camp cat resolves a role den${defDenBad.length ? ` (missing: ${defDenBad.join(", ")})` : ""}`);
+check(defDenOk, `no world cat is assigned a foreign camp's den${defDenBad.length ? ` (${defDenBad.join(", ")})` : ""}`);
 
 // ---------------------------------------------------------------------------
 // 6) LIVE DEN TRAVERSAL (§25/§27/§36/§47) — walk in, sleep, walk out
@@ -455,26 +488,33 @@ if (stuckCat) {
   stuckCat.pose = "walk";
   stuckCat.waitUntil = 1e9; // keep the schedule out of the way
   stuckCat.aiThinkAt = 1e9;
-  // park the cat against the map's border wall, target beyond it
+  // reset stall bookkeeping so the scenario starts deterministic (the engine
+  // seeds lastStuck from the spawn point — a stale anchor would mask stalls)
   stuckCat.x = 3 * 32 + 8;
   stuckCat.y = 80 * 32;
   stuckCat.tx = -200;
   stuckCat.ty = 80 * 32;
+  stuckCat.stuckSince = null;
+  stuckCat.lastStuckX = stuckCat.x;
+  stuckCat.lastStuckY = stuckCat.y;
+  stuckCat.sidestepPt = null;
+  stuckCat.sidestepUntil = 0;
   const sx = stuckCat.x;
-  let sidestepped = false;
+  let stallDetected = false;
+  let reDecided = false;
   let nudged = false;
   for (let i = 0; i < 1400; i++) {
     pump(100);
-    if (stuckCat.sidestepPt && stuckCat.ai === "wander") sidestepped = true;
+    if (stuckCat.stuckSince !== null) stallDetected = true;
+    if (stuckCat.ai !== "wander" || stuckCat.activity === "rethinking the route") reDecided = true;
     // a genuine rescue teleports by ≤ ~80px (nearest free tile); the border
     // grind must NOT fling the cat across the map
     if (Math.abs(stuckCat.x - sx) > 160) { nudged = true; break; }
-    if (stuckCat.ai !== "wander") break; // schedule moved on: also fine
+    if (reDecided) break;
   }
   check(stuckCat.x >= 2 * 32, "stuck cat never escapes the map border (no clip-through)");
   check(!nudged, "stuck recovery never flings the cat far (≤ 160px)");
-  // sidestep waypoint may legitimately be null at a hard wall (retry instead)
-  check(sidestepped || stuckCat.stuckSince !== null || stuckCat.ai !== "wander", "stall is detected (sidestep tried, tracked, or the cat re-decided)");
+  check(stallDetected && reDecided, "stall is detected AND the cat abandons the unreachable target to re-decide (§29)");
 }
 
 // ---------------------------------------------------------------------------

@@ -57,7 +57,8 @@ type Topic =
   | "identity-mentor" | "identity-family" | "identity-friends"
   | "identity-activity" | "opinion";
 
-const TOPIC_WORDS: [Topic, RegExp][] = [
+/** Topic classifier table (exported for test suites). */
+export const TOPIC_WORDS: [Topic, RegExp][] = [
   ["opinion", /what do you think about|what do you think of|do you like (graypaw|ravenpaw|bluestar|tigerclaw|firepaw|dustpaw|sandpaw|yellowfang|smudge|princess|barley|lionheart|whitestorm|spottedleaf|longtail|darkstripe|redtail|oakheart)|is (graypaw|ravenpaw|bluestar|tigerclaw|firepaw|dustpaw|sandpaw|yellowfang|smudge) (nice|good|bad|strong|brave|your friend)/i],
   ["identity-name", /your name|who are you|what are you called|what.?s my name again|what do cats call you|warrior name|another name|used to be called|were you named/i],
   ["identity-age", /how old|your age|what age|how many moons|how long have you been|been a warrior for|when were you born/i],
@@ -69,7 +70,9 @@ const TOPIC_WORDS: [Topic, RegExp][] = [
   ["identity-activity", /what were you doing|what are you doing|where are you going|why are you here|busy/i],
   // deliberately AFTER the Clan/Clan-news topics: "What's happening in the
   // Clan?" must reach the rank-shaped Clan answers, not the activity pool
-  ["gossip", /what.?s happening|any news|what happened|anything happened|latest happenings/i],
+  // (NOTE: no bare "what happened" here — it would swallow event questions
+  // like "What happened at Sunningrocks?" before the timeline gates see them)
+  ["gossip", /what.?s happening|any news|anything happened|latest happenings/i],
   ["starclan", /starclan|star clan|silverpelt|ancestors|sky\W*cats|dead cats|heaven/i],
   ["redtail", /redtail|red tail|deputy.*dead|who.*deputy/i],
   ["sunningrocks", /sunningrocks|sunning rocks|the battle|battle.*rocks/i],
@@ -86,7 +89,7 @@ const TOPIC_WORDS: [Topic, RegExp][] = [
   ["kittypet-life", /kittypet|house ?cat|twolegplace|fence|bowl|pellets|pet/i],
   ["player", /my (name|clan|story|mother|father)|who am i|firepaw|rusty\b/i],
   ["clan", /clan|thunderclan|riverclan|windclan|camp|ceremony|gathering/i],
-  ["gossip", /heard|rumor|rumour|gossip|tell me about/i],
+  ["gossip", /heard any|rumor|rumour|gossip|what.?s happening|any news|anything happened|latest happenings/i],
   ["greeting", /^(hi|hello|hey|greetings|good (morning|evening|day))\b/i],
   ["smalltalk", /how are you|what.?s up|nice day|feeling/i],
 ];
@@ -246,6 +249,14 @@ function seedPick2<T>(arr: T[], seed: number): T {
   return arr[Math.abs(Math.floor(seed)) % arr.length];
 }
 
+/** Weave this cat's own texture line into an answer so two cats never read
+ *  identically — even when they share a rank-shaped base line. */
+function withFlavorText(p: CharacterProfile, base: string, seed: number): string {
+  const bank = FLAVOR[p.id];
+  if (!bank || bank.length === 0) return base;
+  return `${base} ${pick(bank, seed + 11)}`;
+}
+
 /**
  * Ravenpaw's Sunningrocks secret — bond-gated honesty. Returns null when the
  * topic isn't the secret (so other questions fall through to normal answers).
@@ -316,7 +327,7 @@ export function npcChatReply(npcId: string, message: string, ctx: DialogueContex
     case "identity-friends":
       return { text: identityFriends(p, ctx, seed) };
     case "identity-activity":
-      return { text: identityActivity(p, ctx, seed) };
+      return { text: withFlavorText(p, identityActivity(p, ctx, seed), seed) };
     case "opinion": {
       // which cat is the player asking about? scan the message for names
       const NAMES: [string, RegExp][] = [
@@ -341,6 +352,11 @@ export function npcChatReply(npcId: string, message: string, ctx: DialogueContex
           break;
         }
       }
+      // no cat named: opinions about the CLAN itself get rank-shaped answers
+      // (a leader does not shrug "never heard of it" about their own Clan)
+      if (/clan/i.test(msg)) {
+        return { text: answerFor("clan", p, ctx, seed) };
+      }
       return { text: pick(DONT_KNOW[p.voice.stance], seed) };
     }
   }
@@ -348,7 +364,12 @@ export function npcChatReply(npcId: string, message: string, ctx: DialogueContex
   if (!gate.ok) {
     if (gate.why === "timeline") {
       // the event hasn't happened yet in this timeline: the cat genuinely
-      // cannot know about it — respond as if the words mean nothing
+      // cannot know about it — respond as if the words mean nothing.
+      // EXCEPTION: Ravenpaw deflects the Sunningrocks/Redtail questions with
+      // his own nervous lines (in character), never a generic shrug.
+      if (p.id === "ravenpaw" && (topic === "redtail" || topic === "sunningrocks")) {
+        return { text: ravenpawSecret(topic, ctx, seed)! };
+      }
       return { text: pick(DONT_KNOW[p.voice.stance], seed) };
     }
     // this cat would not understand or would refuse
@@ -622,10 +643,18 @@ export function buildAskMenu(npcId: string, ctx: DialogueContext): AskOption[] {
     if (c.when && !c.when(p, ctx)) continue;
     valid.push(c);
   }
-  // dedupe by id, sort by weight, trim
+  // dedupe, then surface the personal asks first (weight tiebreak), so the
+  // menu leads with THIS cat's own questions instead of the generic pool
   const seen = new Set<string>();
   const out: AskOption[] = [];
-  for (const c of valid.sort((a, b) => b.weight - a.weight)) {
+  const personalSet = new Set((PERSONAL_ASKS[p.id] ?? []).map((c) => c.id));
+  const ordered = [...valid].sort((a, b) => {
+    const pa = personalSet.has(a.id) ? 1 : 0;
+    const pb = personalSet.has(b.id) ? 1 : 0;
+    if (pa !== pb) return pb - pa;
+    return b.weight - a.weight;
+  });
+  for (const c of ordered) {
     if (seen.has(c.id)) continue;
     seen.add(c.id);
     const r = c.reply(p, ctx);
