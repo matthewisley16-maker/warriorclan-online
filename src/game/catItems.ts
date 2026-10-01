@@ -17,6 +17,7 @@ export const ACCESSORY_SLOTS: { id: AccessorySlot; name: string }[] = [
 
 export type ItemCategory =
   | "fur" | "colors" | "patterns" | "markings" | "eyes" | "face" | "ears" | "tail" | "tailAcc" | "scars"
+  | "collars"
   | AccessorySlot;
 
 export const CATEGORIES: { id: ItemCategory | "all" | "favorites"; name: string }[] = [
@@ -32,6 +33,7 @@ export const CATEGORIES: { id: ItemCategory | "all" | "favorites"; name: string 
   { id: "scars", name: "Scars" },
   { id: "head", name: "Head" },
   { id: "ear", name: "Ear Items" },
+  { id: "collars", name: "Collars" },
   { id: "neck", name: "Neck" },
   { id: "body", name: "Body" },
   { id: "paw", name: "Legs/Paws" },
@@ -60,9 +62,17 @@ export interface CustomSkin {
   markings?: string[]; // ids from MARKING_ITEMS
   // --- scars (multi-select) ---
   scars?: string[]; // ids from SCAR_ITEMS
-  // --- accessories: one item per slot ---
+  // --- accessories: one item per slot (head/ear/neck/body/paw/tail) ---
   acc?: Partial<Record<AccessorySlot, string>>;
   accColor?: string; // shared accessory tint (flowers/ribbons/bands)
+  // §21: per-slot tint override — a red flower on the head can coexist with a
+  // blue collar. Falls back to accColor when absent.
+  accColors?: Partial<Record<AccessorySlot, string>>;
+  // §22-23: applied morph id (WARRIORS character look on the same account)
+  morph?: string;
+  // §25/§30: the WARRIORS character preset this look came from (undefined =
+  // the player's own baseCustomAppearance)
+  presetId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +304,11 @@ export const CAT_ITEMS: CatItem[] = [
   { id: "hd-moth", name: "Perched Moth", category: "head", desc: "A dusty moth rests on your head.", ...equipAcc("head", "moth"), tags: ["moth", "fun", "cute", "insect"] },
   { id: "hd-acorn", name: "Acorn Cap", category: "head", desc: "A tiny acorn, leaf-fall's treasure.", ...equipAcc("head", "acorn"), tags: ["acorn", "seasonal", "leaf-fall"] },
   { id: "hd-holly", name: "Holly Sprig", category: "head", desc: "Glossy leaves and red berries.", ...equipAcc("head", "holly"), tags: ["holly", "seasonal", "leaf-bare", "berry"] },
+  { id: "hd-butterfly", name: "Resting Butterfly", category: "head", desc: "A butterfly with fluttering wings.", ...equipAcc("head", "butterfly"), tags: ["butterfly", "fun", "cute", "greenleaf"] },
+  { id: "hd-dandelion", name: "Dandelion", category: "head", desc: "A puff of ready seeds.", ...equipAcc("head", "dandelion"), tags: ["dandelion", "nature", "newleaf"] },
+  { id: "hd-mushroom", name: "Mushroom Cap", category: "head", desc: "A spotted toadstool hat.", ...equipAcc("head", "mushroom"), tags: ["mushroom", "fun", "forest"] },
+  { id: "hd-juniper", name: "Juniper Berries", category: "head", desc: "Frost-blue berries behind the ear.", ...equipAcc("head", "juniper"), tags: ["juniper", "berry", "herb", "seasonal"] },
+  { id: "hd-starflower", name: "Starflower", category: "head", desc: "A pale bloom that shines at dusk.", ...equipAcc("head", "starflower"), tags: ["star", "flower", "nature", "night"] },
 
   // --- EAR ACCESSORIES -----------------------------------------------------
   { id: "er-flower", name: "Ear Flower", category: "ear", desc: "A tiny bloom on one ear.", ...equipAcc("ear", "flower"), tags: ["flower", "nature"] },
@@ -301,20 +316,33 @@ export const CAT_ITEMS: CatItem[] = [
   { id: "er-leaf", name: "Ear Leaf", category: "ear", desc: "A small leaf tucked in.", ...equipAcc("ear", "leaf"), tags: ["leaf", "nature"] },
   { id: "er-berry", name: "Ear Berries", category: "ear", desc: "Two tiny red berries.", ...equipAcc("ear", "berry"), tags: ["berry", "nature", "seasonal"] },
   { id: "er-ribbon", name: "Ear Ribbon", category: "ear", desc: "A little bow for one ear.", ...equipAcc("ear", "ribbon"), tags: ["ribbon", "bow", "fun", "cute"] },
+  { id: "er-wrap", name: "Ear Wrap", category: "ear", desc: "A fine gold band at the ear base.", ...equipAcc("ear", "wrap"), tags: ["wrap", "gold", "fun"] },
+  { id: "er-daisy", name: "Ear Daisy", category: "ear", desc: "A tiny white daisy.", ...equipAcc("ear", "daisy"), tags: ["daisy", "flower", "nature"] },
 
-  // --- NECK ACCESSORIES ----------------------------------------------------
-  { id: "nk-collar-red", name: "Red Collar", category: "neck", desc: "A kittypet's red collar.", ...equipAcc("neck", "collar-red"), tags: ["collar", "kittypet"] },
-  { id: "nk-collar-blue", name: "Blue Collar", category: "neck", desc: "A bluecloth collar.", ...equipAcc("neck", "collar-blue"), tags: ["collar"] },
-  { id: "nk-collar-brown", name: "Leather Collar", category: "neck", desc: "Worn brown leather.", ...equipAcc("neck", "collar-brown"), tags: ["collar", "leather"] },
-  { id: "nk-collar-yellow", name: "Yellow Collar", category: "neck", desc: "A sunny yellow collar.", ...equipAcc("neck", "collar-yellow"), tags: ["collar"] },
-  { id: "nk-collar-purple", name: "Purple Collar", category: "neck", desc: "A deep violet collar.", ...equipAcc("neck", "collar-purple"), tags: ["collar"] },
-  { id: "nk-collar-green", name: "Green Collar", category: "neck", desc: "A moss-green cloth collar.", ...equipAcc("neck", "collar-green"), tags: ["collar"] },
-  { id: "nk-bell", name: "Collar with Bell", category: "neck", desc: "A collar with a tiny brass bell.", ...equipAcc("neck", "bell"), tags: ["collar", "bell", "kittypet"] },
-  { id: "nk-tag", name: "Collar with Tag", category: "neck", desc: "A collar with a small name-tag.", ...equipAcc("neck", "tag"), tags: ["collar", "tag", "kittypet"] },
+  // --- COLLARS (dedicated category, §16) — every one renders at the neck ---
+  { id: "nk-collar-red", name: "Red Collar", category: "collars", desc: "A kittypet's red collar.", ...equipAcc("neck", "collar-red"), tags: ["collar", "kittypet"] },
+  { id: "nk-collar-blue", name: "Blue Collar", category: "collars", desc: "A bluecloth collar.", ...equipAcc("neck", "collar-blue"), tags: ["collar"] },
+  { id: "nk-collar-brown", name: "Leather Collar", category: "collars", desc: "Worn brown leather.", ...equipAcc("neck", "collar-brown"), tags: ["collar", "leather"] },
+  { id: "nk-collar-yellow", name: "Yellow Collar", category: "collars", desc: "A sunny yellow collar.", ...equipAcc("neck", "collar-yellow"), tags: ["collar"] },
+  { id: "nk-collar-purple", name: "Purple Collar", category: "collars", desc: "A deep violet collar.", ...equipAcc("neck", "collar-purple"), tags: ["collar"] },
+  { id: "nk-collar-green", name: "Green Collar", category: "collars", desc: "A moss-green cloth collar.", ...equipAcc("neck", "collar-green"), tags: ["collar"] },
+  { id: "nk-collar-woven", name: "Woven Collar", category: "collars", desc: "Two threads woven tight.", ...equipAcc("neck", "collar-woven"), tags: ["collar", "woven"] },
+  { id: "nk-collar-braided", name: "Braided Collar", category: "collars", desc: "A braided rope band.", ...equipAcc("neck", "collar-braided"), tags: ["collar", "braided", "rope"] },
+  { id: "nk-collar-stud", name: "Studded Collar", category: "collars", desc: "Dark leather with metal studs.", ...equipAcc("neck", "collar-stud"), tags: ["collar", "studs", "rogue"] },
+  { id: "nk-collar-cloth", name: "Cloth Collar", category: "collars", desc: "A wide, soft cloth band.", ...equipAcc("neck", "collar-cloth"), tags: ["collar", "cloth"] },
+  { id: "nk-collar-pattern", name: "Patterned Collar", category: "collars", desc: "Stitched with a dashed pattern.", ...equipAcc("neck", "collar-pattern"), tags: ["collar", "pattern", "stitched"] },
+  { id: "nk-collar-nature", name: "Nature Collar", category: "collars", desc: "A pliable vine with leaves.", ...equipAcc("neck", "collar-nature"), tags: ["collar", "nature", "vine", "leaf"] },
+  { id: "nk-collar-flower", name: "Blossom Collar", category: "collars", desc: "A collar strung with blossoms.", ...equipAcc("neck", "collar-flower"), tags: ["collar", "flower", "nature"] },
+  { id: "nk-collar-holly", name: "Holly Collar", category: "collars", desc: "Winter holly worked into a band.", ...equipAcc("neck", "collar-holly"), tags: ["collar", "holly", "seasonal", "leaf-bare"] },
+  { id: "nk-collar-kittypet", name: "Kittypet Collar", category: "collars", desc: "A bright Twolegplace collar with a tag.", ...equipAcc("neck", "collar-kittypet"), tags: ["collar", "kittypet", "tag"] },
+  { id: "nk-collar-festival", name: "Festival Collar", category: "collars", desc: "Set with tiny colored gems.", ...equipAcc("neck", "collar-festival"), tags: ["collar", "gems", "fun", "festival"] },
+  { id: "nk-bell", name: "Collar with Bell", category: "collars", desc: "A collar with a tiny brass bell.", ...equipAcc("neck", "bell"), tags: ["collar", "bell", "kittypet"] },
+  { id: "nk-tag", name: "Collar with Tag", category: "collars", desc: "A collar with a small name-tag.", ...equipAcc("neck", "tag"), tags: ["collar", "tag", "kittypet"] },
+  { id: "nk-charm", name: "Charm Collar", category: "collars", desc: "A collar with a swinging charm.", ...equipAcc("neck", "charm"), tags: ["collar", "charm", "fun"] },
+  // --- NECK ACCESSORIES (non-collar pieces) ---------------------------------
   { id: "nk-ribbon", name: "Neck Ribbon", category: "neck", desc: "A soft cloth ribbon.", ...equipAcc("neck", "ribbon"), tags: ["ribbon", "bow"] },
   { id: "nk-scarf", name: "Leaf Scarf", category: "neck", desc: "A wrap of broad leaves.", ...equipAcc("neck", "scarf"), tags: ["scarf", "wrap", "nature"] },
   { id: "nk-garland", name: "Flower Garland", category: "neck", desc: "A garland of tiny blooms.", ...equipAcc("neck", "garland"), tags: ["flower", "garland", "greenleaf", "fun"] },
-  { id: "nk-charm", name: "Charm Collar", category: "neck", desc: "A collar with a swinging charm.", ...equipAcc("neck", "charm"), tags: ["collar", "charm", "fun"] },
   { id: "nk-bandana", name: "Bandana", category: "neck", desc: "A soft cloth bandana.", ...equipAcc("neck", "bandana"), tags: ["bandana", "cloth", "roleplay"] },
 
   // --- BODY ACCESSORIES ----------------------------------------------------
@@ -323,12 +351,18 @@ export const CAT_ITEMS: CatItem[] = [
   { id: "bd-moss", name: "Moss Patch", category: "body", desc: "Soft moss clings to the back.", ...equipAcc("body", "moss"), tags: ["moss", "nature"] },
   { id: "bd-satchel", name: "Herb Satchel", category: "body", desc: "A strapped pouch for herbs.", ...equipAcc("body", "satchel"), tags: ["satchel", "bag", "roleplay", "medicine"] },
   { id: "bd-flowers", name: "Flower Trail", category: "body", desc: "Little blossoms line the back.", ...equipAcc("body", "flowers"), tags: ["flower", "nature", "fun", "newleaf"] },
+  { id: "bd-garland", name: "Back Garland", category: "body", desc: "A garland draped across the back.", ...equipAcc("body", "garland"), tags: ["garland", "flower", "nature", "greenleaf"] },
+  { id: "bd-vine", name: "Ivy Drape", category: "body", desc: "Trailing ivy along the flank.", ...equipAcc("body", "vine"), tags: ["ivy", "vine", "nature", "leaf"] },
+  { id: "bd-pouch", name: "Traveler's Pouch", category: "body", desc: "A small pouch for long journeys.", ...equipAcc("body", "pouch"), tags: ["pouch", "bag", "roleplay", "travel"] },
 
   // --- PAW/LEG ACCESSORIES -------------------------------------------------
   { id: "pw-band-red", name: "Red Leg Band", category: "paw", desc: "A woven red band.", ...equipAcc("paw", "band-red"), tags: ["band", "leg", "red"] },
   { id: "pw-band-blue", name: "Blue Leg Band", category: "paw", desc: "A woven blue band.", ...equipAcc("paw", "band-blue"), tags: ["band", "leg", "blue"] },
   { id: "pw-wrap", name: "Paw Wraps", category: "paw", desc: "Cloth wraps for long patrols.", ...equipAcc("paw", "wrap"), tags: ["wrap", "bandage", "roleplay"] },
   { id: "pw-bracelet", name: "Leg Bracelet", category: "paw", desc: "A thin woven bracelet.", ...equipAcc("paw", "bracelet"), tags: ["bracelet", "band", "fun", "cute"] },
+  { id: "pw-band-gold", name: "Gold Leg Band", category: "paw", desc: "A polished gold band.", ...equipAcc("paw", "band-gold"), tags: ["band", "gold", "fun"] },
+  { id: "pw-ribbon", name: "Leg Ribbon", category: "paw", desc: "A tiny bow tied at the leg.", ...equipAcc("paw", "ribbon"), tags: ["ribbon", "bow", "fun", "cute"] },
+  { id: "pw-leaf", name: "Leaf Leg Band", category: "paw", desc: "A fresh leaf folded into a band.", ...equipAcc("paw", "leaf"), tags: ["leaf", "nature", "band"] },
 
   // --- TAIL ACCESSORIES ----------------------------------------------------
   TACC({ id: "tl-band", name: "Tail Band", desc: "A woven band at the tail base.", ...equipAcc("tail", "band"), tags: ["band", "tail"] }),
@@ -337,12 +371,30 @@ export const CAT_ITEMS: CatItem[] = [
   TACC({ id: "tl-flower", name: "Tail Flower", desc: "A bloom tied at the tail base.", ...equipAcc("tail", "flower"), tags: ["flower", "tail", "nature"] }),
   TACC({ id: "tl-leaf", name: "Tail Leaves", desc: "Leaves tucked at the tail base.", ...equipAcc("tail", "leaf"), tags: ["leaf", "tail", "nature"] }),
   TACC({ id: "tl-bow", name: "Tail Bow", desc: "A plump bow for the tail.", ...equipAcc("tail", "bow"), tags: ["bow", "tail", "fun", "cute"] }),
+  TACC({ id: "tl-feather", name: "Tail Feather", desc: "A long feather tied at the base.", ...equipAcc("tail", "feather"), tags: ["feather", "tail", "bird"] }),
+  TACC({ id: "tl-berries", name: "Tail Berries", desc: "A sprig of red berries on the tail.", ...equipAcc("tail", "berries"), tags: ["berry", "tail", "seasonal"] }),
+  TACC({ id: "tl-wrap", name: "Tail Wrap", desc: "A cloth wrap near the tail base.", ...equipAcc("tail", "wrap"), tags: ["wrap", "cloth", "tail"] }),
 ];
 
 /** Item color for accessories that honor the accessory tint. */
 export const ACCESSORY_COLORS: string[] = [
   "#d95f5f", "#5b8fd6", "#d9a83a", "#7fae4e", "#b07ad9", "#f0a05a", "#e8e6e0", "#2c2c30",
 ];
+
+/** §21: pools for the per-slot tint swatches shown in the customizer. */
+export const SLOT_COLORS: Partial<Record<AccessorySlot, string[]>> = {
+  head: ["#d95f5f", "#f0a05a", "#d9a83a", "#e8e6e0", "#b07ad9", "#7fae4e"],
+  ear: ["#d95f5f", "#e8e6e0", "#b07ad9", "#d9a83a"],
+  neck: ["#d95f5f", "#3a6ac2", "#4a8a5c", "#d9b23a", "#8a4ac2", "#2c2c30", "#7a5230"],
+  body: ["#7fae4e", "#d9a83a", "#e8e6e0", "#b07ad9"],
+  paw: ["#d95f5f", "#5b8fd6", "#d9b23a", "#e8e6e0"],
+  tail: ["#d95f5f", "#5b8fd6", "#d9a83a", "#b07ad9", "#e8e6e0"],
+};
+
+/** The tint that renders a slot's accessory: per-slot override, else shared. */
+export function accTint(skin: CustomSkin, slot: AccessorySlot): string {
+  return skin.accColors?.[slot] ?? skin.accColor ?? "#d95f5f";
+}
 
 export function shade(hex: string, f: number): string {
   const n = hex.replace("#", "");
@@ -394,6 +446,16 @@ export const ACC_SLOT_CATS: Record<AccessorySlot, ItemCategory> = {
   tail: "tailAcc",
 };
 
+/** Extra catalog categories that also belong to a slot (collars → neck). */
+const ACC_SLOT_EXTRA_CATS: Partial<Record<AccessorySlot, ItemCategory[]>> = {
+  neck: ["collars"],
+};
+
+/** True when a catalog item equips into the given accessory slot. */
+function itemInSlot(category: ItemCategory, slot: AccessorySlot): boolean {
+  return category === ACC_SLOT_CATS[slot] || (ACC_SLOT_EXTRA_CATS[slot] ?? []).includes(category);
+}
+
 const THEME_TAGS: Record<AccTheme, string[]> = {
   nature: ["nature", "leaf", "flower", "herbs", "moss", "berry"],
   seasonal: ["seasonal", "holly", "acorn", "newleaf", "leaf-fall", "leaf-bare"],
@@ -403,10 +465,13 @@ const THEME_TAGS: Record<AccTheme, string[]> = {
 
 /** All accessory items, optionally narrowed to one slot and/or theme. */
 export function accessoriesFor(slot: AccessorySlot | "all", theme?: AccTheme): CatItem[] {
+  const accCats = Object.values(ACC_SLOT_CATS) as ItemCategory[];
   let pool =
     slot === "all"
-      ? CAT_ITEMS.filter((i) => (Object.values(ACC_SLOT_CATS) as ItemCategory[]).includes(i.category))
-      : CAT_ITEMS.filter((i) => i.category === ACC_SLOT_CATS[slot]);
+      ? CAT_ITEMS.filter(
+          (i) => accCats.includes(i.category) || i.category === "collars",
+        )
+      : CAT_ITEMS.filter((i) => itemInSlot(i.category, slot));
   if (theme) pool = pool.filter((i) => (i.tags ?? []).some((t) => THEME_TAGS[theme].includes(t)));
   return pool;
 }
@@ -453,16 +518,18 @@ export function randomSkin(prev?: CustomSkin): CustomSkin {
     .map((i) => i.id.replace("mk-", ""));
   s.scars = Math.random() < 0.12 ? [pick(CAT_ITEMS.filter((i) => i.category === "scars")).id.replace("sc-", "")] : [];
   s.acc = {};
+  s.accColors = {};
   const accPool = accessoriesFor("all");
   const n = Math.random() < 0.45 ? (Math.random() < 0.3 ? 2 : 1) : 0;
   const usedSlots: AccessorySlot[] = [];
   for (let i = 0; i < n; i++) {
     const it = pick(accPool);
-    const entry = (Object.entries(ACC_SLOT_CATS) as [AccessorySlot, ItemCategory][]).find(([, c]) => c === it.category);
-    if (!entry || usedSlots.includes(entry[0])) continue;
-    usedSlots.push(entry[0]);
-    const prefix = ACC_PREFIX[entry[0]];
-    s.acc[entry[0]] = it.id.startsWith(prefix) ? it.id.slice(prefix.length) : it.id;
+    const slot = (Object.keys(ACC_SLOT_CATS) as AccessorySlot[]).find((sl) => itemInSlot(it.category, sl));
+    if (!slot || usedSlots.includes(slot)) continue;
+    usedSlots.push(slot);
+    const prefix = ACC_PREFIX[slot];
+    s.acc[slot] = it.id.startsWith(prefix) ? it.id.slice(prefix.length) : it.id;
+    if (Math.random() < 0.6) s.accColors[slot] = pick(SLOT_COLORS[slot] ?? ACCESSORY_COLORS);
   }
   s.accColor = pick(ACCESSORY_COLORS);
   return s;

@@ -22,6 +22,7 @@ export interface CatSkin {
   scars?: string[];          // scar ids (catItems SCAR ids)
   acc?: Partial<Record<string, string>>; // accessory slot -> item id
   accColor?: string;         // shared accessory tint
+  accColors?: Partial<Record<string, string>>; // §21 per-slot tint overrides
 }
 
 export type CatPose =
@@ -664,33 +665,151 @@ export function drawCat(
     }
   }
 
-  // --- accessories (one per slot, tinted by accColor) ---
+  // --- accessories (one per slot, tinted by per-slot color or accColor) ---
   // Every anchor derives from the same pose geometry the body/head/tail use,
   // so accessories track each pose: walk, sit, sleep, swim, dances, groom…
-  const tint = skin.accColor ?? "#d95f5f";
   const acc = skin.acc ?? {};
+  const tint = skin.accColor ?? "#d95f5f";
+  // §21: per-slot tint — accColors[slot] overrides the shared accColor
+  const tintOf = (slot: string) =>
+    (skin.accColors as Partial<Record<string, string>> | undefined)?.[slot] ?? tint;
   const accWalk = pose === "walk";
   // NECK: collars / ribbons / garlands / scarves — follows the neck
   if (acc.neck) {
     const nx = fam === "sit" ? 4 : fam === "swim" ? 9 : 8;
     const ny = fam === "sit" ? -10 : fam === "swim" ? -5 : fam === "sleep" ? -6 : -7.5;
-    const COLLAR_COLORS: Record<string, string> = {
-      "collar-red": "#c23a3a", "collar-blue": "#3a6ac2", "collar-brown": "#7a5230",
-      "collar-yellow": "#d9b23a", "collar-purple": "#8a4ac2", "collar-green": "#4a8a5c",
+    const nt = tintOf("neck");
+    // §16: ORIGINAL collar art. Each entry carries its base band color and an
+    // optional decorative variant; everything draws at the pose-anchored neck.
+    type CollarDef = {
+      color: string;
+      w?: number;
+      variant?: "plain" | "woven" | "braided" | "stud" | "pattern" | "cloth" | "nature" | "gems";
+      flowers?: boolean;
+      berries?: boolean;
     };
-    ctx.strokeStyle = COLLAR_COLORS[acc.neck] ?? (acc.neck === "bell" ? "#c23a3a" : acc.neck === "tag" ? "#3a6ac2" : tint);
-    ctx.lineWidth = acc.neck === "ribbon" || acc.neck === "garland" || acc.neck === "bandana" ? 2 : 2.6;
+    const COLLARS: Record<string, CollarDef> = {
+      "collar-red": { color: "#c23a3a" },
+      "collar-blue": { color: "#3a6ac2" },
+      "collar-brown": { color: "#7a5230" },
+      "collar-yellow": { color: "#d9b23a" },
+      "collar-purple": { color: "#8a4ac2" },
+      "collar-green": { color: "#4a8a5c" },
+      "collar-woven": { color: nt, w: 2.2, variant: "woven" },
+      "collar-braided": { color: nt, variant: "braided" },
+      "collar-stud": { color: "#3a3a40", variant: "stud" },
+      "collar-cloth": { color: nt, w: 3.4, variant: "cloth" },
+      "collar-pattern": { color: nt, variant: "pattern" },
+      "collar-nature": { color: "#4a7a3a", variant: "nature" },
+      "collar-flower": { color: "#4a7a3a", variant: "nature", flowers: true },
+      "collar-holly": { color: "#2f6a3a", variant: "nature", berries: true },
+      "collar-kittypet": { color: "#e06a9a" },
+      "collar-festival": { color: nt, variant: "gems" },
+      bell: { color: "#c23a3a" },
+      tag: { color: "#3a6ac2" },
+      charm: { color: nt },
+    };
+    const def = COLLARS[acc.neck];
+    ctx.strokeStyle = def?.color ?? nt;
+    ctx.lineWidth = def?.w ?? (acc.neck === "ribbon" || acc.neck === "garland" || acc.neck === "bandana" ? 2 : 2.6);
     ctx.beginPath();
     ctx.ellipse(nx, ny, 5.6, 2.2, 0, 0, Math.PI);
     ctx.stroke();
     ctx.lineWidth = 1;
+    if (def) {
+      const v = def.variant ?? "plain";
+      if (v === "woven") {
+        // alternating light threads crossing the band
+        ctx.strokeStyle = "rgba(255,255,255,0.35)";
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * (0.18 + i * 0.13);
+          ctx.moveTo(nx + Math.cos(a) * 5.2, ny + Math.sin(a) * 2);
+          ctx.lineTo(nx + Math.cos(a + 0.09) * 6, ny + Math.sin(a + 0.09) * 2.4);
+        }
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      } else if (v === "braided") {
+        // dark inner braid line through the rope band
+        ctx.strokeStyle = "rgba(0,0,0,0.28)";
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.ellipse(nx, ny - 0.8, 5.6, 2.2, 0, Math.PI * 0.15, Math.PI * 0.85);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      } else if (v === "stud") {
+        ctx.fillStyle = "#c9c9d2";
+        for (let i = 0; i < 4; i++) {
+          const a = Math.PI * (0.2 + i * 0.2);
+          ctx.beginPath();
+          ctx.arc(nx + Math.cos(a) * 5.4, ny + Math.sin(a) * 2.1, 0.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (v === "pattern") {
+        ctx.strokeStyle = "rgba(255,255,255,0.55)";
+        ctx.lineWidth = 0.8;
+        ctx.setLineDash([1.4, 1.2]);
+        ctx.beginPath();
+        ctx.ellipse(nx, ny, 5.6, 2.2, 0, 0, Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1;
+      } else if (v === "cloth") {
+        // soft shadow along the cloth's lower edge
+        ctx.strokeStyle = "rgba(0,0,0,0.15)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.ellipse(nx, ny + 0.9, 5.4, 2, 0, Math.PI * 0.2, Math.PI * 0.8);
+        ctx.stroke();
+      } else if (v === "nature") {
+        // leaves worked into the band (+ optional blossoms / holly berries)
+        ctx.fillStyle = def.berries ? "#2f6a3a" : "#6a9a4a";
+        for (let i = 0; i < 4; i++) {
+          const a = Math.PI * (0.2 + i * 0.2);
+          ctx.beginPath();
+          ctx.ellipse(nx + Math.cos(a) * 5.4, ny + Math.sin(a) * 2.1, 1.5, 0.7, a - Math.PI / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        if (def.flowers) {
+          ctx.fillStyle = nt;
+          for (let i = 0; i < 3; i++) {
+            const a = Math.PI * (0.28 + i * 0.22);
+            ctx.beginPath();
+            ctx.arc(nx + Math.cos(a) * 5.6, ny + Math.sin(a) * 2.2, 1, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        if (def.berries) {
+          ctx.fillStyle = "#c23a3a";
+          const a = Math.PI * 0.5;
+          ctx.beginPath();
+          ctx.arc(nx + Math.cos(a) * 5.8, ny + Math.sin(a) * 2.3, 0.9, 0, Math.PI * 2);
+          ctx.arc(nx + Math.cos(a) * 4.6, ny + Math.sin(a) * 2.6, 0.7, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (v === "gems") {
+        const gems = ["#d95f5f", "#5b8fd6", "#d9a83a", "#7fae4e"];
+        for (let i = 0; i < 4; i++) {
+          const a = Math.PI * (0.2 + i * 0.2);
+          ctx.fillStyle = gems[i];
+          ctx.beginPath();
+          ctx.arc(nx + Math.cos(a) * 5.4, ny + Math.sin(a) * 2.1, 0.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      if (acc.neck === "collar-kittypet") {
+        ctx.fillStyle = "#e8e8ee";
+        ctx.beginPath(); ctx.arc(nx + 4.6, ny + 1.6, 1.1, 0, Math.PI * 2); ctx.fill();
+      }
+    }
     if (acc.neck === "bell") { ctx.fillStyle = "#d9b23a"; ctx.beginPath(); ctx.arc(nx + 4.5, ny + 1.5, 1.4, 0, Math.PI * 2); ctx.fill(); }
     if (acc.neck === "tag") { ctx.fillStyle = "#d9d9d9"; ctx.beginPath(); ctx.arc(nx + 4.5, ny + 1.5, 1.3, 0, Math.PI * 2); ctx.fill(); }
     if (acc.neck === "charm") { ctx.strokeStyle = "#8a7a3a"; ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(nx + 4.5, ny + 1); ctx.lineTo(nx + 4.6, ny + 1.9); ctx.stroke(); ctx.lineWidth = 1; ctx.fillStyle = "#d9b23a"; ctx.beginPath(); ctx.arc(nx + 4.6, ny + 2.6, 1.1, 0, Math.PI * 2); ctx.fill(); }
-    if (acc.neck === "ribbon") { ctx.fillStyle = tint; ctx.beginPath(); ctx.moveTo(nx + 5, ny); ctx.lineTo(nx + 9, ny - 2.5); ctx.lineTo(nx + 9, ny + 2.5); ctx.closePath(); ctx.fill(); }
-    if (acc.neck === "garland") { ctx.fillStyle = tint; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(nx - 3 + i * 2.6, ny + 1.8 - (i % 2), 1.2, 0, Math.PI * 2); ctx.fill(); } }
+    if (acc.neck === "ribbon") { ctx.fillStyle = nt; ctx.beginPath(); ctx.moveTo(nx + 5, ny); ctx.lineTo(nx + 9, ny - 2.5); ctx.lineTo(nx + 9, ny + 2.5); ctx.closePath(); ctx.fill(); }
+    if (acc.neck === "garland") { ctx.fillStyle = nt; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(nx - 3 + i * 2.6, ny + 1.8 - (i % 2), 1.2, 0, Math.PI * 2); ctx.fill(); } }
     if (acc.neck === "scarf") { ctx.fillStyle = "#7fae4e"; ctx.beginPath(); ctx.ellipse(nx, ny + 1, 6.2, 2.8, 0, 0, Math.PI); ctx.fill(); }
-    if (acc.neck === "bandana") { ctx.fillStyle = tint; ctx.beginPath(); ctx.moveTo(nx - 2, ny - 1); ctx.lineTo(nx + 8, ny - 1.5); ctx.lineTo(nx + 6.5, ny + 3.5); ctx.lineTo(nx - 1, ny + 3); ctx.closePath(); ctx.fill(); ctx.fillStyle = "rgba(0,0,0,0.12)"; ctx.fillRect(nx - 1, ny + 2.2, 7.4, 1); }
+    if (acc.neck === "bandana") { ctx.fillStyle = nt; ctx.beginPath(); ctx.moveTo(nx - 2, ny - 1); ctx.lineTo(nx + 8, ny - 1.5); ctx.lineTo(nx + 6.5, ny + 3.5); ctx.lineTo(nx - 1, ny + 3); ctx.closePath(); ctx.fill(); ctx.fillStyle = "rgba(0,0,0,0.12)"; ctx.fillRect(nx - 1, ny + 2.2, 7.4, 1); }
   }
   // HEAD: flowers/crowns/leaves/feathers — rides the head through every pose
   // (headX/headY already cover sit/stand/swim/sleep/crouch + groom + stretch)
@@ -698,7 +817,7 @@ export function drawCat(
     const hx = headX;
     const hy = headY - earH + 2;
     if (acc.head === "flower" || acc.head === "flowercrown" || acc.head === "berries") {
-      ctx.fillStyle = tint;
+      ctx.fillStyle = tintOf("head");
       const petals = acc.head === "flowercrown" ? 4 : 3;
       const px = acc.head === "flowercrown" ? -6 : 5.5;
       for (let i = 0; i < petals; i++) {
@@ -757,16 +876,71 @@ export function drawCat(
       ctx.fillStyle = "#c23a3a";
       ctx.beginPath(); ctx.arc(hx + 5, hy + 1.8, 1, 0, Math.PI * 2); ctx.arc(hx + 6.4, hy + 2.2, 0.8, 0, Math.PI * 2); ctx.fill();
     }
+    if (acc.head === "butterfly") {
+      // wings open and close slowly while it rests on the head
+      const flap = Math.sin(time * 3.2) * 0.55;
+      ctx.save();
+      ctx.translate(hx + 2.5, hy);
+      ctx.fillStyle = tintOf("head");
+      ctx.beginPath(); ctx.ellipse(-1.7, -0.4, 2.1, 1.2, 0.55 - flap, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(1.7, -0.4, 2.1, 1.2, -0.55 + flap, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.beginPath(); ctx.ellipse(0, 0.2, 0.5, 1.1, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+    if (acc.head === "dandelion") {
+      ctx.strokeStyle = "#c9c2b8";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(hx + 4.5, hy + 2); ctx.lineTo(hx + 5.5, hy - 1); ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.fillStyle = "rgba(244, 240, 225, 0.9)";
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.arc(hx + 5.5 + Math.cos(a) * 1.7, hy - 1.6 + Math.sin(a) * 1.7, 0.55, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "#e8e6e0";
+      ctx.beginPath(); ctx.arc(hx + 5.5, hy - 1.6, 0.9, 0, Math.PI * 2); ctx.fill();
+    }
+    if (acc.head === "mushroom") {
+      ctx.fillStyle = "#d95f5f";
+      ctx.beginPath(); ctx.ellipse(hx + 4.5, hy + 0.6, 2.4, 1.7, 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.beginPath(); ctx.arc(hx + 3.6, hy, 0.55, 0, Math.PI * 2); ctx.arc(hx + 5.4, hy + 0.5, 0.45, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#f4e9d8";
+      ctx.fillRect(hx + 4, hy + 1.8, 1.1, 1.8);
+    }
+    if (acc.head === "juniper") {
+      ctx.fillStyle = "#7a9ab8";
+      ctx.beginPath(); ctx.arc(hx + 3.4, hy + 1.2, 1, 0, Math.PI * 2); ctx.arc(hx + 5.4, hy + 1.8, 0.9, 0, Math.PI * 2); ctx.arc(hx + 4.4, hy + 0.4, 0.8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#4a6a88";
+      ctx.beginPath(); ctx.arc(hx + 4.6, hy + 2.2, 0.6, 0, Math.PI * 2); ctx.fill();
+    }
+    if (acc.head === "starflower") {
+      ctx.fillStyle = tintOf("head");
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+        ctx.beginPath();
+        ctx.ellipse(hx + 5 + Math.cos(a) * 1.5, hy + Math.sin(a) * 1.5, 0.8, 0.45, a, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "#f4e9d8";
+      ctx.beginPath(); ctx.arc(hx + 5, hy, 0.7, 0, Math.PI * 2); ctx.fill();
+    }
   }
   // EAR: tiny items at the near ear base
   if (acc.ear) {
     const ex = headX + 3.5 - earDx;
     const ey = headY - earH - 1;
-    if (acc.ear === "flower") { ctx.fillStyle = tint; for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; ctx.beginPath(); ctx.arc(ex + Math.cos(a) * 1.4, ey + Math.sin(a) * 1.4, 1, 0, Math.PI * 2); ctx.fill(); } }
+    const et = tintOf("ear");
+    if (acc.ear === "flower") { ctx.fillStyle = et; for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; ctx.beginPath(); ctx.arc(ex + Math.cos(a) * 1.4, ey + Math.sin(a) * 1.4, 1, 0, Math.PI * 2); ctx.fill(); } }
+    if (acc.ear === "daisy") { ctx.fillStyle = "#e8e6e0"; for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; ctx.beginPath(); ctx.ellipse(ex + Math.cos(a) * 1.2, ey + Math.sin(a) * 1.2, 0.8, 0.4, a, 0, Math.PI * 2); ctx.fill(); } ctx.fillStyle = "#d9b23a"; ctx.beginPath(); ctx.arc(ex, ey, 0.6, 0, Math.PI * 2); ctx.fill(); }
     if (acc.ear === "feather") { ctx.strokeStyle = "#c9c2b8"; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(ex, ey + 3); ctx.quadraticCurveTo(ex + 2, ey - 3, ex + 1, ey - 6); ctx.stroke(); ctx.lineWidth = 1; }
     if (acc.ear === "leaf") { ctx.fillStyle = "#6a9a4a"; ctx.beginPath(); ctx.ellipse(ex + 1, ey + 1, 2.2, 1, -0.6, 0, Math.PI * 2); ctx.fill(); }
     if (acc.ear === "berry") { ctx.fillStyle = "#c23a3a"; ctx.beginPath(); ctx.arc(ex - 1.2, ey + 0.8, 0.9, 0, Math.PI * 2); ctx.arc(ex + 0.8, ey + 1.2, 0.7, 0, Math.PI * 2); ctx.fill(); }
-    if (acc.ear === "ribbon") { ctx.fillStyle = tint; ctx.beginPath(); ctx.moveTo(ex, ey + 2); ctx.lineTo(ex - 2.6, ey + 4.6); ctx.lineTo(ex - 2.2, ey + 1.2); ctx.closePath(); ctx.moveTo(ex, ey + 2); ctx.lineTo(ex + 2.4, ey + 4.8); ctx.lineTo(ex + 2.2, ey + 1.2); ctx.closePath(); ctx.fill(); ctx.fillStyle = "#f4e9d8"; ctx.beginPath(); ctx.arc(ex, ey + 2, 0.8, 0, Math.PI * 2); ctx.fill(); }
+    if (acc.ear === "wrap") { ctx.strokeStyle = "#d9b23a"; ctx.lineWidth = 0.9; ctx.beginPath(); ctx.arc(ex + 0.5, ey + 2.2, 1.7, Math.PI * 1.1, Math.PI * 1.95); ctx.stroke(); ctx.lineWidth = 1; }
+    if (acc.ear === "ribbon") { ctx.fillStyle = et; ctx.beginPath(); ctx.moveTo(ex, ey + 2); ctx.lineTo(ex - 2.6, ey + 4.6); ctx.lineTo(ex - 2.2, ey + 1.2); ctx.closePath(); ctx.moveTo(ex, ey + 2); ctx.lineTo(ex + 2.4, ey + 4.8); ctx.lineTo(ex + 2.2, ey + 1.2); ctx.closePath(); ctx.fill(); ctx.fillStyle = "#f4e9d8"; ctx.beginPath(); ctx.arc(ex, ey + 2, 0.8, 0, Math.PI * 2); ctx.fill(); }
   }
   // BODY: bundles and pouches on the back (pose-true back height)
   if (acc.body) {
@@ -791,7 +965,7 @@ export function drawCat(
       ctx.beginPath(); ctx.arc(bx + 1.4, by + 0.6, 0.9, 0, Math.PI * 2); ctx.fill();
     }
     if (acc.body === "flowers") {
-      ctx.fillStyle = tint;
+      ctx.fillStyle = tintOf("body");
       for (let i = 0; i < 4; i++) {
         const fxp = bx - 5 + i * 3.2;
         const fyp = by - 1 + (i % 2) * 1.2;
@@ -801,23 +975,82 @@ export function drawCat(
         }
       }
     }
+    if (acc.body === "garland") {
+      // a draped garland of blooms across the back
+      ctx.fillStyle = tintOf("body");
+      for (let i = 0; i < 5; i++) {
+        const gx = bx - 6 + i * 3;
+        const gy = by - 1.2 + Math.sin(i * 1.4) * 1.1;
+        for (let pi2 = 0; pi2 < 4; pi2++) {
+          const a = (pi2 / 4) * Math.PI * 2;
+          ctx.beginPath(); ctx.arc(gx + Math.cos(a) * 0.9, gy + Math.sin(a) * 0.9, 0.6, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      ctx.strokeStyle = "#6a9a4a";
+      ctx.lineWidth = 0.7;
+      ctx.beginPath(); ctx.moveTo(bx - 6, by); ctx.quadraticCurveTo(bx, by + 1.6, bx + 6.4, by - 0.4); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    if (acc.body === "vine") {
+      // trailing ivy along the flank
+      ctx.strokeStyle = "#4a7a3a";
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(bx - 6, by - 1);
+      ctx.quadraticCurveTo(bx - 1, by + 2.5, bx + 4, by + 0.5);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.fillStyle = "#6a9a4a";
+      for (let i = 0; i < 4; i++) {
+        const vx = bx - 5 + i * 3;
+        const vy = by + 0.4 + (i % 2) * 1.6;
+        ctx.beginPath(); ctx.ellipse(vx, vy, 1.4, 0.7, -0.5 + (i % 2) * 0.9, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    if (acc.body === "pouch") {
+      ctx.fillStyle = "#8a6a3a";
+      ctx.beginPath(); ctx.ellipse(bx + 1, by + 0.5, 2.8, 2, 0.12, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#6a4f28";
+      ctx.fillRect(bx - 1.6, by - 1.6, 5.6, 1);
+      ctx.fillStyle = "#c9a86a";
+      ctx.beginPath(); ctx.arc(bx + 1, by + 1.4, 0.6, 0, Math.PI * 2); ctx.fill();
+    }
   }
   // PAW: bands / wraps on the near leg
   if (acc.paw) {
     const px2 = 7;
     const py2 = pose === "walk" ? -3 : -2;
+    const pt = tintOf("paw");
     if (acc.paw === "wrap") {
       ctx.fillStyle = "#e8e6e0";
       ctx.fillRect(px2 - 1, py2 - 3, 4.4, 5);
       ctx.fillStyle = "rgba(0,0,0,0.08)";
       ctx.fillRect(px2 - 1, py2 - 1.4, 4.4, 0.8);
     } else if (acc.paw === "bracelet") {
-      ctx.fillStyle = tint;
+      ctx.fillStyle = pt;
       ctx.fillRect(px2 - 1.4, py2 - 1.8, 5, 1.4);
       ctx.fillStyle = "#f4e9d8";
       ctx.beginPath(); ctx.arc(px2 + 0.8, py2 - 1.1, 0.6, 0, Math.PI * 2); ctx.fill();
+    } else if (acc.paw === "ribbon") {
+      ctx.fillStyle = pt;
+      ctx.beginPath();
+      ctx.moveTo(px2 + 1, py2 - 0.6); ctx.lineTo(px2 - 1.6, py2 - 2.6); ctx.lineTo(px2 - 1.4, py2 + 0.2); ctx.closePath();
+      ctx.moveTo(px2 + 1, py2 - 0.6); ctx.lineTo(px2 + 3.4, py2 - 2.6); ctx.lineTo(px2 + 3.2, py2 + 0.2); ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#f4e9d8";
+      ctx.beginPath(); ctx.arc(px2 + 1, py2 - 0.6, 0.6, 0, Math.PI * 2); ctx.fill();
+    } else if (acc.paw === "leaf") {
+      ctx.fillStyle = "#6a9a4a";
+      ctx.beginPath(); ctx.ellipse(px2 + 1.1, py2 - 0.6, 2.2, 0.9, -0.2, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#4a7a3a";
+      ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(px2 - 0.6, py2 - 0.4); ctx.lineTo(px2 + 2.6, py2 - 0.8); ctx.stroke();
+      ctx.lineWidth = 1;
     } else {
-      ctx.fillStyle = acc.paw === "band-red" ? tint : "#3a6ac2";
+      ctx.fillStyle =
+        acc.paw === "band-gold" ? "#d9b23a"
+        : acc.paw === "band-red" ? pt
+        : "#3a6ac2";
       ctx.fillRect(px2 - 1, py2 - 1.4, 4.4, 2);
     }
   }
@@ -825,8 +1058,9 @@ export function drawCat(
   if (acc.tail) {
     const tx = fam === "sit" ? -10 : fam === "sleep" ? -8 : -11;
     const ty = fam === "sit" ? -4 : fam === "sleep" ? -3 : fam === "swim" ? -5 : -8;
+    const tt = tintOf("tail");
     if (acc.tail === "band") {
-      ctx.strokeStyle = tint;
+      ctx.strokeStyle = tt;
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(tx, ty - 2);
@@ -835,7 +1069,7 @@ export function drawCat(
       ctx.lineWidth = 1;
     }
     if (acc.tail === "ribbon") {
-      ctx.fillStyle = tint;
+      ctx.fillStyle = tt;
       ctx.beginPath();
       ctx.moveTo(tx, ty); ctx.lineTo(tx - 4, ty - 4); ctx.lineTo(tx - 5.5, ty - 0.5); ctx.closePath();
       ctx.moveTo(tx, ty); ctx.lineTo(tx - 4.5, ty + 3.5); ctx.lineTo(tx - 6.5, ty + 1); ctx.closePath();
@@ -849,10 +1083,38 @@ export function drawCat(
       ctx.lineWidth = 1;
     }
     if (acc.tail === "flower") {
-      ctx.fillStyle = tint;
+      ctx.fillStyle = tt;
       for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; ctx.beginPath(); ctx.arc(tx + Math.cos(a) * 1.5, ty + Math.sin(a) * 1.5, 1, 0, Math.PI * 2); ctx.fill(); }
       ctx.fillStyle = "#f4e9d8";
       ctx.beginPath(); ctx.arc(tx, ty, 0.9, 0, Math.PI * 2); ctx.fill();
+    }
+    if (acc.tail === "feather") {
+      ctx.strokeStyle = tt;
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.quadraticCurveTo(tx - 4, ty - 6, tx - 2.5, ty - 9.5);
+      ctx.stroke();
+      ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.moveTo(tx - 0.5, ty - 1); ctx.lineTo(tx - 2.6, ty - 9); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    if (acc.tail === "berries") {
+      ctx.strokeStyle = "#6a9a4a";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx - 2, ty - 3.5); ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.fillStyle = "#c23a3a";
+      ctx.beginPath(); ctx.arc(tx - 2.4, ty - 4.2, 0.9, 0, Math.PI * 2); ctx.arc(tx - 1, ty - 4.8, 0.7, 0, Math.PI * 2); ctx.fill();
+    }
+    if (acc.tail === "wrap") {
+      ctx.strokeStyle = tt;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(tx + 1, ty - 2.6);
+      ctx.lineTo(tx - 0.4, ty + 2.6);
+      ctx.stroke();
+      ctx.lineWidth = 1;
     }
     if (acc.tail === "leaf") {
       ctx.fillStyle = "#6a9a4a";
@@ -860,7 +1122,7 @@ export function drawCat(
       ctx.beginPath(); ctx.ellipse(tx + 0.5, ty + 1.5, 2.2, 1, 0.6, 0, Math.PI * 2); ctx.fill();
     }
     if (acc.tail === "bow") {
-      ctx.fillStyle = tint;
+      ctx.fillStyle = tt;
       ctx.beginPath();
       ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx - 3.4, ty - 3.2); ctx.lineTo(tx - 3.2, ty + 0.4); ctx.closePath();
       ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx + 3.2, ty - 3.4); ctx.lineTo(tx + 3.4, ty + 0.2); ctx.closePath();

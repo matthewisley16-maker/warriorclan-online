@@ -39,6 +39,10 @@ const appearanceValidator = v.object({
   scars: v.optional(v.array(v.string())),
   acc: v.optional(v.record(v.string(), v.string())),
   accColor: v.optional(v.string()),
+  // morph = a WARRIORS character look applied on top of the base coat;
+  // presetId tracks the WARRIORS preset this look came from (§30)
+  morph: v.optional(v.string()),
+  presetId: v.optional(v.string()),
 });
 
 export type CatAppearance = Infer<typeof appearanceValidator>;
@@ -74,6 +78,9 @@ const schema = defineSchema(
       // customization extras: favorite item ids + up to 10 named appearance presets
       favorites: v.optional(v.array(v.string())),
       presets: v.optional(v.array(v.object({ name: v.string(), skin: v.any() }))),
+      // §13 appearance versioning: bumped on every accepted full-appearance
+      // write so stale updates can never overwrite a newer look
+      appearanceVersion: v.optional(v.number()),
       // per-NPC social memory: knowledge learned FROM each cat and the bond
       // built with them ("smudge:starclan" strings — knowledge is per-NPC,
       // never global; a Twolegplace cat learns StarClan only when told)
@@ -119,6 +126,9 @@ const schema = defineSchema(
       action: v.optional(v.string()),
       // synchronized REAL animation one-shot (emote id, e.g. "anim:dance1")
       animOneShot: v.optional(v.string()),
+      // §12/§13: fingerprint of the appearance riding this row — remotes swap
+      // skins in place only when this changes (never mid-frame)
+      appearanceVersion: v.optional(v.number()),
       mode: v.union(v.literal("story"), v.literal("open")),
       updatedAt: v.number(),
       // server authority: ordering + staleness rejection (see presence.ts)

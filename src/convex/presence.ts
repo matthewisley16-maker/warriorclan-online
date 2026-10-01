@@ -72,6 +72,10 @@ export const heartbeat = mutation({
     inputSequence: v.optional(v.number()),
     movementState: v.optional(v.string()),
     animationState: v.optional(v.string()),
+    // §12/§13: fingerprint of the appearance riding this packet. When it
+    // matches the stored row the appearance payload is SKIPPED — identical
+    // coats are never re-broadcast at the 300ms movement cadence.
+    appearanceVersion: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -127,7 +131,16 @@ export const heartbeat = mutation({
         catName: args.catName,
         clan: args.clan,
         rank: args.rank,
-        appearance: args.appearance,
+        // §12/§14: only re-broadcast appearance when its fingerprint CHANGED
+        // (or it is genuinely missing on a legacy row) — identical looks are
+        // never written at the movement cadence.
+        appearance:
+          args.appearanceVersion !== undefined &&
+          existing.appearanceVersion === args.appearanceVersion &&
+          existing.appearance
+            ? existing.appearance
+            : args.appearance,
+        appearanceVersion: args.appearanceVersion ?? existing.appearanceVersion,
         inputSequence: args.inputSequence ?? existing.inputSequence,
         movementState,
         animationState,
@@ -152,6 +165,7 @@ export const heartbeat = mutation({
       clan: args.clan,
       rank: args.rank,
       appearance: args.appearance,
+      appearanceVersion: args.appearanceVersion,
       inputSequence: args.inputSequence,
       movementState,
       animationState,
@@ -179,6 +193,7 @@ export const listOnline = query({
         clan: r.clan,
         rank: r.rank,
         appearance: r.appearance,
+        appearanceVersion: r.appearanceVersion,
         x: r.x,
         y: r.y,
         facing: r.facing,

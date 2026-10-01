@@ -77,6 +77,8 @@ export const updateCat = mutation({
     catName: v.optional(v.string()),
     appearance: v.optional(appearance),
     clan: v.optional(v.string()),
+    /** §13: fingerprint of the appearance being written (stale-write guard) */
+    appearanceVersion: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -88,7 +90,12 @@ export const updateCat = mutation({
     if (!p) throw new Error("No player save");
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.catName !== undefined) patch.catName = args.catName;
-    if (args.appearance !== undefined) patch.appearance = args.appearance;
+    if (args.appearance !== undefined) {
+      // §40: never let an empty/degenerate look overwrite a valid saved cat
+      if (!args.appearance.fur) return false;
+      patch.appearance = args.appearance;
+      patch.appearanceVersion = args.appearanceVersion ?? 0;
+    }
     if (args.clan !== undefined) {
       patch.clan = args.clan;
       // Moving Clans relocates the cat to the new camp.

@@ -12,18 +12,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Heart, RefreshCw, RotateCcw, Save, Search, Star, Trash2, X } from "lucide-react";
+import { Check, Heart, RefreshCw, RotateCcw, Save, Search, Sparkles, Star, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { drawCat, type CatSkin } from "@/game/draw";
 import {
-  ACCESSORY_COLORS,
   ACCESSORY_SLOTS,
   ACC_SLOT_CATS,
   ACC_THEMES,
   CATEGORIES,
   CAT_ITEMS,
+  SLOT_COLORS,
   accessoriesFor,
+  accTint,
   itemById,
   randomSkin,
   searchItems,
@@ -32,6 +33,7 @@ import {
   type CatItem,
   type CustomSkin,
 } from "@/game/catItems";
+import { applyMorph, applyPreset, morphById, presetById, stripPresetAndMorph, CAT_MORPHS, CHARACTER_PRESETS, PRESET_GROUPS, type PresetGroup } from "@/game/presets";
 import { cn } from "@/lib/utils";
 import type { CatPose } from "@/game/draw";
 
@@ -51,10 +53,24 @@ function slotOfCategory(cat: string): AccessorySlot | undefined {
   return (Object.entries(ACC_SLOT_CATS) as [AccessorySlot, string][]).find(([, c]) => c === cat)?.[0];
 }
 
+// slot id -> short label (collars/neck share the neck slot color controls)
+const ACCESSORY_SLOTS_BY_ID: Record<AccessorySlot, string> = {
+  head: "Head",
+  ear: "Ears",
+  neck: "Neck",
+  body: "Body",
+  paw: "Paws",
+  tail: "Tail",
+};
+
+// shared fallback tint swatches (kept identical to the catalog pool)
+const SHARED_ACC_COLORS = [
+  "#d95f5f", "#5b8fd6", "#d9a83a", "#7fae4e", "#b07ad9", "#f0a05a", "#e8e6e0", "#2c2c30",
+];
+
 // ---------------------------------------------------------------------------
 // Live cat preview (same sprite renderer as the game)
 // ---------------------------------------------------------------------------
-
 function CatPreviewLarge({
   skin,
   pose = "sit",
@@ -168,7 +184,7 @@ function ItemCardPreview({ item, baseSkin, tint }: { item: CatItem; baseSkin: Cu
 // Preset thumbnail
 // ---------------------------------------------------------------------------
 
-function PresetThumb({ skin, size = 64 }: { skin: CustomSkin; size?: number }) {
+function PresetThumb({ skin, size = 64, pose = "sit" }: { skin: CustomSkin; size?: number; pose?: CatPose }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useRenderEffect(() => {
     const canvas = canvasRef.current;
@@ -180,7 +196,7 @@ function PresetThumb({ skin, size = 64 }: { skin: CustomSkin; size?: number }) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.scale(size / 100, size / 100);
-      drawCat(ctx, skin as CatSkin, 50, 68, 1, "sit", t / 1000, 0);
+      drawCat(ctx, skin as CatSkin, 50, 68, 1, pose, t / 1000, 0);
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
@@ -207,6 +223,7 @@ export function CatCustomizer({
   presets: initialPresets,
   onClose,
   onSave, // (skin, favorites, presets) — persists everything to the account
+  onPersist, // §10: awaited persistence of the FULL appearance (all fields)
 }: {
   open: boolean;
   playerName: string;
@@ -216,6 +233,8 @@ export function CatCustomizer({
   presets: { name: string; skin: CustomSkin }[];
   onClose: () => void;
   onSave: (s: { skin: CustomSkin; favorites: string[]; presets: { name: string; skin: CustomSkin }[] }) => void;
+  /** §10: awaited BEFORE onSave — persists the full appearance to the account. */
+  onPersist?: () => Promise<void> | void;
 }) {
   const [skin, setSkin] = useState<CustomSkin>(initialSkin);
   const [category, setCategory] = useState<string>("fur");
@@ -229,17 +248,27 @@ export function CatCustomizer({
   const [selected, setSelected] = useState<CatItem | null>(null);
   const [presetConfirm, setPresetConfirm] = useState<{ name: string } | null>(null);
   const [presetApply, setPresetApply] = useState<number | null>(null);
+  // --- WARRIORS character presets + morphs (§24-§30) ---
+  const [charQuery, setCharQuery] = useState("");
+  const [charGroup, setCharGroup] = useState<PresetGroup | "all">("all");
+  const [charPreview, setCharPreview] = useState<string | null>(null); // selected preset id
+  // §10: SAVE CAT awaits the real persistence before confirming — a failed
+  // save keeps the editor open with the changes intact (never silently lost).
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
 
   if (!open) return null;
 
   // Left-nav categories: only ones that actually contain items, plus the
-  // ACCESSORIES umbrella (all six accessory slots in one browsable place).
+  // ACCESSORIES umbrella (all six accessory slots in one browsable place),
+  // the MORPHS view and the WARRIORS CHARACTER PRESETS library (§24).
   const NAV = useMemo(() => {
     const list: { id: string; name: string }[] = [];
     for (const c of CATEGORIES) {
       if (CAT_ITEMS.some((i) => i.category === c.id)) list.push({ id: c.id, name: c.name });
       if (c.id === "paw") list.push({ id: "accessories", name: "Accessories" });
     }
+    list.push({ id: "morphs", name: "Morphs" });
+    list.push({ id: "warriors", name: "Warriors Presets" });
     list.push({ id: "favorites", name: "Favorites" });
     return list;
   }, []);
@@ -248,8 +277,22 @@ export function CatCustomizer({
     if (query.trim()) return searchItems(query, "all");
     if (category === "favorites") return CAT_ITEMS.filter((i) => favorites.includes(i.id));
     if (category === "accessories") return accessoriesFor(accSlot, accTheme);
+    if (category === "collars") return searchItems("", "collars" as never);
     return searchItems("", category as never);
   }, [query, category, favorites, accSlot, accTheme]);
+
+  // §26: character library filtered by name search + group filter.
+  const charList = useMemo(() => {
+    const q = charQuery.trim().toLowerCase();
+    return CHARACTER_PRESETS.filter(
+      (p) =>
+        (charGroup === "all" || p.group === charGroup) &&
+        (!q ||
+          p.displayName.toLowerCase().includes(q) ||
+          p.blurb.toLowerCase().includes(q) ||
+          p.tags.some((t) => t.includes(q))),
+    );
+  }, [charQuery, charGroup]);
 
   const toggleFavorite = (id: string) => {
     setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
@@ -406,26 +449,115 @@ export function CatCustomizer({
                 />
               </div>
             )}
-            {/* accessory tint */}
-            {(category === "accessories" || ["head", "ear", "neck", "body", "paw", "tailAcc"].includes(category)) && (
-              <div className="mt-2 flex items-center gap-1.5">
-                <span className="text-[10px] uppercase tracking-wider text-white/40">Item color</span>
-                {ACCESSORY_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => {
-                      setAccColor(c);
-                      setSkin((s) => ({ ...s, accColor: c }));
-                    }}
-                    className={cn(
-                      "size-4 rounded-full border transition-transform hover:scale-110",
-                      accColor === c ? "border-white ring-2 ring-amber-300" : "border-white/20",
-                    )}
-                    style={{ backgroundColor: c }}
-                    aria-label={`Accessory color ${c}`}
-                  />
-                ))}
+            {/* §21: per-slot color swatches — every equipped (or browsed) slot
+                can carry its OWN tint, so a red flower + blue collar coexist */}
+            {(category === "accessories" || ["head", "ear", "collars", "neck", "body", "paw", "tailAcc"].includes(category)) && (
+              <div className="mt-2 w-full max-w-xs space-y-1.5">
+                {([
+                  ...(accSlot !== "all" ? [accSlot] : []),
+                  ...((Object.keys(ACCESSORY_SLOTS_BY_ID) as AccessorySlot[]).filter(
+                    (sl) => skin.acc?.[sl] && sl !== accSlot,
+                  ) as AccessorySlot[]),
+                ])
+                  .filter((sl, i, arr) => arr.indexOf(sl) === i)
+                  .map((sl) => {
+                    const cur = accTint(skin, sl);
+                    const pool = SLOT_COLORS[sl] ?? [];
+                    return (
+                      <div key={sl} className="flex items-center gap-1.5">
+                        <span className="w-12 shrink-0 text-[10px] uppercase tracking-wider text-white/40">
+                          {ACCESSORY_SLOTS_BY_ID[sl]}
+                        </span>
+                        {pool.map((c) => (
+                          <button
+                            key={c}
+                            onClick={() => setSkin((s) => ({ ...s, accColors: { ...(s.accColors ?? {}), [sl]: c } }))}
+                            className={cn(
+                              "size-4 rounded-full border transition-transform hover:scale-110",
+                              cur === c ? "border-white ring-2 ring-amber-300" : "border-white/20",
+                            )}
+                            style={{ backgroundColor: c }}
+                            aria-label={`${ACCESSORY_SLOTS_BY_ID[sl]} color ${c}`}
+                          />
+                        ))}
+                        {/* clear the per-slot override (falls back to shared tint) */}
+                        <button
+                          onClick={() =>
+                            setSkin((s) => {
+                              const next = { ...(s.accColors ?? {}) };
+                              delete next[sl];
+                              return { ...s, accColors: next };
+                            })
+                          }
+                          className="text-[10px] text-white/35 hover:text-white/70"
+                          aria-label="Reset slot color"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                {/* shared tint for items without their own override */}
+                <div className="flex items-center gap-1.5">
+                  <span className="w-12 shrink-0 text-[10px] uppercase tracking-wider text-white/40">Shared</span>
+                  {SHARED_ACC_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => {
+                        setAccColor(c);
+                        setSkin((s) => ({ ...s, accColor: c }));
+                      }}
+                      className={cn(
+                        "size-4 rounded-full border transition-transform hover:scale-110",
+                        accColor === c ? "border-white ring-2 ring-amber-300" : "border-white/20",
+                      )}
+                      style={{ backgroundColor: c }}
+                      aria-label={`Accessory color ${c}`}
+                    />
+                  ))}
+                </div>
               </div>
+            )}
+            {/* active morph strip (§22): the look stays until removed */}
+            {skin.morph && morphById(skin.morph) && (
+              <div className="mt-3 flex w-full max-w-xs items-center justify-between rounded-xl border border-amber-300/30 bg-amber-400/10 px-3 py-1.5">
+                <span className="text-[11px] font-semibold text-amber-200">
+                  Morph: {morphById(skin.morph)!.name}
+                </span>
+                <button
+                  onClick={() => setSkin((s) => stripPresetAndMorph(s))}
+                  className="text-[10px] font-bold uppercase tracking-wider text-white/60 hover:text-white"
+                >
+                  Remove morph
+                </button>
+              </div>
+            )}
+            {/* §27: large live character preview + §28 USE PRESET action */}
+            {category === "warriors" && charPreview && presetById(charPreview) && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-3 w-full max-w-xs rounded-xl border border-white/10 bg-black/40 p-2.5 text-center"
+              >
+                <p className="text-xs font-bold text-white">{presetById(charPreview)!.displayName}</p>
+                <p className="text-[10px] uppercase tracking-wider text-white/40">
+                  {PRESET_GROUPS.find((g) => g.id === presetById(charPreview)!.group)?.name}
+                  {presetById(charPreview)!.clan ? ` · ${presetById(charPreview)!.clan}` : ""}
+                </p>
+                <p className="mt-1 text-[11px] leading-snug text-white/60">{presetById(charPreview)!.blurb}</p>
+                <Button
+                  size="sm"
+                  className="mt-2 h-7 rounded-lg bg-amber-400 px-3 text-[11px] font-bold text-[#0d160d] hover:bg-amber-300"
+                  onClick={() => {
+                    // §28/§29: applying is a PREVIEW-state change — nothing is
+                    // saved until SAVE CAT, and everything stays editable.
+                    setSkin((s) => applyPreset(s, charPreview));
+                    setCharPreview(null);
+                  }}
+                >
+                  <Sparkles className="mr-1 inline size-3" /> Use preset
+                </Button>
+              </motion.div>
             )}
           </div>
 
@@ -488,6 +620,107 @@ export function CatCustomizer({
                 </>
               )}
             </div>
+            {/* --- MORPHS view (§22-23): every morph renders live on the cat --- */}
+            {category === "morphs" ? (
+              <div className="grid flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 max-[420px]:grid-cols-2 md:grid-cols-3">
+                {CAT_MORPHS.map((m) => {
+                  const on = skin.morph === m.id;
+                  const previewSkin: CustomSkin = { ...skin, ...m.skin, morph: m.id };
+                  return (
+                    <motion.button
+                      key={m.id}
+                      layout
+                      whileHover={{ y: -2 }}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => setSkin((s) => (on ? stripPresetAndMorph(s) : applyMorph(s, m.id)))}
+                      className={cn(
+                        "rounded-xl border p-1.5 text-left transition-colors",
+                        on
+                          ? "border-amber-400/70 bg-amber-400/15 ring-1 ring-amber-300/50"
+                          : "border-white/10 bg-black/30 hover:border-white/30 hover:bg-white/10",
+                      )}
+                    >
+                      <div className="flex items-center justify-center rounded-lg bg-gradient-to-b from-emerald-900/30 to-black/10">
+                        <PresetThumb skin={previewSkin} size={72} pose="sit" />
+                      </div>
+                      <p className={cn("mt-1 truncate px-0.5 text-[10px] font-medium", on ? "text-amber-200" : "text-white/70")}>
+                        {m.name}
+                      </p>
+                      <p className="truncate px-0.5 text-[9px] text-white/40">{m.desc}</p>
+                    </motion.button>
+                  );
+                })}
+              </div>
+            ) : category === "warriors" ? (
+            /* --- WARRIORS CHARACTER PRESETS library (§24-§27) --- */
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="space-y-1.5 border-b border-white/10 px-3 py-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-white/40" />
+                  <Input
+                    value={charQuery}
+                    onChange={(e) => setCharQuery(e.target.value)}
+                    placeholder="Search characters… (Firestar, tabby, leader)"
+                    className="h-7 border-white/15 bg-black/40 pl-8 text-xs text-white placeholder:text-white/30"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    onClick={() => setCharGroup("all")}
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors",
+                      charGroup === "all" ? "bg-amber-400/25 text-amber-200 ring-1 ring-amber-300/40" : "bg-white/5 text-white/50 hover:bg-white/10",
+                    )}
+                  >
+                    All
+                  </button>
+                  {PRESET_GROUPS.map((g) => (
+                    <button
+                      key={g.id}
+                      onClick={() => setCharGroup(g.id)}
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors",
+                        charGroup === g.id ? "bg-amber-400/25 text-amber-200 ring-1 ring-amber-300/40" : "bg-white/5 text-white/50 hover:bg-white/10",
+                      )}
+                    >
+                      {g.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 md:grid-cols-3">
+                {charList.map((p) => {
+                  const previewSkin: CustomSkin = { ...skin, ...p.skin, presetId: p.id, morph: undefined };
+                  return (
+                    <motion.button
+                      key={p.id}
+                      layout
+                      whileHover={{ y: -2 }}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => setCharPreview(p.id)}
+                      className={cn(
+                        "rounded-xl border p-1.5 text-left transition-colors",
+                        charPreview === p.id
+                          ? "border-amber-400/70 bg-amber-400/15 ring-1 ring-amber-300/50"
+                          : "border-white/10 bg-black/30 hover:border-white/30 hover:bg-white/10",
+                      )}
+                    >
+                      <div className="flex items-center justify-center rounded-lg bg-gradient-to-b from-emerald-900/30 to-black/10">
+                        <PresetThumb skin={previewSkin} size={72} pose="sit" />
+                      </div>
+                      <p className="mt-1 truncate px-0.5 text-[10px] font-medium text-white/80">{p.displayName}</p>
+                      <p className="truncate px-0.5 text-[9px] text-white/40">
+                        {PRESET_GROUPS.find((g) => g.id === p.group)?.name}
+                      </p>
+                    </motion.button>
+                  );
+                })}
+                {charList.length === 0 && (
+                  <p className="col-span-full py-8 text-center text-xs text-white/40">No characters match that search.</p>
+                )}
+              </div>
+            </div>
+            ) : (
             <div className="grid flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 max-[420px]:grid-cols-2 md:grid-cols-3">
               {items.map((item) => {
                 const on = item.isOn(skin);
@@ -541,6 +774,7 @@ export function CatCustomizer({
                 </p>
               )}
             </div>
+            )}
           </div>
         </div>
 
@@ -648,7 +882,11 @@ export function CatCustomizer({
             </Button>
           </div>
           <p className="hidden text-[10px] text-white/40 md:block">
-            {dirty ? "Unsaved changes — press SAVE CAT to keep them." : "Saved cat"}
+            {saveState === "failed"
+              ? "Save failed — your previous cat is safe. Try again."
+              : dirty
+                ? "Unsaved changes — press SAVE CAT to keep them."
+                : "Saved cat"}
           </p>
           <div className="flex gap-1.5">
             <Button
@@ -662,9 +900,18 @@ export function CatCustomizer({
             <Button
               size="sm"
               className="h-8 gap-1.5 rounded-xl bg-amber-400 px-4 text-xs font-bold text-[#0d160d] hover:bg-amber-300"
-              onClick={() => onSave({ skin, favorites, presets })}
+              disabled={saveState === "saving"}
+              onClick={() => {
+                setSaveState("saving");
+                Promise.resolve(onPersist?.())
+                  .then(() => {
+                    setSaveState("saved");
+                    onSave({ skin, favorites, presets });
+                  })
+                  .catch(() => setSaveState("failed"));
+              }}
             >
-              <Save className="size-3.5" /> Save Cat
+              <Save className="size-3.5" /> {saveState === "saving" ? "Saving…" : saveState === "failed" ? "Retry save" : "Save Cat"}
             </Button>
           </div>
         </div>
