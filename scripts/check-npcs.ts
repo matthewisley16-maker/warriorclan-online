@@ -363,6 +363,17 @@ console.log("— live den traversal —");
 const denObj = allObjects.find((o) => o.id === "elders-den")!;
 const denCat = eng.npcStates.find((n) => n.def.id === "halftail") ?? eng.npcStates.find((n) => n.def.id === "mousefur");
 check(!!denCat, "a ThunderClan elder exists in the live engine");
+// park every OTHER cat far from the elders den (deterministic scenario: no
+// other cat's random schedule may interfere with the walk-in)
+for (const other of eng.npcStates) {
+  if (other === denCat) continue;
+  other.x = 78 * 32;
+  other.y = 146 * 32;
+  other.denId = null;
+  other.denSeat = -1;
+  other.ai = "idle";
+  other.convoActive = false;
+}
 if (denCat) {
   // force morning + idle, parked at home
   const morningFrac = 8 / 24;

@@ -643,17 +643,22 @@ export function buildAskMenu(npcId: string, ctx: DialogueContext): AskOption[] {
     if (c.when && !c.when(p, ctx)) continue;
     valid.push(c);
   }
-  // dedupe, then surface the personal asks first (weight tiebreak), so the
-  // menu leads with THIS cat's own questions instead of the generic pool
+  // dedupe, then compose the menu: this cat's own questions lead (at most
+  // two — the About You / Current Situation basics must keep their slots),
+  // then everything else by weight. The StarClan ask keeps its reserved slot
+  // (the sanctioned teaching moment — see below).
   const seen = new Set<string>();
   const out: AskOption[] = [];
   const personalSet = new Set((PERSONAL_ASKS[p.id] ?? []).map((c) => c.id));
-  const ordered = [...valid].sort((a, b) => {
-    const pa = personalSet.has(a.id) ? 1 : 0;
-    const pb = personalSet.has(b.id) ? 1 : 0;
-    if (pa !== pb) return pb - pa;
-    return b.weight - a.weight;
-  });
+  const sorted = [...valid].sort((a, b) => b.weight - a.weight);
+  const lead = sorted.filter((c) => personalSet.has(c.id)).slice(0, 2);
+  const rest = sorted.filter((c) => !lead.includes(c));
+  const ordered = [...lead, ...rest];
+  const starIdx = ordered.findIndex((c) => c.id === "starclan");
+  if (starIdx >= 0) {
+    const star = ordered.splice(starIdx, 1)[0]!;
+    ordered.splice(Math.min(ordered.length, MAX_ASKS - 1), 0, star);
+  }
   for (const c of ordered) {
     if (seen.has(c.id)) continue;
     seen.add(c.id);

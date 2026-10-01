@@ -6732,48 +6732,53 @@ export class GameCanvas {
       case "go_den": {
         const denObj = allObjects.find((o) => o.interior && o.interior === n.preyId);
         if (!denObj) { n.preyId = null; n.ai = "wander"; break; }
-        // approach the ENTRANCE MOUTH only — the den interior is solid
-        // collision, so walking into the footprint ground cats against the
-        // door until the emergency nudge rescued them (the "stuck on doors" bug)
+        // §25 phases: 1) approach the entrance mouth  2) walk through it and
+        // tuck into the claimed seat. The phases are split so the mouth walk
+        // never fights the seat walk (two stepTo calls per frame canceled out
+        // and the stuck detector forever re-routed the cat — it never got in).
         const mouth = { x: denObj.x, y: denObj.y + denObj.h / 2 + 14 };
-        const d = stepTo(mouth.x, mouth.y, walkSpeed);
-        if (d <= arrive) {
-          // someone still entering this doorway: wait politely behind them —
-          // but only for cats STRICTLY closer to the mouth (deterministic
-          // alphabetical tie-break), so two cats never deadlock waiting on
-          // each other at the same doorway
-          const blocker = this.npcStates.some((o) => {
-            if (o === n || o.denId !== denObj.id || o.ai !== "go_den") return false;
-            const dO = Math.hypot(o.x - mouth.x, o.y - mouth.y);
-            if (dO < d - 4) return true;
-            if (Math.abs(dO - d) <= 4) return o.def.id < n.def.id;
-            return false;
-          });
-          if (blocker) {
-            n.pose = "sit";
-            // a deliberate polite wait is NOT a stall: anchor the stuck
-            // detector here so a queued cat is never "rescued" away from the
-            // doorway it is patiently standing in front of
-            n.stuckSince = null;
-            n.lastStuckX = n.x;
-            n.lastStuckY = n.y;
-            break;
-          }
-          // reserve the seat ONLY on arrival, then tuck in
-          if (n.denId !== denObj.id) {
+        if (n.denSeat < 0) {
+          // PHASE 1 — approach the entrance (a real navigation point)
+          const d = stepTo(mouth.x, mouth.y, walkSpeed);
+          if (d <= arrive) {
+            // someone still entering this doorway: wait politely behind them —
+            // but only for cats STRICTLY closer to the mouth (deterministic
+            // alphabetical tie-break), so two cats never deadlock waiting on
+            // each other at the same doorway
+            const blocker = this.npcStates.some((o) => {
+              if (o === n || o.denId !== denObj.id || o.ai !== "go_den") return false;
+              const dO = Math.hypot(o.x - mouth.x, o.y - mouth.y);
+              if (dO < d - 4) return true;
+              if (Math.abs(dO - d) <= 4) return o.def.id < n.def.id;
+              return false;
+            });
+            if (blocker) {
+              n.pose = "sit";
+              // a deliberate polite wait is NOT a stall: anchor the stuck
+              // detector here so a queued cat is never "rescued" away from
+              // the doorway it is patiently standing in front of
+              n.stuckSince = null;
+              n.lastStuckX = n.x;
+              n.lastStuckY = n.y;
+              break;
+            }
+            // at the doorway: claim a seat, then tuck in (phase 2)
             n.denId = denObj.id;
             n.denSeat = this.claimDenSeat(denObj);
           }
-          const seats = denSeatsFor(denObj);
-          const seat = seats[Math.max(0, Math.min(seats.length - 1, n.denSeat))];
-          const stepIn = stepTo(seat.x, seat.y, 30);
-          if (stepIn <= 6) {
-            n.preyId = null;
-            n.pose = "sleep";
-            n.ai = "in_den";
-            n.activity = "sleeping in the den";
-            n.waitUntil = this.time + 30 + Math.random() * 40; // sleeps until ~dawn check
-          }
+          break;
+        }
+        // PHASE 2 — through the mouth corridor to the seat (pure seat walk:
+        // no mouth pull-back, so the cat converges and sleeps)
+        const seats = denSeatsFor(denObj);
+        const seat = seats[Math.max(0, Math.min(seats.length - 1, n.denSeat))];
+        const stepIn = stepTo(seat.x, seat.y, 30);
+        if (stepIn <= 6) {
+          n.preyId = null;
+          n.pose = "sleep";
+          n.ai = "in_den";
+          n.activity = "sleeping in the den";
+          n.waitUntil = this.time + 30 + Math.random() * 40; // sleeps until ~dawn check
         }
         break;
       }
