@@ -61,7 +61,7 @@ const P = (
   displayName: string,
   group: PresetGroup,
   blurb: string,
-  skin: Omit<CustomSkin, "morph" | "presetId">,
+  skin: Omit<CustomSkin, "morph" | "presetId" | "accColors">,
   extra?: Partial<Pick<CharacterPreset, "clan" | "rank" | "tags">>,
 ): CharacterPreset => ({
   id,
@@ -218,7 +218,7 @@ export interface CatMorph {
   id: string;
   name: string;
   desc: string;
-  skin: Omit<CustomSkin, "morph" | "presetId">;
+  skin: Omit<CustomSkin, "morph" | "presetId" | "accColors">;
   tags?: string[];
 }
 

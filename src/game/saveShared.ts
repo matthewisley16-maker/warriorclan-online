@@ -25,6 +25,8 @@ export const appearance = v.object({
   scars: v.optional(v.array(v.string())),
   acc: v.optional(v.record(v.string(), v.string())),
   accColor: v.optional(v.string()),
+  // §18: per-slot accessory tint overrides (slot id -> hex); falls back to accColor
+  accColors: v.optional(v.record(v.string(), v.string())),
   // morph = a WARRIORS character look applied on top of the base coat (§22):
   // same player account, same controls, same animations — visuals only
   morph: v.optional(v.string()),
@@ -53,6 +55,7 @@ export type AppearanceT = {
   scars?: string[];
   acc?: Partial<Record<string, string>>;
   accColor?: string;
+  accColors?: Partial<Record<string, string>>;
   morph?: string;
   presetId?: string;
 };
@@ -68,17 +71,19 @@ export function appearanceVersion(a?: {
   pattern?: string; furLength?: number; furStyle?: string; tail?: string;
   ears?: string; size?: number; nose?: string; face?: string;
   patternIntensity?: number; markings?: string[]; scars?: string[];
-  acc?: Record<string, string>; accColor?: string; morph?: string; presetId?: string;
+  acc?: Record<string, string>; accColor?: string; accColors?: Record<string, string>;
+  morph?: string; presetId?: string;
 } | null): number {
   if (!a) return 0;
   const acc = a.acc ? Object.keys(a.acc).sort().map((k) => `${k}=${a.acc![k]}`).join(";") : "";
+  const accColors = a.accColors ? Object.keys(a.accColors).sort().map((k) => `${k}=${a.accColors![k]}`).join(";") : "";
   return [
     a.fur ?? "", a.furDark ?? "", a.eye ?? "", a.eye2 ?? "", a.chest ?? "",
     a.pattern ?? "", a.furLength ?? 1, a.furStyle ?? "", a.tail ?? "", a.ears ?? "",
     Math.round((a.size ?? 1) * 100), a.nose ?? "", a.face ?? "",
     a.patternIntensity !== undefined ? Math.round(a.patternIntensity * 100) : "",
     (a.markings ?? []).slice().sort().join(","), (a.scars ?? []).slice().sort().join(","),
-    acc, a.accColor ?? "", a.morph ?? "", a.presetId ?? "",
+    acc, accColors, a.accColor ?? "", a.morph ?? "", a.presetId ?? "",
   ].join("|")
     .split("")
     .reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 5381) >>> 0;

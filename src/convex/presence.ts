@@ -53,6 +53,16 @@ function isFreshInput(incoming: number | undefined, last: number | undefined): b
   return true;
 }
 
+/**
+ * §5: cheap round-trip probe — no arguments, no database writes. The client
+ * measures RTT against this instead of the full heartbeat so the ping reads
+ * network latency only, never DB write time.
+ */
+export const ping = mutation({
+  args: {},
+  handler: async () => Date.now(),
+});
+
 /** Heartbeat: upsert this player's presence row. */
 export const heartbeat = mutation({
   args: {
@@ -68,7 +78,9 @@ export const heartbeat = mutation({
     catName: v.string(),
     clan: v.optional(v.string()),
     rank: v.optional(v.string()),
-    appearance,
+    // §4: optional — movement packets ride the version number only; the full
+    // object is attached exclusively when the look actually changed.
+    appearance: v.optional(appearance),
     inputSequence: v.optional(v.number()),
     movementState: v.optional(v.string()),
     animationState: v.optional(v.string()),
@@ -118,6 +130,17 @@ export const heartbeat = mutation({
     }
 
     if (existing) {
+      // §12/§14: only re-broadcast appearance when its fingerprint CHANGED
+      // (or it is genuinely missing on a legacy row) — identical looks are
+      // never written at the movement cadence. A packet without an appearance
+      // NEVER unsets the stored one.
+      const appearanceChanged =
+        args.appearance !== undefined &&
+        !(
+          args.appearanceVersion !== undefined &&
+          existing.appearanceVersion === args.appearanceVersion &&
+          existing.appearance
+        );
       await ctx.db.patch(existing._id, {
         x,
         y,
@@ -135,12 +158,14 @@ export const heartbeat = mutation({
         // (or it is genuinely missing on a legacy row) — identical looks are
         // never written at the movement cadence.
         appearance:
-          args.appearanceVersion !== undefined &&
-          existing.appearanceVersion === args.appearanceVersion &&
-          existing.appearance
+          args.appearance === undefined
             ? existing.appearance
-            : args.appearance,
-        appearanceVersion: args.appearanceVersion ?? existing.appearanceVersion,
+            : appearanceChanged
+              ? args.appearance
+              : existing.appearance,
+        appearanceVersion:
+          args.appearanceVersion ??
+          (appearanceChanged ? (existing.appearanceVersion ?? 0) + 1 : existing.appearanceVersion),
         inputSequence: args.inputSequence ?? existing.inputSequence,
         movementState,
         animationState,
@@ -150,6 +175,19 @@ export const heartbeat = mutation({
       });
       return existing._id;
     }
+    // §10: a FRESH presence row must never hold a default cat — fall back to
+    // the player's persisted appearance when the first packet rode without one.
+    let appToStore = args.appearance;
+    if (!appToStore) {
+      const p = await ctx.db
+        .query("players")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+      appToStore = p?.appearance;
+    }
+    // guaranteed non-empty: the players row always carries an appearance; the
+    // literal default cat covers the (never expected) no-row edge case
+    const stored = appToStore ?? { fur: "#d96b2f", furDark: "#a34a1a", eye: "#4fae6e", furLength: 1, size: 1, scar: false };
     const id = await ctx.db.insert("presence", {
       userId,
       x,
@@ -164,8 +202,8 @@ export const heartbeat = mutation({
       catName: args.catName,
       clan: args.clan,
       rank: args.rank,
-      appearance: args.appearance,
-      appearanceVersion: args.appearanceVersion,
+      appearance: stored,
+      appearanceVersion: args.appearanceVersion ?? (appToStore ? 1 : undefined),
       inputSequence: args.inputSequence,
       movementState,
       animationState,

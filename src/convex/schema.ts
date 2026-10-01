@@ -39,6 +39,8 @@ const appearanceValidator = v.object({
   scars: v.optional(v.array(v.string())),
   acc: v.optional(v.record(v.string(), v.string())),
   accColor: v.optional(v.string()),
+  // §18: per-slot accessory tint overrides (slot id -> hex); falls back to accColor
+  accColors: v.optional(v.record(v.string(), v.string())),
   // morph = a WARRIORS character look applied on top of the base coat;
   // presetId tracks the WARRIORS preset this look came from (§30)
   morph: v.optional(v.string()),

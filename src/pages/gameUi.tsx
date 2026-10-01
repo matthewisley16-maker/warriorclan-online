@@ -52,6 +52,9 @@ export function fullSkin(
     scars: string[];
     acc: Partial<Record<string, string>>;
     accColor: string;
+    accColors: Partial<Record<string, string>>;
+    morph: string;
+    presetId: string;
   }> | null,
 ) {
   const a = s ?? {};
@@ -79,6 +82,10 @@ export function fullSkin(
       ? { acc: Object.fromEntries(Object.entries(a.acc).filter(([, v]) => typeof v === "string")) as Record<string, string> }
       : {}),
     ...(a.accColor ? { accColor: a.accColor } : {}),
+    // §18: per-slot accessory tints (kept verbatim; empty object omitted)
+    ...(a.accColors && Object.keys(a.accColors).length
+      ? { accColors: Object.fromEntries(Object.entries(a.accColors).filter(([, v]) => typeof v === "string")) as Record<string, string> }
+      : {}),
   };
 }
 

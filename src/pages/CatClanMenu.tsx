@@ -26,6 +26,7 @@ export function CatClanMenu({
   presets = [],
   onClose,
   onSave,
+  onPersist,
 }: {
   open: boolean;
   player: {
@@ -39,6 +40,10 @@ export function CatClanMenu({
   presets?: { name: string; skin: CustomSkin }[];
   onClose: () => void;
   onSave: (v: CatClanSave) => void;
+  /** §8/§10: awaited BEFORE onSave — persists the full appearance to the
+   * account so SAVE CAT reflects the real server state (failure keeps editor
+   * open with a Retry). */
+  onPersist?: (s: { skin: CustomSkin }) => Promise<void> | void;
 }) {
   const [clanPickerOpen, setClanPickerOpen] = useState(false);
 
@@ -116,6 +121,7 @@ export function CatClanMenu({
                 favorites={favorites}
                 presets={presets}
                 onClose={onClose}
+                onPersist={onPersist}
                 onSave={(v) => {
                   onSave({ skin: v.skin as CatSkin, favorites: v.favorites, presets: v.presets });
                 }}

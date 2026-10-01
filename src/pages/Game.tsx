@@ -36,6 +36,8 @@ import {
 } from "@/game/audio";
 import { interiors } from "@/game/engine";
 import { GROUND_CELL, GROUND_COLS, GROUND_ROWS, groundMap, lore, npcs, areaAt, allObjects, CLAN_SPAWNS, SPAWN } from "@/game/world";
+// §13: appearance fingerprint drives versioned saves + change-gated sync
+import { appearanceVersion } from "@/game/saveShared";
 import { storySteps } from "@/game/story";
 import { buildDialogue, type DialogueContext } from "@/game/dialogue";
 import { buildAskMenu, npcChatReply, FACT_LABELS, type AskOption, type ChatMsg } from "@/game/npcChat";
@@ -146,6 +148,10 @@ export default function Game() {
   const savePresets = useMutation(api.customization.savePresets);
   const updateStats = useMutation(api.players.updateStats);
   const heartbeat = useMutation(api.presence.heartbeat);
+  // §5: pure RTT probe (no DB write) — the ping number is network-only now
+  const pingProbe = useMutation(api.presence.ping);
+  // §7/§13: versioned full-appearance persistence (CONFIRM-time save path)
+  const saveAppearance = useMutation(api.customization.saveAppearance);
   const leavePresence = useMutation(api.presence.leave);
   const sendChat = useMutation(api.chat.send);
 
@@ -236,6 +242,14 @@ export default function Game() {
   weatherRef.current = weather;
   const [interior, setInterior] = useState<string | null>(null);
   const [myCat, setMyCat] = useState<{ name: string; clan?: string; appearance: CatSkin } | null>(null);
+  // Ref mirror for the STABLE network intervals below — they read the latest
+  // name/appearance at send time instead of a stale boot-time closure.
+  const myCatRef = useRef(myCat);
+  myCatRef.current = myCat;
+  // §4/§13: fingerprint of the appearance last put on the wire. The full
+  // appearance object only rides packets when this CHANGES (or on rare
+  // keepalive beacons) — identical looks are never re-uploaded at 300ms.
+  const sentAppearanceVerRef = useRef<number | null>(null);
   // --- survival stats (hunger/energy/health) ---
   const [stats, setStats] = useState({ hunger: 80, energy: 90, health: 100 });
   const statsRef = useRef(stats);
@@ -253,6 +267,8 @@ export default function Game() {
   const [currentWaypointId, setCurrentWaypointId] = useState<string | null>(null);
   const [waypointInfo, setWaypointInfo] = useState<{ meters: number; tiles: number; arrived: boolean } | null>(null);
   const [ping, setPing] = useState<number | null>(null);
+  // §5: the latest sample was far above the rolling average (transient spike)
+  const [pingSpike, setPingSpike] = useState(false);
   const [connQuality, setConnQuality] = useState<"excellent" | "good" | "fair" | "poor" | "offline">("good");
   const [dmToast, setDmToast] = useState<{ from: string; count: number } | null>(null);
   const lastUnreadRef = useRef(0);
@@ -489,16 +505,26 @@ export default function Game() {
         if (!g) return;
         const p = interiorRef.current ? outdoorRef.current : posRef.current;
         const m = interiorRef.current ? { facing: 1, moving: false } : movementSample(g);
+        const cat = myCatRef.current;
+        if (!cat) return;
+        const full = fullSkin(cat.appearance);
+        const ver = appearanceVersion(full);
+        // §4: ride-along only when the fingerprint CHANGED (or 1-in-5 as a
+        // drift beacon) — keepalives stay tiny; looks are never re-uploaded
+        // for no reason. Name/clan read live so renames reach remotes too.
+        const rideAlong = ver !== sentAppearanceVerRef.current || Math.random() < 0.2;
+        sentAppearanceVerRef.current = ver;
         heartbeat({
           inputSequence: ++inputSeq.current,
           x: p.x,
           y: p.y,
           ...m,
           mode: "open",
-          catName: myCat.name,
-          clan: myCat.clan,
+          catName: cat.name,
+          clan: cat.clan,
           rank: "apprentice",
-          appearance: fullSkin(myCat.appearance),
+          appearanceVersion: ver,
+          ...(rideAlong ? { appearance: full } : {}),
         }).catch(() => undefined);
       }, 5000);
     }
@@ -535,6 +561,14 @@ export default function Game() {
             engineWithActions.pVocalSent = sentVocal;
           }
         }
+        const cat = myCatRef.current;
+        if (!cat) return;
+        // §4: movement packets carry ONLY the version number; the full
+        // appearance object rides along exclusively when it CHANGED — the
+        // 300ms stream stays lean (movement + states + a few bytes).
+        const ver = appearanceVersion(cat.appearance as Parameters<typeof appearanceVersion>[0]);
+        const ride = ver !== sentAppearanceVerRef.current;
+        if (ride) sentAppearanceVerRef.current = ver;
         heartbeat({
           inputSequence: ++inputSeq.current,
           x: s.x,
@@ -547,10 +581,11 @@ export default function Game() {
           ...(sentVocal ? { vocal: sentVocal } : {}),
           ...(s.emote ? { animOneShot: s.emote } : {}),
           mode: "open",
-          catName: myCat.name,
-          clan: myCat.clan,
+          catName: cat.name,
+          clan: cat.clan,
           rank: "apprentice",
-          appearance: fullSkin(myCat.appearance),
+          appearanceVersion: ver,
+          ...(ride ? { appearance: fullSkin(cat.appearance) } : {}),
         }).catch(() => undefined);
       }, 300);
     }
@@ -694,6 +729,9 @@ export default function Game() {
   // last vocal|action payload seen per remote user (only queue CHANGES —
   // presence rows persist the last one-shot, so polling would replay it)
   const lastRemoteActionRef = useRef(new Map<string, string>());
+  // §12: last appearance fingerprint seen per remote user (skip identical
+  // look rows entirely so remote sprites never hitch on unchanged data)
+  const lastRemoteAppearanceVerRef = useRef(new Map<string, number>());
   // Sync remotes into the engine.
   useEffect(() => {
     const g = gameRef.current;
@@ -702,7 +740,17 @@ export default function Game() {
     const seen = new Set<string>();
     for (const r of remotesRaw as RemotePlayer[]) {
       seen.add(r.userId);
-      map.set(r.userId, r);
+      // §11/§12: the look swaps LIVE (no respawn/teleport/interp reset) and
+      // only when its fingerprint actually changed — identical rows keep the
+      // engine's existing object so sprites never hitch.
+      const prev = map.get(r.userId);
+      const prevVer = lastRemoteAppearanceVerRef.current.get(r.userId);
+      if (prev && prevVer !== undefined && r.appearanceVersion !== undefined && prevVer === r.appearanceVersion) {
+        map.set(r.userId, { ...prev, ...r, appearance: prev.appearance });
+      } else {
+        map.set(r.userId, r);
+        if (r.appearanceVersion !== undefined) lastRemoteAppearanceVerRef.current.set(r.userId, r.appearanceVersion);
+      }
       const prevPayload = lastRemoteActionRef.current.get(r.userId) ?? "";
       const curPayload = `${r.vocal ?? ""}|${r.action ?? ""}|${r.animOneShot ?? ""}`;
       if (curPayload !== prevPayload) {
@@ -715,44 +763,38 @@ export default function Game() {
     // a player joining (or re-joining) is re-buffed by the engine from their
     // fresh authoritative snapshot — no stale interpolation state is reused
     for (const k of [...map.keys()]) if (!seen.has(k)) map.delete(k);
-  }, [remotesRaw]);
-
-  // --- ping measurement: real round-trip time of a Convex mutation, sampled
-  // every 8s. Falls back to the Network Information API when mutations fail.
+  }, [remotesRaw]);  // --- ping measurement (§5): the pure RTT probe — a no-arg, no-write
+  // mutation — so the number reads NETWORK latency only (the old version used
+  // a full heartbeat write, making "ping" include DB time). Rolling EMA for
+  // stability + a SPIKE marker when the latest sample far exceeds it.
   useEffect(() => {
     if (phase !== "playing") return;
     let alive = true;
+    const emaRef = { v: null as number | null };
     const sample = async () => {
       const t0 = performance.now();
       try {
-        const p = interiorRef.current ? outdoorRef.current : posRef.current;
-        await heartbeat({
-          x: p.x,
-          y: p.y,
-          ...(interiorRef.current ? { facing: 1, moving: false } : movementSample(gameRef.current)),
-          mode: mode === "story" ? "story" : "open",
-          catName: myCat?.name ?? "Cat",
-          clan: myCat?.clan,
-          rank: "apprentice",
-          appearance: fullSkin(myCat?.appearance),
-        });
+        await pingProbe();
         const rtt = Math.round(performance.now() - t0);
         if (!alive) return;
-        setPing((prev) => (prev === null ? rtt : Math.round(prev * 0.7 + rtt * 0.3)));
+        emaRef.v = emaRef.v === null ? rtt : Math.round(emaRef.v * 0.7 + rtt * 0.3);
+        setPing(emaRef.v);
         setConnQuality(rtt < 90 ? "excellent" : rtt < 180 ? "good" : rtt < 350 ? "fair" : "poor");
+        // distinguish a sudden spike from a sustained degradation
+        setPingSpike(rtt > emaRef.v * 2 + 40);
       } catch {
         if (!alive) return;
         setConnQuality((navigator as unknown as { onLine?: boolean }).onLine ? "poor" : "offline");
       }
     };
     sample();
-    const t = window.setInterval(sample, 8000);
+    const t = window.setInterval(sample, 4000);
     return () => {
       alive = false;
       window.clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, mode, myCat?.name]);
+  }, [phase, mode]);
 
   // Pause the world while a menu or dialogue is on screen.
   useEffect(() => {
@@ -1424,7 +1466,18 @@ export default function Game() {
             savePresets({ presets: v.presets }).catch(() => undefined);
           }}
           onSaveName={(name) => updateCat({ catName: name }).catch(() => undefined)}
-          onSaveSkin={(skin) => updateCat({ appearance: fullSkin(skin) }).catch(() => undefined)}
+          onSaveAppearance={(skin, catName) => {
+            // §7/§8/§13: versioned full-appearance write through saveAppearance
+            // (updateCat remains for name/clan/stats only).
+            const full = fullSkin(skin);
+            saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full), catName }).catch(() => undefined);
+          }}
+          onPersistAppearance={({ skin }) => {
+            // §10: awaited by CatCustomizer before SAVE confirms; failure keeps
+            // the editor open with "Retry save" (data is never lost).
+            const full = fullSkin(skin);
+            return saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full) }).then(() => undefined);
+          }}
           onSaveClan={(clan) => updateCat({ clan }).catch(() => undefined)}
           onSaveSettings={(s) => setGameSettings(s)}
         />
@@ -1968,16 +2021,23 @@ export default function Game() {
             favorites={player?.favorites ?? []}
             presets={player?.presets ?? []}
             onClose={() => setActiveUI("gameplay")}
+            onPersist={({ skin }) => {
+              // §10/§12: SAVE CAT awaits the versioned server write FIRST; the
+              // live engine swap below makes the new look appear instantly
+              // with NO respawn/teleport, and the next sync packet broadcasts
+              // it because the fingerprint changed.
+              const full = fullSkin(skin);
+              return saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full), catName: myCat.name }).then(() => {
+                sentAppearanceVerRef.current = appearanceVersion(full); // next 300ms packet rides the new look
+                const g = gameRef.current;
+                if (g) g.mySkin = { ...full, furDark: full.furDark || "#5a3a20" };
+                setMyCat((c) => (c ? { ...c, appearance: full } : c));
+              });
+            }}
             onSave={(v: CatClanSave) => {
               if (v.name && v.name !== myCat.name) {
                 updateCat({ catName: v.name }).catch(() => undefined);
-              }
-              if (v.skin) {
-                updateCat({ appearance: fullSkin(v.skin) }).catch(() => undefined);
-                // live-update the in-world cat + menu preview immediately
-                const g = gameRef.current;
-                if (g) g.mySkin = { ...fullSkin(v.skin), furDark: fullSkin(v.skin).furDark || "#5a3a20" };
-                setMyCat((c) => (c ? { ...c, appearance: fullSkin(v.skin) } : c));
+                setMyCat((c) => (c ? { ...c, name: v.name! } : c));
               }
               if (v.favorites) setFavorites({ favorites: v.favorites }).catch(() => undefined);
               if (v.presets) savePresets({ presets: v.presets }).catch(() => undefined);

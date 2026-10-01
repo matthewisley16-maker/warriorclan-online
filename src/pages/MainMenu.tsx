@@ -309,31 +309,9 @@ function ModeCard({ mode, index, onPlay, compact }: { mode: (typeof MODES)[numbe
 }
 
 // --- character screen ---------------------------------------------------------
-
-export const FUR_COLORS = [
-  "#d96b2f", "#e8963f", "#c9c2b8", "#8f8f96", "#5c5c60", "#2c2c30",
-  "#7a5b3a", "#a5622d", "#e3c088", "#c98d5a", "#9fb2c8", "#b8c4d6",
-  "#6b4a2f", "#d9a441", "#e8e6e0", "#8a7a66",
-];
-export const EYE_COLORS = ["#4fae6e", "#5b8fd6", "#d9c04a", "#c98a1e", "#7fae4e", "#2c2c30", "#d9973a"];
-export const CHEST_COLORS = ["#f4e9d8", "#ffffff", "#e3c088"];
-
-/** Roll a fully random appearance. */
-export function randomSkin(): CatSkin {
-  const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
-  return {
-    fur: pick(FUR_COLORS),
-    furDark: "",
-    eye: pick(EYE_COLORS),
-    chest: Math.random() < 0.3 ? pick(CHEST_COLORS) : undefined,
-    pattern: pick(["solid", "tabby", "tortie", "bicolor"] as const),
-    furLength: 1,
-    tail: pick(["normal", "short", "fluffy", "bob"] as const),
-    ears: pick(["normal", "tall", "fold"] as const),
-    size: Math.round((0.85 + Math.random() * 0.3) * 100) / 100,
-    scar: Math.random() < 0.18,
-  };
-}
+// §37-38: this screen is PROFILE + entry point ONLY. All appearance editing
+// lives in the ONE shared CatCustomizer (same renderer, catalog, presets,
+// morphs and save path as in-game) — never a second, simplified editor.
 
 /** Roll a random Warriors-style name (Firepaw, Graystripe, Sandwhisker…). */
 export function randomCatName(): string {
@@ -414,12 +392,14 @@ function CharacterScreen({
   onSave: (v: { name?: string; skin?: CatSkin; clan?: string }) => void;
   onOpenCustomizer: () => void;
 }) {
-  const [skin, setSkin] = useState<CatSkin>(player.skin);
   const [name, setName] = useState(player.name);
   const [clan, setClan] = useState(player.clan ?? "thunderclan");
   const [clanToast, setClanToast] = useState<string | null>(null);
 
-  const dirty = name.trim() !== player.name || JSON.stringify(skin) !== JSON.stringify(player.skin) || clan !== (player.clan ?? "thunderclan");
+  // The cat itself is only edited in CatCustomizer; here we keep the current
+  // look read-only for the portrait.
+  const skin = player.skin;
+  const dirty = name.trim() !== player.name || clan !== (player.clan ?? "thunderclan");
   const skills = player.skills;
 
   return (
@@ -447,12 +427,9 @@ function CharacterScreen({
                 variant="outline"
                 size="sm"
                 className="mt-2 w-full gap-1.5 rounded-full border-white/20 bg-black/40 text-xs text-white hover:bg-white/10"
-                onClick={() => {
-                  setSkin(randomSkin());
-                  setName(randomCatName());
-                }}
+                onClick={onOpenCustomizer}
               >
-                <RefreshCw className="size-3.5" /> Randomize cat
+                <RefreshCw className="size-3.5" /> Surprise me
               </Button>
               <Button
                 size="sm"
@@ -561,70 +538,20 @@ function CharacterScreen({
               </p>
             </InfoRow>
 
-            <InfoRow icon={Palette} label="Appearance" >
-              <div className="space-y-3">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-white/50">Fur</p>
-                  <div className="mt-1"><Swatches colors={FUR_COLORS} value={skin.fur} onChange={(fur) => setSkin((s) => ({ ...s, fur, chest: undefined }))} /></div>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-white/50">Eyes</p>
-                  <div className="mt-1"><Swatches colors={EYE_COLORS} value={skin.eye} onChange={(eye) => setSkin((s) => ({ ...s, eye }))} /></div>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {(["solid", "tabby", "tortie", "bicolor"] as const).map((p) => (
-                    <Chip key={p} label={p} active={skin.pattern === p} onClick={() => setSkin((s) => ({ ...s, pattern: p }))} />
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {(["normal", "fluffy", "short", "bob"] as const).map((t) => (
-                    <Chip key={t} label={`${t} tail`} active={skin.tail === t} onClick={() => setSkin((s) => ({ ...s, tail: t }))} />
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {(["normal", "tall", "fold"] as const).map((e) => (
-                    <Chip key={e} label={`${e} ears`} active={skin.ears === e} onClick={() => setSkin((s) => ({ ...s, ears: e }))} />
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {CHEST_COLORS.map((c) => (
-                    <Chip
-                      key={c}
-                      label={skin.chest === c ? "chest ✓" : "chest"}
-                      active={skin.chest === c}
-                      onClick={() => setSkin((s) => ({ ...s, chest: s.chest === c ? undefined : c }))}
-                    />
-                  ))}
-                </div>
-                <div>
-                  <div className="flex justify-between text-[10px] uppercase tracking-wider text-white/50">
-                    <span>Size</span>
-                    <span>{Math.round((skin.size ?? 1) * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0.85}
-                    max={1.15}
-                    step={0.01}
-                    value={skin.size ?? 1}
-                    onChange={(e) => setSkin((s) => ({ ...s, size: Number(e.target.value) }))}
-                    className="mt-1 w-full accent-[var(--primary)]"
-                  />
-                </div>
-                <div className="flex items-center gap-2 text-xs text-white/60">
-                  <span>Battle scar</span>
-                  <button
-                    onClick={() => setSkin((s) => ({ ...s, scar: !s.scar }))}
-                    className={cn(
-                      "relative h-5 w-9 rounded-full transition-colors",
-                      skin.scar ? "bg-primary" : "bg-white/15",
-                    )}
-                    aria-label="Toggle battle scar"
-                  >
-                    <span className={cn("absolute top-0.5 size-4 rounded-full bg-white transition-all", skin.scar ? "left-[1.15rem]" : "left-0.5")} />
-                  </button>
-                </div>
-              </div>
+            <InfoRow icon={Palette} label="Appearance">
+              {/* §36: the full customizer is the ONLY editor — open it for
+                  coats, markings, scars, morphs, presets and accessories. */}
+              <p className="text-xs text-white/55">
+                Coat, eyes, markings, scars, accessories, morphs and WARRIORS
+                presets are edited in the full customizer.
+              </p>
+              <Button
+                size="sm"
+                className="mt-2 gap-1.5 rounded-full bg-amber-400/90 text-xs font-bold text-[#0d160d] hover:bg-amber-300"
+                onClick={onOpenCustomizer}
+              >
+                <Palette className="size-3.5" /> Open the full customizer
+              </Button>
             </InfoRow>
 
             <InfoRow icon={Heart} label="Clan">
@@ -914,18 +841,23 @@ export default function MainMenu({
   player,
   onPlay,
   onSaveName,
-  onSaveSkin,
+  onSaveAppearance,
   onSaveClan,
   onSaveSettings,
   favorites = [],
   presets = [],
   onSaveCustomization,
+  onPersistAppearance,
 }: {
   player: MainMenuPlayer | null;
   /** mode + chosen Clan — Clan is picked every session, never locked */
   onPlay: (mode: GameMode, clanId: string) => void;
   onSaveName: (name: string) => void;
-  onSaveSkin: (skin: CatSkin) => void;
+  /** §8/§13: full-appearance save (name rides along; saved via saveAppearance) */
+  onSaveAppearance: (skin: CatSkin, catName?: string) => void;
+  /** §10: awaited by CatCustomizer's SAVE before it confirms — the real
+   * server write, so a failed save never looks like a saved one. */
+  onPersistAppearance?: (s: { skin: CatSkin }) => Promise<void> | void;
   onSaveClan: (clan: string) => void;
   onSaveSettings: (s: Settings) => void;
   favorites?: string[];
@@ -1029,7 +961,8 @@ export default function MainMenu({
             onOpenCustomizer={() => setCustomizerOpen(true)}
             onSave={(v) => {
               if (v.name && (!player || v.name !== player.name)) onSaveName(v.name);
-              if (v.skin) onSaveSkin(v.skin);
+              // §38: appearance is NEVER saved from this screen — CatCustomizer
+              // owns the single appearance save path (versioned, full-fidelity).
               if (v.clan && (!player || v.clan !== (player.clan ?? "thunderclan"))) onSaveClan(v.clan);
               setScreen("menu");
             }}
@@ -1047,8 +980,16 @@ export default function MainMenu({
             favorites={favorites}
             presets={presets}
             onClose={() => setCustomizerOpen(false)}
+            onPersist={
+              onPersistAppearance
+                ? ({ skin: s }) => onPersistAppearance({ skin: s as unknown as CatSkin })
+                : undefined
+            }
             onSave={(v) => {
-              onSaveSkin(v.skin as CatSkin);
+              // §7/§8: ONE save path — the full appearance + version fingerprint
+              // through Game's saveAppearance (awaited by CatCustomizer's
+              // onPersist before onSave fires).
+              onSaveAppearance(v.skin as CatSkin, player?.name);
               onSaveCustomization?.({ favorites: v.favorites, presets: v.presets });
               setCustomizerOpen(false);
             }}

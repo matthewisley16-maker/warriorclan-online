@@ -452,7 +452,7 @@ const ACC_SLOT_EXTRA_CATS: Partial<Record<AccessorySlot, ItemCategory[]>> = {
 };
 
 /** True when a catalog item equips into the given accessory slot. */
-function itemInSlot(category: ItemCategory, slot: AccessorySlot): boolean {
+export function itemInSlot(category: ItemCategory, slot: AccessorySlot): boolean {
   return category === ACC_SLOT_CATS[slot] || (ACC_SLOT_EXTRA_CATS[slot] ?? []).includes(category);
 }
 

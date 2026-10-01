@@ -233,8 +233,10 @@ export function CatCustomizer({
   presets: { name: string; skin: CustomSkin }[];
   onClose: () => void;
   onSave: (s: { skin: CustomSkin; favorites: string[]; presets: { name: string; skin: CustomSkin }[] }) => void;
-  /** §10: awaited BEFORE onSave — persists the full appearance to the account. */
-  onPersist?: () => Promise<void> | void;
+  /** §10: awaited BEFORE onSave — persists the full appearance to the account.
+   * Receives the CURRENT editor skin so the parent saves exactly what is on
+   * screen (never a stale initial value). */
+  onPersist?: (s: { skin: CustomSkin }) => Promise<void> | void;
 }) {
   const [skin, setSkin] = useState<CustomSkin>(initialSkin);
   const [category, setCategory] = useState<string>("fur");
@@ -903,7 +905,7 @@ export function CatCustomizer({
               disabled={saveState === "saving"}
               onClick={() => {
                 setSaveState("saving");
-                Promise.resolve(onPersist?.())
+                Promise.resolve(onPersist?.({ skin }))
                   .then(() => {
                     setSaveState("saved");
                     onSave({ skin, favorites, presets });

@@ -9,11 +9,13 @@ import {
   ACCESSORY_COLORS,
   ACC_SLOT_CATS,
   accessoriesFor,
+  itemInSlot,
   randomSkin,
   searchItems,
   itemById,
   COAT_COLORS,
   EYE_COLORS,
+  type AccessorySlot,
   type CustomSkin,
 } from "../src/game/catItems";
 import { drawCat, type CatPose } from "../src/game/draw";
@@ -52,10 +54,17 @@ console.log("\n--- catalog integrity ---");
   }
   check(slotsOk === 6, `every slot maps to a populated category (${slotsOk}/6)`);
   check(accessoriesFor("all").length >= 40, `unified accessories view (${accessoriesFor("all").length} items)`);
-  check(accessoriesFor("neck").every((i) => i.category === "neck"), "slot filter narrows correctly");
+  // §16: collars are their own category but still equip into the NECK slot
+  check(accessoriesFor("neck").every((i) => itemInSlot(i.category, "neck")), "slot filter narrows correctly");
   check(accessoriesFor("all", "seasonal").length >= 3, "seasonal theme filter has items");
   check(accessoriesFor("all", "fun").length >= 5, "fun theme filter has items");
-  check(CAT_ITEMS.filter((i) => i.category === "neck").length >= 8, `collar collection (${CAT_ITEMS.filter((i) => i.category === "neck").length} neck items)`);
+  const collarCount = CAT_ITEMS.filter((i) => i.category === "collars").length;
+  check(collarCount >= 18, `collar collection (${collarCount} collars in their own category)`);
+  check(accessoriesFor("neck").some((i) => i.category === "collars"), "collars appear in the NECK slot view");
+  check(
+    ACCESSORY_SLOTS.every(({ id: sl }) => accessoriesFor(sl).every((i) => itemInSlot(i.category, sl))),
+    "every slot view only shows items that equip into it",
+  );
 }
 
 console.log("\n--- apply/isOn correctness ---");
@@ -272,7 +281,9 @@ console.log("\n--- randomizer validity ---");
 {
   const validAccIds = new Map<string, string>(); // slot value -> catalog item id
   for (const i of accessoriesFor("all")) {
-    const slot = (Object.entries(ACC_SLOT_CATS) as [string, string][]).find(([, c]) => c === i.category)?.[0];
+    // collars (their own category) equip into the neck slot like any other —
+    // resolve the slot from the category→slot map via itemInSlot
+    const slot = (Object.keys(ACC_SLOT_CATS) as AccessorySlot[]).find((sl) => itemInSlot(i.category, sl));
     if (slot) {
       const prefix = { head: "hd-", ear: "er-", neck: "nk-", body: "bd-", paw: "pw-", tail: "tl-" }[slot]!;
       if (i.id.startsWith(prefix)) validAccIds.set(i.id.slice(prefix.length), i.id);
