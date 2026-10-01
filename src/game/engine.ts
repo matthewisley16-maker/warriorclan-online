@@ -1813,16 +1813,43 @@ function clanCamp(n: NPCState): { x: number; y: number; r: number } | null {
   return { x: a.rect.x + a.rect.w / 2, y: a.rect.y + a.rect.h / 2, r: Math.min(a.rect.w, a.rect.h) / 2 };
 }
 
-/** Den object ids per role inside a clan camp (nearest match wins). */
-function roleDenIds(role: string, clan: string): string[] {
+/**
+ * Den object ids per role inside a clan camp (first existing match wins).
+ * Per-clan ids come FIRST so a WindClan elder is never assigned a den in
+ * another Clan's camp; the shared fallbacks only serve generic layouts.
+ */
+export function roleDenIds(role: string, clan: string): string[] {
   const r = role.toLowerCase();
-  const c = clan === "thunderclan" ? "tc" : clan === "windclan" ? "wc" : clan === "riverclan" ? "rc" : "sc";
-  if (r.includes("leader")) return [`${c}-leader-den`, "leader-den"];
-  if (r.includes("medicine")) return [`${c}-medicine-den`, "medicine-den"];
-  if (r.includes("queen") || r.includes("kit")) return [`${c}-nursery`, "nursery"];
-  if (r.includes("elder")) return [`${c}-elders`, `${c}-elders-den`, "elders-den"];
-  if (r.includes("apprentice")) return [`${c}-apprentices-den`, "apprentices-den"];
-  return [`${c}-warriors-den`, "warriors-den"];
+  if (clan === "windclan") {
+    if (r.includes("leader")) return ["wc-rock", "leader-den"];
+    if (r.includes("medicine")) return ["wc-rock", "medicine-den"];
+    if (r.includes("queen") || r.includes("kit")) return ["wc-nursery", "nursery"];
+    if (r.includes("elder")) return ["wc-elders", "elders-den"];
+    if (r.includes("apprentice")) return ["wc-apprentices", "apprentices-den"];
+    return ["wc-gorse-shelter", "warriors-den"];
+  }
+  if (clan === "riverclan") {
+    if (r.includes("leader")) return ["rc-rock", "leader-den"];
+    if (r.includes("medicine")) return ["rc-rock", "medicine-den"];
+    if (r.includes("queen") || r.includes("kit")) return ["rc-nursery", "nursery"];
+    if (r.includes("elder")) return ["rc-elders", "elders-den"];
+    if (r.includes("apprentice")) return ["rc-apprentices", "apprentices-den"];
+    return ["rc-reeds", "warriors-den"];
+  }
+  if (clan === "shadowclan") {
+    if (r.includes("leader")) return ["sc-rock", "leader-den"];
+    if (r.includes("medicine")) return ["sc-rock", "medicine-den"];
+    if (r.includes("queen") || r.includes("kit")) return ["sc-nursery", "nursery"];
+    if (r.includes("elder")) return ["sc-elders", "elders-den"];
+    if (r.includes("apprentice")) return ["sc-apprentices", "apprentices-den"];
+    return ["sc-bramble-1", "warriors-den"];
+  }
+  if (r.includes("leader")) return ["tc-leader-den", "leader-den"];
+  if (r.includes("medicine")) return ["tc-medicine-den", "medicine-den"];
+  if (r.includes("queen") || r.includes("kit")) return ["tc-nursery", "nursery"];
+  if (r.includes("elder")) return ["tc-elders-den", "elders-den"];
+  if (r.includes("apprentice")) return ["tc-apprentices-den", "apprentices-den"];
+  return ["tc-warriors-den", "warriors-den"];
 }
 
 /**
@@ -5953,6 +5980,19 @@ export class GameCanvas {
     return best;
   }
 
+  /**
+   * This cat's OWN role den (§31/§32): the first role-matched object with a
+   * real interior, resolved against the cat's home Clan — never "whatever
+   * den is closest", and never another Clan's den.
+   */
+  private roleDenFor(n: NPCState) {
+    for (const id of roleDenIds(n.def.role, n.def.clan)) {
+      const o = allObjects.find((d) => d.id === id);
+      if (o?.interior) return { id: o.id, interior: o.interior, x: o.x, y: o.y, h: o.h };
+    }
+    return null;
+  }
+
   /** Nearest enterable den object near a point (null = none close). */
   private denInteriorNear(x: number, y: number) {
     let best: { id: string; interior: string; x: number; y: number; h: number } | null = null;
@@ -6311,7 +6351,19 @@ export class GameCanvas {
 
     // --- night: den-owning cats sleep INSIDE their den (real enter/exit) ---
     if (night && roll < 0.55 * lazy) {
-      const den = this.denInteriorNear(n.def.home.x, n.def.home.y);
+      // not camp cats (homeless kittypets / loners): curl up at home instead
+      // of trekking to — or grinding at the mouth of — someone else's den
+      const ownRole = n.role ?? "other";
+      if (ownRole === "kittypet" || ownRole === "other") {
+        n.ai = "wander";
+        n.activity = "curling up to sleep";
+        n.tx = n.def.home.x + (Math.random() - 0.5) * 40;
+        n.ty = n.def.home.y + (Math.random() - 0.5) * 40;
+        return;
+      }
+      // §31/§32: walk to THIS cat's own role den inside its own camp —
+      // never merely the nearest den, and never another Clan's den.
+      const den = this.roleDenFor(n) ?? this.denInteriorNear(n.def.home.x, n.def.home.y);
       if (den) {
         n.ai = "go_den";
         n.preyId = den.interior; // reused as the den interior id while travelling
