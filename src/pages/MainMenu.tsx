@@ -44,7 +44,7 @@ import { cn } from "@/lib/utils";
 export type GameMode = "story" | "open" | "free";
 
 const TIPS = [
-  "Explore the forest to discover hidden locations.",
+  "The online forest never follows the story — make your own.",
   "Different Clans have different territories.",
   "Keep an eye out for prey while exploring.",
   "Sneak with C to get close to prey before you pounce.",
@@ -54,6 +54,8 @@ const TIPS = [
   "Herb patches can be foraged for the medicine cat.",
   "Chat with other cats using the Chat button in the open world.",
   "Your cat, progress, and discoveries are saved automatically.",
+  "In the online world, quests are optional — wander instead.",
+  "Sit with Clanmates in camp. Stories make the forest alive.",
 ];
 
 // --- tiny local persistence for settings -----------------------------------
@@ -241,25 +243,25 @@ const MODES: { id: GameMode; title: string; tagline: string; desc: string; bulle
     id: "story",
     title: "STORY MODE",
     tagline: "Into the Wild",
-    desc: "Experience the events of Into the Wild through a playable story.",
-    bullets: ["Story missions", "Canon characters", "Dialogue & training", "Every major book event"],
+    desc: "Experience the story — the events of Into the Wild, step by step.",
+    bullets: ["Story missions", "Canon characters", "Scripted events", "Timeline progression"],
     icon: BookOpen,
     ring: "hover:border-amber-300/70 hover:shadow-amber-400/20",
   },
   {
     id: "open",
-    title: "ONLINE OPEN WORLD",
-    tagline: "Multiplayer",
-    desc: "Explore the forest with other players and live as a Clan cat.",
-    bullets: ["Meet real players", "Hunt, patrol & train", "Chat & roleplay", "Attend Gatherings"],
+    title: "ONLINE MULTIPLAYER",
+    tagline: "Persistent open world",
+    desc: "Explore a living Warriors-style open world with other players.",
+    bullets: ["Live as a warrior cat", "Hunt, patrol, swim & train", "Meet friends & roleplay", "Optional quests & events"],
     icon: Globe2,
     ring: "hover:border-sky-300/70 hover:shadow-sky-400/20",
   },
   {
     id: "free",
     title: "FREE PLAY",
-    tagline: "Solo roleplay",
-    desc: "Explore, roleplay, hunt, train, and enjoy the world without following the story.",
+    tagline: "Roleplay",
+    desc: "Play freely and create your own scenarios in the same forest.",
     bullets: ["Full map access", "Wildlife & weather", "Day/night cycle", "Hidden areas"],
     icon: Leaf,
     ring: "hover:border-emerald-300/70 hover:shadow-emerald-400/20",
@@ -742,6 +744,9 @@ export function LoadingScreen({ mode }: { mode: GameMode }) {
       >
         <p className="text-3xl font-black tracking-[0.28em] text-amber-300 drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]">WARRIORS</p>
         <p className="mt-1 text-sm font-bold tracking-[0.5em] text-white/85">RPG</p>
+        {mode === "open" && (
+          <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.3em] text-sky-300/90">A living world with other cats</p>
+        )}
       </motion.div>
       <p className="mt-8 text-xs uppercase tracking-[0.3em] text-white/50">{sub}</p>
       <div className="mt-4 h-1.5 w-56 overflow-hidden rounded-full bg-white/10">
@@ -1069,7 +1074,7 @@ export default function MainMenu({
             <MenuButton
               icon={ArrowRight}
               label="Continue"
-              onClick={() => onPlay(player && (player.storyStep ?? 0) > 0 && (player.storyStep ?? 0) < 16 ? "story" : "open", "")}
+              onClick={() => onPlay("open", "")}
             />
           </motion.div>
 

@@ -3,27 +3,45 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
 /**
- * Shared world clock & weather — ONE authority for everyone on the server.
+ * Per-mode world clock & weather — ONE authority per WORLD on the server.
  *
- * The row (id "global") holds:
+ * §15: Story Mode and Online Multiplayer run on SEPARATE world states. Each
+ * world is its own row (worldId: "online" | "story" | "free"), so handing off
+ * between modes never leaks time or weather across experiences. Story's
+ * scripted timeline lives in the players row (storyStep) and never touches
+ * this table; Online's clock/weather advance only while cats are in the
+ * ONLINE forest.
+ *
+ * Each row holds:
  *  - serverTick:   monotonic network ordering (server Date.now(), never client)
  *  - worldTime:    shared in-game day clock (seconds since dawn)
  *  - weather + weatherStartedAt + weatherDurationMs: shared weather state
  *  - dayLengthS:   full in-game day length (shared constant)
  *
  * Clients RENDER from this state; nobody simulates their own private clock.
- * A deterministic "leader" (the lowestuserId online) advances the clock so
- * exactly one writer mutates per interval — conflict-free by construction.
+ * A deterministic "leader" (the lowest userId online in that world) advances
+ * the clock so exactly one writer mutates per interval — conflict-free by
+ * construction.
  */
 
 const DAY_LENGTH_S = 600; // shared with the engine's GAME_DAY_SECONDS
 
+/** Which world a caller is in — decides WHICH row the request touches. */
+function worldIdFor(mode: string | undefined): string {
+  return mode === "story" ? "story" : mode === "free" ? "free" : "online";
+}
+
 export const getWorldState = query({
-  args: {},
-  handler: async (ctx) => {
-    const row = await ctx.db.query("worldState").first();
+  args: { worldId: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const worldId = worldIdFor(args.worldId);
+    const row = await ctx.db
+      .query("worldState")
+      .withIndex("by_world_id", (q) => q.eq("worldId", worldId))
+      .first();
     if (!row) {
       return {
+        worldId,
         serverTick: Date.now(),
         worldTime: 0,
         dayPhase: "morning",
@@ -42,6 +60,7 @@ export const getWorldState = query({
       hour24 < 5 ? "night" : hour24 < 7 ? "sunrise" : hour24 < 12 ? "morning"
       : hour24 < 17 ? "afternoon" : hour24 < 19.5 ? "sunset" : "night";
     return {
+      worldId: row.worldId,
       serverTick: row.serverTick,
       worldTime: row.worldTime,
       dayPhase,
@@ -60,12 +79,18 @@ export const tickWorld = mutation({
   args: {
     myUserId: v.id("users"),
     advanceSeconds: v.number(),
+    worldId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const row = await ctx.db.query("worldState").first();
+    const worldId = worldIdFor(args.worldId);
+    const row = await ctx.db
+      .query("worldState")
+      .withIndex("by_world_id", (q) => q.eq("worldId", worldId))
+      .first();
     const now = Date.now();
     if (!row) {
       await ctx.db.insert("worldState", {
+        worldId,
         serverTick: now,
         worldTime: 0,
         weather: "clear",
@@ -77,10 +102,10 @@ export const tickWorld = mutation({
       });
       return { accepted: true, leader: args.myUserId };
     }
-    // Leader election: the lexicographically smallest ONLINE userId writes.
-    // A stored leader is only valid while it keeps ticking — if it has gone
-    // quiet for 30s (tab closed, crashed, offline), any caller takes over.
-    // Without this, a vanished small-id leader froze the shared clock forever.
+    // Leader election: the lexicographically smallest ONLINE userId in THIS
+    // world writes. A stored leader is only valid while it keeps ticking — if
+    // it has gone quiet for 30s (tab closed, crashed, offline), any caller
+    // takes over. Without this, a vanished small-id leader froze the clock.
     if (args.myUserId !== row.leaderUserId) {
       const leaderIsStale = now - row.serverTick > 30_000;
       if (row.leaderUserId && !leaderIsStale) {
@@ -140,13 +165,18 @@ export const tickWorld = mutation({
   },
 });
 
-/** Claim leadership when the stored leader is gone (idempotent, server-side check). */
+/** Claim leadership of a world when its stored leader is gone (idempotent). */
 export const claimLeadership = mutation({
-  args: { myUserId: v.id("users") },
+  args: { myUserId: v.id("users"), worldId: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const row = await ctx.db.query("worldState").first();
+    const worldId = worldIdFor(args.worldId);
+    const row = await ctx.db
+      .query("worldState")
+      .withIndex("by_world_id", (q) => q.eq("worldId", worldId))
+      .first();
     if (!row) {
       await ctx.db.insert("worldState", {
+        worldId,
         serverTick: Date.now(),
         worldTime: 0,
         weather: "clear",

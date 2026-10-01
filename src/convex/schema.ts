@@ -174,7 +174,11 @@ const schema = defineSchema(
       .index("by_from", ["fromUserId"]),
 
     // Shared world clock/weather — one authoritative row ("global").
+    // §15: per-MODE world states — ONE row per mode so Story and Online never
+    // share a clock/weather ("online" | "story" | "free"). Handoffs between
+    // modes must not leak time or weather across experiences.
     worldState: defineTable({
+      worldId: v.optional(v.string()),
       serverTick: v.number(),
       worldTime: v.number(),
       weather: v.string(),
@@ -183,7 +187,7 @@ const schema = defineSchema(
       weatherDurationMs: v.number(),
       dayLengthS: v.number(),
       leaderUserId: v.optional(v.id("users")),
-    }),
+    }).index("by_world_id", ["worldId"]),
 
     // Direct messages — visible ONLY to the two participants.
     dmMessages: defineTable({

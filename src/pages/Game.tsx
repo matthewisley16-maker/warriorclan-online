@@ -158,7 +158,10 @@ export default function Game() {
   const remotesRaw = useQuery(api.presence.listOnline, phase === "playing" && mode === "open" ? {} : "skip");
   // Shared world clock + weather — the SERVER is the single authority.
   // Everyone renders from this state; the deterministic leader advances it.
-  const worldState = useQuery(api.worldState.getWorldState, phase === "playing" ? {} : "skip");
+  // §15: per-WORLD state — the ONLINE forest, the STORY forest and FREE play
+  // each run their own clock + weather; passing this mode's worldId pins the
+  // subscription to THIS mode's row (never inherits another mode's state).
+  const worldState = useQuery(api.worldState.getWorldState, phase === "playing" ? { worldId: mode } : "skip");
 
   // --- HUD state ---
   const [areaName, setAreaName] = useState("Warrior Territories");
@@ -685,14 +688,14 @@ export default function Game() {
     let alive = true;
     (async () => {
       try {
-        leaderRef.current = await claimLeadership({ myUserId });
+        leaderRef.current = await claimLeadership({ myUserId, worldId: mode });
       } catch { leaderRef.current = false; }
     })();
     const t = window.setInterval(() => {
       if (!alive || !leaderRef.current) return;
       // advance the shared clock only when the authority is responsive; the
       // failed-call path below releases leadership so another client takes over
-      tickWorld({ myUserId, advanceSeconds: 5 }).catch(() => {
+      tickWorld({ myUserId, advanceSeconds: 5, worldId: mode }).catch(() => {
         leaderRef.current = false; // lost leadership; stop ticking
       });
     }, 5000);
@@ -700,7 +703,7 @@ export default function Game() {
     // clock recovers automatically when that leader goes quiet.
     const re = window.setInterval(() => {
       if (!alive || leaderRef.current) return;
-      claimLeadership({ myUserId })
+      claimLeadership({ myUserId, worldId: mode })
         .then((ok) => { if (alive) leaderRef.current = ok; })
         .catch(() => undefined);
     }, 10000);
@@ -1057,7 +1060,9 @@ export default function Game() {
         talkedRef.current = nextTalked;
         setTalked(nextTalked);
         persistNpcMemory(npc.id);
-        // story completion counts the first line of the conversation
+        // §1/§15: story completion counts the first line of the conversation —
+        // STORY MODE ONLY. Online chats advance bonds and memories, never the
+        // Into the Wild timeline.
         if (mode === "story") {
           const step = storySteps[storyStepRef.current];
           if (step && step.objective.kind === "talk" && step.objective.targetNpc === npc.id) {
@@ -1127,6 +1132,8 @@ export default function Game() {
           const l = lore[target.interact];
           audio().playSfx("collect", { volume: 0.6, throttleMs: 700 }); // discovery/lore pickup
           setDialogue({ name: l.title, text: l.text });
+          // §1/§15: lore markers advance story objectives in STORY MODE only —
+          // in Online this is pure world flavor (discover + read, no timeline).
           if (mode === "story") {
             const step = storySteps[storyStepRef.current];
             if (step) {
@@ -1356,6 +1363,21 @@ export default function Game() {
     if (Math.hypot(dx, dy) < step.objective.radius) advanceStory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pos, storyStep, mode, phase]);
+
+  // §4/§16: entering the ONLINE world is FREE ROAM — no mission prompt, ever.
+  // A single welcome line tells the player the forest is theirs to explore;
+  // nothing else pushes them toward the Story Mode plot.
+  useEffect(() => {
+    if (phase !== "playing" || mode !== "open" || !myCat) return;
+    const t = window.setTimeout(() => {
+      setDialogue({
+        name: "The forest",
+        text: "The online forest is yours — hunt, patrol, swim, chat with Clanmates, or just wander. No story missions here; make your own tale.",
+      });
+    }, 1400);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, mode, myCat?.name]);
 
   // --- chat send: instant local echo + speech bubble, server broadcast for others ---
   const handleSend = useCallback(
