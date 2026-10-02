@@ -94,7 +94,9 @@ function CatPreviewLarge({
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       const scale = size / 130;
       ctx.scale(scale, scale);
-      drawCat(ctx, skin, 65, 108, facing, pose, t / 1000, 0);
+      // ground point hugs the canvas floor so paws + shadow are never clipped
+      // (uniform scale only — proportions are preserved, never stretched)
+      drawCat(ctx, skin, 65, canvas.height / scale - 8, facing, pose, t / 1000, 0);
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
@@ -136,6 +138,24 @@ function useRenderEffect(fn: () => void | (() => void)) {
       cleanupRef.current = undefined;
     };
   });
+}
+
+/** Measure an element (ResizeObserver → fires on resize/layout only, never
+ *  per frame). Drives the scale-to-fit cat preview stage. */
+function useElementSize() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setSize({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, size] as const;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +278,14 @@ export function CatCustomizer({
   // save keeps the editor open with the changes intact (never silently lost).
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
 
+  // scale-to-fit preview stage: min(available width, height/0.85) — uniform
+  // scale only (proportions preserved), clamped so the cat stays readable on
+  // tiny windows and never overflows. Re-measured on resize via ResizeObserver.
+  const [stageRef, stageSize] = useElementSize();
+  const previewSize = Math.round(
+    Math.max(150, Math.min(420, (stageSize.w || 300) - 8, (stageSize.h || 300) / 0.85)),
+  );
+
   if (!open) return null;
 
   // Left-nav categories: only ones that actually contain items, plus the
@@ -322,7 +350,10 @@ export function CatCustomizer({
         className="absolute inset-0 z-[60] flex flex-col bg-[#0d160d]/95 backdrop-blur-md"
       >
         {/* ---------- TOP BAR ---------- */}
-        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-2.5">
+        <div
+          className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-white/10
+            pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] py-2.5"
+        >
           <div className="flex items-center gap-3">
             <h1 className="text-sm font-extrabold uppercase tracking-[0.22em] text-white">Customize Cat</h1>
             <span className="hidden text-xs text-white/50 sm:block">{playerName}</span>
@@ -343,10 +374,10 @@ export function CatCustomizer({
           </div>
         </div>
 
-        {/* ---------- MAIN 3-COLUMN ---------- */}
-        <div className="flex min-h-0 flex-1">
-          {/* LEFT: categories */}
-          <div className="hidden w-40 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-white/10 p-2 sm:flex">
+        {/* ---------- MAIN 3-COLUMN (stacks on narrow windows) ---------- */}
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+          {/* LEFT: categories (scrolls internally; full list preserved) */}
+          <div className="hidden min-h-0 w-36 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-white/10 p-2 md:flex lg:w-44">
             {NAV.map((c) => {
               const active = !query && category === c.id;
               const count =
@@ -379,9 +410,44 @@ export function CatCustomizer({
             })}
           </div>
 
-          {/* CENTER: preview */}
-          <div className="flex min-w-0 flex-1 flex-col items-center justify-center p-3">
-            <CatPreviewLarge skin={skin} pose={pose} />
+          {/* category strip for narrow windows — the SAME NAV list, nothing
+              hidden: every category stays reachable (horizontally scrollable) */}
+          <div
+            role="tablist"
+            aria-label="Customization categories"
+            className="flex shrink-0 gap-1 overflow-x-auto border-b border-white/10 p-2 md:hidden"
+          >
+            {NAV.map((c) => {
+              const active = !query && category === c.id;
+              return (
+                <button
+                  key={c.id}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => {
+                    setCategory(c.id);
+                    setQuery("");
+                    if (c.id === "accessories") setAccSlot("all");
+                  }}
+                  className={cn(
+                    "shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors",
+                    active ? "bg-amber-400/20 text-amber-200 ring-1 ring-amber-300/40" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white",
+                  )}
+                >
+                  {c.name}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* CENTER: preview — scale-to-fit stage + internally scrolling detail
+              area. The stage keeps the cat fully visible (ears→tail); extra
+              panels (details, colors, morph) scroll INSIDE this column so the
+              title bars, presets strip and bottom bar never move. */}
+          <div className="flex max-h-[46dvh] min-h-0 min-w-0 shrink-0 flex-col items-center overflow-y-auto p-3 md:max-h-none md:flex-1 md:shrink">
+            <div ref={stageRef} className="flex min-h-[150px] w-full flex-1 items-center justify-center">
+              <CatPreviewLarge skin={skin} pose={pose} size={previewSize} />
+            </div>
             {/* pose switcher: test that every accessory tracks every animation */}
             <div className="mt-2 flex flex-wrap justify-center gap-1">
               {PREVIEW_POSES.map((p) => (
@@ -563,8 +629,9 @@ export function CatCustomizer({
             )}
           </div>
 
-          {/* RIGHT: item grid */}
-          <div className="flex w-full max-w-[380px] shrink-0 flex-col border-l border-white/10 sm:w-[380px]">
+          {/* RIGHT: item grid (full-width below the preview on narrow windows,
+              side panel on desktop; always scrolls internally) */}
+          <div className="flex min-h-0 w-full flex-1 flex-col border-t border-white/10 md:w-[360px] md:flex-none md:border-l md:border-t-0 lg:w-[400px]">
             <div className="border-b border-white/10 px-3 py-1.5">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
                 {query
@@ -780,9 +847,10 @@ export function CatCustomizer({
           </div>
         </div>
 
-        {/* ---------- PRESETS STRIP ---------- */}
-        <div className="border-t border-white/10 px-3 py-2">
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        {/* ---------- PRESETS STRIP (wraps + scrolls internally; never pushes
+            the bottom bar off-screen) ---------- */}
+        <div className="max-h-[130px] shrink-0 overflow-y-auto border-t border-white/10 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="flex shrink-0 items-center gap-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
               <Star className="size-3 text-amber-300" /> Presets
             </span>
@@ -862,8 +930,12 @@ export function CatCustomizer({
           )}
         </div>
 
-        {/* ---------- BOTTOM BAR ---------- */}
-        <div className="flex items-center justify-between gap-2 border-t border-white/10 px-4 py-2.5">
+        {/* ---------- BOTTOM BAR (always visible — Randomize / Reset / Save
+            can never scroll away) ---------- */}
+        <div
+          className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10
+            pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pb-[max(0.625rem,env(safe-area-inset-bottom))] pt-2.5"
+        >
           <div className="flex gap-1.5">
             <Button
               variant="outline"

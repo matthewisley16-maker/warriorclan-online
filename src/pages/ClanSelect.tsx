@@ -144,8 +144,8 @@ export function ClanSelect({
   const sel = options.find((c) => c.id === selected);
 
   return (
-    <div className={cn("flex flex-col", embedded ? "" : "absolute inset-0 z-50 bg-[#0d160d]/92 backdrop-blur-md")}>
-      <div className={cn("mx-auto w-full max-w-4xl", embedded ? "" : "px-4 py-8")}>
+    <div className={cn("flex flex-col", embedded ? "" : "absolute inset-0 z-50 overflow-y-auto bg-[#0d160d]/92 backdrop-blur-md")}>
+      <div className={cn("mx-auto w-full max-w-4xl", embedded ? "" : "px-4 py-6 sm:py-8")}>
         {!embedded && (
           <div className="text-center">
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-amber-300">Choose your Clan</p>
@@ -159,7 +159,7 @@ export function ClanSelect({
           </div>
         )}
 
-        <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:mt-6 md:grid-cols-5">
           {options.map((c, i) => {
             const active = selected === c.id;
             const isCurrent = currentClan === c.id;
@@ -197,8 +197,8 @@ export function ClanSelect({
         </div>
 
         {/* preview of the player's cat in the selected Clan's environment */}
-        <div className="mt-5 flex flex-col items-center gap-4 rounded-2xl border border-white/15 bg-black/40 p-4 sm:flex-row">
-          <div className="relative h-36 w-52 overflow-hidden rounded-xl">
+        <div className="mt-4 flex flex-col items-center gap-4 rounded-2xl border border-white/15 bg-black/40 p-4 sm:mt-5 sm:flex-row">
+          <div className="relative h-36 w-52 max-w-full shrink-0 overflow-hidden rounded-xl">
             {sel ? (
               <ClanBackdrop motif={sel.motif} bg={sel.bg} />
             ) : (

@@ -158,8 +158,11 @@ export function CatPortrait({
     const render = (t: number) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.scale(size / 110, size / 110);
-      drawCat(ctx, skin, 55, 100, facingRef.current, "walk", t / 1000, 0);
+      const s = size / 110;
+      ctx.scale(s, s);
+      // ground point hugs the canvas floor (paws + shadow inside the canvas —
+      // the old fixed y=100 drew the feet BELOW the 0.85-ratio canvas bottom)
+      drawCat(ctx, skin, 55, canvas.height / s - 7, facingRef.current, "walk", t / 1000, 0);
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
@@ -195,15 +198,23 @@ export function CatPortrait({
   );
 }
 
-/** Live viewport height (drives short-window compaction of the title screen). */
-function useViewportHeight() {
-  const [h, setH] = useState(() => (typeof window === "undefined" ? 800 : window.innerHeight));
+/** Live viewport size (drives short/narrow-window compaction of the title screen).
+ *  Re-measures only on resize/orientationchange — no per-frame layout work. */
+function useViewportSize() {
+  const [size, setSize] = useState(() => ({
+    w: typeof window === "undefined" ? 1280 : window.innerWidth,
+    h: typeof window === "undefined" ? 800 : window.innerHeight,
+  }));
   useEffect(() => {
-    const onResize = () => setH(window.innerHeight);
+    const onResize = () => setSize({ w: window.innerWidth, h: window.innerHeight });
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    };
   }, []);
-  return h;
+  return size;
 }
 
 // --- shared menu button -----------------------------------------------------
@@ -279,7 +290,8 @@ function ModeCard({ mode, index, onPlay, compact }: { mode: (typeof MODES)[numbe
       <button
         onClick={() => onPlay(mode.id, "")}
         className={cn(
-          "group flex h-full w-full flex-col rounded-2xl border border-white/20 bg-black/45 p-4 text-left shadow-xl shadow-black/30 backdrop-blur-md",
+          "group flex h-full w-full flex-col rounded-2xl border border-white/20 bg-black/45 text-left shadow-xl shadow-black/30 backdrop-blur-md",
+          compact ? "p-3" : "p-4",
           "transition-all hover:-translate-y-1 hover:bg-black/60 hover:shadow-2xl active:translate-y-0",
           mode.ring,
         )}
@@ -293,7 +305,7 @@ function ModeCard({ mode, index, onPlay, compact }: { mode: (typeof MODES)[numbe
             <h3 className="text-[15px] font-extrabold tracking-wide text-white">{mode.title}</h3>
           </div>
         </div>
-        <p className="mt-2.5 text-xs leading-snug text-white/70">{mode.desc}</p>
+        <p className={cn("mt-2.5 text-xs leading-snug text-white/70", compact && "line-clamp-2")}>{mode.desc}</p>
         <ul className={cn("mt-2.5 flex-1 space-y-1", compact && "hidden")}>
           {mode.bullets.map((b) => (
             <li key={b} className="flex items-center gap-1.5 text-[11px] text-white/60">
@@ -923,7 +935,9 @@ export default function MainMenu({
   const rank = player ? rankOf(xp, player.rank) : "loner";
   const clanName = CLANS.find((c) => c.id === (player?.clan ?? "thunderclan"))?.name ?? "Loner";
   const toNext = nextRankXp(xp);
-  const compact = useViewportHeight() < 780; // short window: tighten vertical rhythm
+  const { w: vw, h: vh } = useViewportSize();
+  // short OR narrow window: tighten vertical rhythm (recalcs on resize only)
+  const compact = vh < 780 || vw < 768;
 
   return (
     <div className={cn("relative h-[100dvh] w-full overflow-hidden bg-[#0d160d]", settings.largeText && "text-lg")}>
@@ -1006,7 +1020,7 @@ export default function MainMenu({
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="relative z-10 flex h-full min-h-0 flex-col overflow-y-auto px-4 py-4 sm:py-6"
+          className="relative z-10 flex h-full min-h-0 flex-col overflow-y-auto pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(1rem,env(safe-area-inset-top))] pb-[max(0.875rem,env(safe-area-inset-bottom))]"
         >
           <div className="my-auto flex w-full flex-col items-center">
           {/* Logo */}
@@ -1083,12 +1097,14 @@ export default function MainMenu({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.65 }}
-            className="mt-2 flex flex-col items-center gap-1.5"
+            className="mt-2 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1"
           >
-            <p className="text-[9px] font-bold uppercase tracking-[0.25em] text-white/35">
-              Signed in as
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">
+              Signed in as{" "}
+              <span className="font-semibold normal-case tracking-normal text-white/75">
+                {player?.name ?? "Guest"}
+              </span>
             </p>
-            <p className="text-[11px] font-semibold text-white/75">{player?.name ?? "Guest"}</p>
             <SignOutControl />
           </motion.div>
           <p className={cn("mt-2.5 pb-1 text-center text-[10px] text-white/40", compact && "hidden")}>
