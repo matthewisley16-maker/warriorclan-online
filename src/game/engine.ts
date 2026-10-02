@@ -275,6 +275,14 @@ export interface ChatBubble {
   track?: string;
 }
 
+/** §3: one step of a cinematic camera timeline (durations in ms). */
+export type CineStep =
+  | { kind: "pan"; target: { x: number; y: number }; durMs: number; ease?: "inout" | "out" }
+  | { kind: "follow"; npcId: string; durMs: number; ease?: "inout" | "out" }
+  | { kind: "followPlayer"; durMs: number; ease?: "inout" | "out" }
+  | { kind: "zoom"; zoom: number; durMs: number; ease?: "inout" | "out" }
+  | { kind: "wait"; durMs: number; ease?: "inout" | "out" };
+
 export interface GameCallbacks {
   onAreaChange: (name: string, id: string) => void;
   onNearby: (target: NearbyTarget | null) => void;
@@ -1579,6 +1587,11 @@ interface NPCState {
   yawnFxUntil: number;
   tailFxUntil: number;
   alertFxUntil: number;
+  // §3/§4: temporary story-scene direction (set/cleared by the story layer;
+  // the cat's normal AI resumes when the beat ends — never broken)
+  storyBeat?: { pose?: CatPose; head?: "nod" | "shake" | "look" | "sniff"; tail?: boolean; lookAt?: "player" | "none"; until?: number };
+  headFxUntil: number;
+  headKind: "nod" | "shake" | "look" | "sniff" | null;
   role: "leader" | "deputy" | "medicine" | "queen" | "elder" | "apprentice" | "warrior" | "kit" | "kittypet" | "other" | undefined;
   campSpots: { x: number; y: number }[] | null;
   // --- kittypet house life (undefined for every other cat) ---
@@ -2036,6 +2049,16 @@ export class GameCanvas {
   private lastMoveEmit = 0;
   private destroyed = false;
 
+  // --- cinematic presentation state (§3) ---
+  private cineActive = false;
+  private cineQueue: CineStep[] = [];
+  private cineIdx = -1;
+  private cineT = 0;
+  private cineFrom: { x: number; y: number } | null = null;
+  private cineFromZoom: number | undefined;
+  private cineZoom = 1;
+  private controlsEnabled = true;
+
   // clock & weather
   private dayTime = (GAME_HOUR_START / 24) * GAME_DAY_SECONDS;
   private lastHour = -1;
@@ -2140,6 +2163,8 @@ export class GameCanvas {
       yawnFxUntil: 0,
       tailFxUntil: 0,
       alertFxUntil: 0,
+      headFxUntil: 0,
+      headKind: null,
       role: roleOf(n.role),
       campSpots: null,
       stuckCooldown: 0,
@@ -2181,6 +2206,148 @@ export class GameCanvas {
       this.touchDy = 0;
       this.crouchHeld = false;
     }
+  }
+
+  // --- cinematic camera + story presentation (§3/§5/§35) --------------------
+  // A tiny timeline player: the React story layer queues camera steps (pan /
+  // zoom / follow / wait) and the engine glides the camera through them with
+  // eased, intentional motion. While active, scene-driven camera follow is
+  // suspended and (via setPlayerControlEnabled) the player's input is held —
+  // control returns exactly when the story layer says so.
+
+  /** ���6: a single cinematic camera step (durations in ms). */
+  playCinematic(steps: CineStep[]) {
+    this.cineQueue = steps.slice();
+    this.cineIdx = -1;
+    this.cineT = 0;
+    this.cineActive = this.cineQueue.length > 0;
+    if (this.cineActive) this.nextCineStep();
+  }
+
+  /** End the cutscene: camera glide resumes following the player. */
+  clearCinematic() {
+    this.cineActive = false;
+    this.cineQueue.length = 0;
+    this.cineZoom = 1;
+    this.resize();
+  }
+
+  isCinematic(): boolean {
+    return this.cineActive;
+  }
+
+  /** §6: cutscenes and scripted moments hold the player's movement input. */
+  setPlayerControlEnabled(enabled: boolean) {
+    this.controlsEnabled = enabled;
+    if (!enabled) {
+      this.keys.clear();
+      this.touchDx = 0;
+      this.touchDy = 0;
+      this.crouchHeld = false;
+    }
+  }
+
+  /**
+   * §4/§12: a story beat temporarily directs ONE NPC (pose, head/tail
+   * expression, who to look at). The cat's normal AI pauses and RESUMES
+   * afterwards — never broken. lookAt "player" resolves to the player's
+   * live position each AI tick so the cat genuinely turns toward you.
+   */
+  setNpcStoryBeat(
+    npcId: string,
+    beat: { pose?: CatPose; head?: "nod" | "shake" | "look" | "sniff"; tail?: boolean; lookAt?: "player" | "none"; durMs?: number },
+  ) {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n || n.gone) return;
+    n.storyBeat = {
+      pose: beat.pose ?? n.storyBeat?.pose,
+      head: beat.head ?? n.storyBeat?.head,
+      tail: beat.tail ?? n.storyBeat?.tail,
+      lookAt: beat.lookAt ?? n.storyBeat?.lookAt,
+      until: beat.durMs ? this.time + beat.durMs / 1000 : undefined,
+    };
+    if (n.storyBeat?.pose && n.storyBeat.pose !== "walk") {
+      n.pose = n.storyBeat.pose;
+      n.waitUntil = Math.max(n.waitUntil, n.storyBeat.until ?? this.time + 2);
+    }
+    if (n.storyBeat?.tail) n.tailFxUntil = this.time + 2.2;
+    if (n.storyBeat?.head) {
+      n.headFxUntil = this.time + 2.2;
+      n.headKind = n.storyBeat.head;
+    }
+    if (n.storyBeat?.lookAt === "player") {
+      n.convoActive = true; // reuse the conversation lock: face + freeze
+      n.prevAi = n.ai;
+      n.prevTx = n.tx;
+      n.prevTy = n.ty;
+    }
+  }
+
+  /** Clear a story beat and let the NPC resume its normal life. */
+  clearNpcStoryBeat(npcId: string) {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n || !n.storyBeat) return;
+    n.storyBeat = undefined;
+    if (n.convoActive) {
+      n.convoActive = false;
+      n.ai = n.prevAi;
+      n.tx = n.prevTx;
+      n.ty = n.prevTy;
+      n.pose = "walk";
+      n.waitUntil = this.time + 0.4;
+      n.aiThinkAt = this.time + 2 + Math.random() * 2;
+    }
+  }
+
+  /** Advance the cinematic timeline; called once per frame from the loop. */
+  private tickCinematic(dt: number) {
+    if (!this.cineActive) return;
+    const step = this.cineQueue[this.cineIdx];
+    if (!step) {
+      this.clearCinematic();
+      return;
+    }
+    this.cineT += dt * 1000;
+    const dur = Math.max(1, step.durMs);
+    const raw = Math.min(1, this.cineT / dur);
+    const ease = step.ease === "out" ? 1 - Math.pow(1 - raw, 3) : raw < 0.5 ? 2 * raw * raw : 1 - Math.pow(-2 * raw + 2, 2) / 2;
+    if (step.kind === "pan" && this.cineFrom) {
+      this.camX = this.cineFrom.x + (step.target.x - this.cineFrom.x) * ease;
+      this.camY = this.cineFrom.y + (step.target.y - this.cineFrom.y) * ease;
+    } else if (step.kind === "zoom" && this.cineFromZoom !== undefined) {
+      this.cineZoom = this.cineFromZoom + (step.zoom - this.cineFromZoom) * ease;
+      this.resize();
+    } else if (step.kind === "follow" || step.kind === "followPlayer") {
+      // glide toward the live target position (NPC or player) with the
+      // standard camera smoothing so tracking feels physical, never snappy
+      const t =
+        step.kind === "followPlayer"
+          ? { x: this.px, y: this.py }
+          : (() => {
+              const n = this.npcStates.find((s) => s.def.id === (step as { npcId: string }).npcId);
+              return n && !n.gone ? { x: n.x, y: n.y } : { x: this.camX, y: this.camY };
+            })();
+      const lerp = 1 - Math.pow(0.0001, dt);
+      this.camX += (t.x - this.camX) * lerp;
+      this.camY += (t.y - this.camY) * lerp;
+    }
+    if (raw >= 1) this.nextCineStep();
+  }
+
+  private nextCineStep() {
+    this.cineIdx++;
+    this.cineT = 0;
+    const step = this.cineQueue[this.cineIdx];
+    if (!step) {
+      this.clearCinematic();
+      return;
+    }
+    if (step.kind === "pan") this.cineFrom = { x: this.camX, y: this.camY };
+    if (step.kind === "zoom") {
+      this.cineFromZoom = this.cineZoom;
+      this.resize();
+    }
+    if (step.kind === "wait" && step.durMs > 0) this.cineT = -step.durMs; // consume instantly below
   }
 
   /**
@@ -2616,6 +2783,12 @@ export class GameCanvas {
   }
 
   /** Current activity label for an NPC ("hunting", "napping in the sun"…). */
+  /** §3: live world position of an NPC (for cinematic camera framing). */
+  getNpcWorldPos(npcId: string): { x: number; y: number } | null {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    return n && !n.gone ? { x: n.x, y: n.y } : null;
+  }
+
   getNpcActivity(npcId: string): string | null {
     const n = this.npcStates.find((s) => s.def.id === npcId);
     return n?.activity ?? null;
@@ -3086,7 +3259,7 @@ export class GameCanvas {
     const rect = this.canvas.getBoundingClientRect();
     this.canvas.width = Math.max(1, Math.floor(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.floor(rect.height * this.dpr));
-    this.scale = this.userScale * (rect.width < 700 ? 0.85 : rect.width < 1100 ? 1.0 : 1.2);
+    this.scale = this.userScale * (rect.width < 700 ? 0.85 : rect.width < 1100 ? 1.0 : 1.2) * this.cineZoom;
   };
 
   private canMoveTo(x: number, y: number): boolean {
@@ -3285,7 +3458,7 @@ export class GameCanvas {
     // --- player movement ---
     let dx = 0;
     let dy = 0;
-    if (!this.paused && !this.dead) {
+    if (!this.paused && !this.dead && this.controlsEnabled) {
       if (this.keys.has("w") || this.keys.has("arrowup")) dy -= 1;
       if (this.keys.has("s") || this.keys.has("arrowdown")) dy += 1;
       if (this.keys.has("a") || this.keys.has("arrowleft")) dx -= 1;
@@ -3444,9 +3617,13 @@ export class GameCanvas {
     }
 
     // camera
-    const lerp = 1 - Math.pow(0.0001, dt);
-    this.camX += (this.px - this.camX) * lerp;
-    this.camY += (this.py - this.camY) * lerp;
+    if (this.cineActive) {
+      this.tickCinematic(dt);
+    } else {
+      const lerp = 1 - Math.pow(0.0001, dt);
+      this.camX += (this.px - this.camX) * lerp;
+      this.camY += (this.py - this.camY) * lerp;
+    }
 
     // --- NPC life: schedules, personalities, patrols, hunting (throttled
     // decisions; movement integrates every frame along the world map) ---

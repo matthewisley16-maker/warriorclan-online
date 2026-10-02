@@ -229,6 +229,13 @@ export function stepKindFor(areaId: string, interior: boolean, groundIdx: number
 interface MusicChannel { el: HTMLAudioElement; id: MusicId }
 interface AmbChannel { el: HTMLAudioElement; layer: AmbienceLayerId; desired: number }
 
+/** App-wide singleton — one AudioEngine for the whole game. */
+let singleton: AudioEngine | null = null;
+export function audio(): AudioEngine {
+  if (!singleton) singleton = new AudioEngine();
+  return singleton;
+}
+
 export class AudioEngine {
   private settings: AudioSettings = { ...DEFAULT_AUDIO_SETTINGS };
   private ctx: AudioContext | null = null;
@@ -241,6 +248,11 @@ export class AudioEngine {
   private fades = new Map<HTMLAudioElement, number>();
   private lastSfx = new Map<string, number>();
   private started = false;
+  // --- cinematic presentation (§26/§27): cutscenes duck the mix, suspend
+  // scene-driven music/ambience retargeting so nothing fights the scene, and
+  // restore everything smoothly when control returns to the player.
+  private cinematic = false;
+  private ducking = false;
 
   constructor() {
     try {
@@ -273,7 +285,7 @@ export class AudioEngine {
   /** Music for a scene — crossfades, never restarts the current track. */
   setMusic(id: MusicId | null) {
     this.musicWanted = id;
-    if (!this.started) return;
+    if (!this.started || this.cinematic) return;
     if (id === null || (this.music && this.music.id === id)) return;
     const fadeIn = (el: HTMLAudioElement) => {
       el.volume = 0;
@@ -301,8 +313,8 @@ export class AudioEngine {
 
   /** Layered ambience: fades in new layers, fades out removed ones. */
   setAmbience(wanted: Partial<Record<AmbienceLayerId, number>>) {
-    if (!this.started) {
-      this.wanted = wanted;
+    if (!this.started || this.cinematic) {
+      if (!this.cinematic) this.wanted = wanted;
       return;
     }
     // clamp targets (defensive: >1 targets used to push element volume >1)
@@ -336,6 +348,160 @@ export class AudioEngine {
         this.fade(el, this.layerVol(id) * spec.gain * target, FADE_MS);
       }
     }
+  }
+
+  /**
+   * §36: cinematic mode — while ON, scene-driven setMusic/setAmbience calls
+   * are IGNORED so a cutscene's own music/ambience choices stand (the caller
+   * re-applies the scene when control returns; wanted state keeps updating).
+   */
+  setCinematic(on: boolean) {
+    this.cinematic = on;
+  }
+
+  /** §27: gently lower music + ambience under dialogue; SFX (the cat
+   * vocalizations) stay clear so the written words and voice agree. */
+  setDucked(on: boolean) {
+    if (this.ducking === on) return;
+    this.ducking = on;
+    this.applyGains();
+  }
+
+  /**
+   * §13-§23: render a character vocalization for a dialogue line. The sound,
+   * pitch and volume come from the speaker's vocal profile (vocal.ts) —
+   * sampled mews for the natural sounds, WebAudio synthesis for hiss/growl/
+   * chirp/trill/mrrp/yowl. NEVER per-letter; one short call per line.
+   */
+  playCharacterVocal(v: { sound: string; rate: number; vol: number }) {
+    if (!this.started) return;
+    const vol = v.vol;
+    const rate = v.rate;
+    switch (v.sound) {
+      case "mew":
+        this.playSfx("cat_mew", { volume: vol, rate, throttleMs: 180 });
+        break;
+      case "mew_soft":
+        this.playSfx("cat_mew2", { volume: vol * 0.8, rate: rate * 1.05, throttleMs: 180 });
+        break;
+      case "mew_low":
+        this.playSfx("cat_mew3", { volume: vol, rate: rate * 0.8, throttleMs: 180 });
+        break;
+      case "mew_bright":
+        this.playSfx("cat_mew2", { volume: vol, rate: rate * 1.2, throttleMs: 180 });
+        break;
+      case "mew_question":
+        // sampled mew + a rising tone layer so the line ends upward ("mrrp?")
+        this.playSfx("cat_mew", { volume: vol, rate, throttleMs: 180 });
+        this.playMewQuestion();
+        break;
+      case "purr":
+        this.playSfx("cat_purr", { volume: vol * 0.9, throttleMs: 400 });
+        break;
+      case "hiss":
+      case "growl":
+      case "chirp":
+      case "trill":
+        this.playVocal(v.sound as "hiss" | "growl" | "chirp" | "trill");
+        break;
+      case "mrrp":
+        this.synthMrrp(rate, vol);
+        break;
+      case "yowl":
+        this.synthYowl(rate, vol);
+        break;
+      default:
+        this.playSfx("cat_mew", { volume: vol, rate, throttleMs: 180 });
+    }
+  }
+
+  /** §30: rare distant thunder for storms — synthesized low rumble (no asset
+   * needed), throttled and quiet so it sits UNDER the rain ambience. */
+  playThunder(intensity = 0.7) {
+    if (!this.started || this.settings.muteAmbience || this.settings.master <= 0.001) return;
+    if (!this.ctx || !this.sfxGain) return;
+    const now = performance.now();
+    if (now - (this.lastSfx.get("thunder") ?? 0) < 9000) return;
+    this.lastSfx.set("thunder", now);
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    const dur = 2.2 + Math.random() * 1.6;
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const t = i / ctx.sampleRate;
+      const decay = Math.exp(-t * 2.1);
+      data[i] = (Math.random() * 2 - 1) * decay;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(90, t0);
+    lp.frequency.exponentialRampToValueAtTime(240, t0 + 0.3);
+    lp.frequency.exponentialRampToValueAtTime(70, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.value = 0.5 * intensity * this.settings.ambience * this.settings.master;
+    src.connect(lp).connect(g).connect(this.sfxGain);
+    src.start(t0);
+  }
+
+  /** Short friendly roll ("mrrp!") — greeting chirp used in vocal profiles. */
+  private synthMrrp(rate: number, vol: number) {
+    if (!this.ctx || !this.sfxGain) return;
+    if (this.settings.muteSfx || this.settings.sfx <= 0.001 || this.settings.master <= 0.001) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0.5 * vol * this.settings.sfx * this.settings.master;
+    out.connect(this.sfxGain);
+    const osc = ctx.createOscillator();
+    osc.type = "triangle";
+    const f0 = 640 * rate;
+    osc.frequency.setValueAtTime(f0, t0);
+    osc.frequency.linearRampToValueAtTime(f0 * 1.25, t0 + 0.05);
+    osc.frequency.linearRampToValueAtTime(f0 * 1.05, t0 + 0.14);
+    // soft 24 Hz amplitude roll = the "rrr"
+    const am = ctx.createOscillator();
+    am.frequency.value = 24;
+    const amGain = ctx.createGain();
+    amGain.gain.value = 0.5;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.linearRampToValueAtTime(1, t0 + 0.03);
+    g.gain.linearRampToValueAtTime(0.0001, t0 + 0.22);
+    am.connect(amGain).connect(g.gain);
+    osc.connect(g).connect(out);
+    osc.start(t0); am.start(t0);
+    osc.stop(t0 + 0.25); am.stop(t0 + 0.25);
+  }
+
+  /** Distant, mournful yowl — long, filtered, rarely used (§15: keep short). */
+  private synthYowl(rate: number, vol: number) {
+    if (!this.ctx || !this.sfxGain) return;
+    if (this.settings.muteSfx || this.settings.sfx <= 0.001 || this.settings.master <= 0.001) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    const dur = 0.85;
+    const out = ctx.createGain();
+    out.gain.value = 0.4 * vol * this.settings.sfx * this.settings.master;
+    out.connect(this.sfxGain);
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    const f0 = 420 * rate;
+    osc.frequency.setValueAtTime(f0, t0);
+    osc.frequency.linearRampToValueAtTime(f0 * 1.3, t0 + 0.18);
+    osc.frequency.exponentialRampToValueAtTime(f0 * 0.7, t0 + dur);
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 1200;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.1);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(lp).connect(g).connect(out);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.05);
   }
 
   stopAll(fadeMs = 500) {
@@ -580,11 +746,11 @@ export class AudioEngine {
   }
 
   private musicVol(): number {
-    return this.settings.muteMusic ? 0 : this.settings.music * this.settings.master;
+    return (this.settings.muteMusic ? 0 : this.settings.music * this.settings.master) * (this.ducking ? 0.45 : 1);
   }
 
   private layerVol(_id: AmbienceLayerId): number {
-    return this.settings.muteAmbience ? 0 : this.settings.ambience * this.settings.master;
+    return (this.settings.muteAmbience ? 0 : this.settings.ambience * this.settings.master) * (this.ducking ? 0.5 : 1);
   }
 
   /** Re-apply current volumes to every live channel (settings change). */

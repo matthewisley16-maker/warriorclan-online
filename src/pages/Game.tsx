@@ -29,7 +29,7 @@ interface NpcConvo {
   lineIdx?: number | string;
 }
 import {
-  AudioEngine,
+  audio,
   computeAmbience,
   computeMusic,
   stepKindFor,
@@ -41,9 +41,13 @@ import { appearanceVersion } from "@/game/saveShared";
 import { storySteps } from "@/game/story";
 import { buildDialogue, type DialogueContext } from "@/game/dialogue";
 import { buildAskMenu, npcChatReply, FACT_LABELS, type AskOption, type ChatMsg } from "@/game/npcChat";
+// §2/§3/§13: cinematic story layer — beats, choices, per-character meow voices
+import { STORY_INTRO, STORY_BEATS, type StoryBeat } from "@/game/storyCinematics";
+import { pickVocal, emotionForLine } from "@/game/vocal";
 import { useAction } from "convex/react";
 import { profileFor } from "@/game/characters";
 import MainMenu, { LoadingScreen, loadSettings, SettingsScreen, type GameMode, type Settings } from "./MainMenu";
+import { StoryCutscenePlayer } from "./StoryCutscenePlayer";
 import { CatClanMenu, type CatClanSave } from "./CatClanMenu";
 import { WorldMapCanvas, MapLegend, WorldMapOverlay, MAP_SPOTS } from "./WorldMapData";
 import {
@@ -71,12 +75,8 @@ import type { CatSkin } from "@/game/draw";
 /** live snapshot of the local cat's movement/animation state */
 type MovementSnapshot = ReturnType<GameCanvas["engineState"]>;
 
-/** App-wide audio singleton (music + ambience + SFX buses). */
-const audioRef: { current: AudioEngine | null } = { current: null };
-function audio(): AudioEngine {
-  if (!audioRef.current) audioRef.current = new AudioEngine();
-  return audioRef.current;
-}
+// The App-wide audio singleton now lives in game/audio (shared with the
+// cinematic cutscene player so ducking/cinematic flags hit the SAME engine).
 
 function groundIndexAt(x: number, y: number): number {
   const c = Math.max(0, Math.min(GROUND_COLS - 1, Math.floor(x / GROUND_CELL)));
@@ -176,6 +176,10 @@ export default function Game() {
   } | null>(null);
   // --- dedicated player↔NPC conversation state (separate from chatter) ---
   const [npcConvo, setNpcConvo] = useState<NpcConvo | null>(null);
+  // §3/§5: active cutscene beat (letterboxed cinematic over the living world)
+  const [cineBeat, setCineBeat] = useState<StoryBeat | null>(null);
+  /** story steps whose intro beat already played this session (no replays) */
+  const beatPlayedRef = useRef<Set<string>>(new Set());
   /** sub-view of the compact interaction panel: root choices / ask menu / chat */
   const [convoView, setConvoView] = useState<ConvoView>("root");
   const [askOptions, setAskOptions] = useState<AskOption[]>([]);
@@ -228,6 +232,13 @@ export default function Game() {
     setChatMsgs([]);
     setAskOptions([]);
   }, []);
+
+  // §27: while talking with a cat, duck music/ambience under the written
+  // dialogue; restore the moment the conversation ends.
+  useEffect(() => {
+    audio().setDucked(npcConvo !== null);
+    return () => audio().setDucked(false);
+  }, [npcConvo]);
   // Panel visibility is derived from the single active layer.
   const codexOpen = activeUI === "codex";
   const mapOpen = activeUI === "map";
@@ -458,7 +469,21 @@ export default function Game() {
         }, 1500);
       },
       onClock: (h) => setClock(h),
-      onWeatherChange: (w) => setWeather(w),
+      onWeatherChange: (w) => {
+        setWeather(w);
+        // §30: storms get rare, distant synthesized thunder — smooth, quiet,
+        // throttled inside the audio engine (never a harsh asset slam).
+        if (w === "storm") {
+          audio().playThunder(0.8);
+          const iv = window.setInterval(() => {
+            if (weatherRef.current !== "storm") {
+              window.clearInterval(iv);
+              return;
+            }
+            audio().playThunder(0.4 + Math.random() * 0.4);
+          }, 11000 + Math.random() * 6000);
+        }
+      },
       onInteriorChange: (id) => {
         interiorRef.current = id;
         setInterior(id);
@@ -1051,6 +1076,9 @@ export default function Game() {
         const built = buildDialogue(npc.id, dialogueCtx());
         setConvoView("root");
         setChatMsgs([{ from: "npc", text: built.opening }]);
+        // §13/§22: the cat does NOT read the line aloud — one short vocal in
+        // THEIR voice (profile-driven, emotion-inferred) accompanies the text.
+        voiceNpcLine(npc.id, built.opening);
         const dCtx = dialogueCtx();
         dCtx.npcActivity = gameRef.current?.getNpcActivity(npc.id) ?? undefined;
         dCtx.npcLocation = gameRef.current?.getNpcLocation(npc.id) ?? undefined;
@@ -1190,6 +1218,10 @@ export default function Game() {
         return;
       }
       const isEnd = choice.effect === "end";
+      // §21/§7: the player's chosen reply is voiced in THEIR cat's voice, and
+      // the NPC's response in theirs — written text stays the real channel.
+      voiceNpcLine("player", choice.label);
+      voiceNpcLine(c.npcId, choice.reply);
       setNpcConvo({
         npcId: c.npcId,
         name: c.name,
@@ -1204,6 +1236,16 @@ export default function Game() {
     [endNpcConvo],
   );
 
+  /**
+   * §13/§16/§21: voice ANY line in a speaker's character voice — one short
+   * cat vocalization per line (never per letter, never human speech).
+   * Emotion is inferred from the text when not supplied (§17).
+   */
+  const voiceNpcLine = useCallback((speakerId: string, text: string) => {
+    const v = pickVocal(speakerId, emotionForLine(text));
+    audio().playCharacterVocal(v);
+  }, []);
+
   /** Send a free-typed message to the NPC (compact chat view). */
   const handleChatSend = useCallback(
     (text: string) => {
@@ -1215,6 +1257,8 @@ export default function Game() {
       const ctx = dialogueCtxRef.current();
       const local = npcChatReply(c.npcId, msg, ctx);
       setChatMsgs((m) => [...m, { from: "npc", text: local.text }]);
+      voiceNpcLine("player", msg);
+      voiceNpcLine(c.npcId, local.text);
       if (local.fact && !factsRef.current.includes(`${c.npcId}:${local.fact}`)) {
         setFacts((prev) => [...prev, `${c.npcId}:${local.fact}`]);
         factsRef.current = [...factsRef.current, `${c.npcId}:${local.fact}`];
@@ -1264,7 +1308,10 @@ export default function Game() {
           message: msg,
         })
           .then((r: { available: boolean; text: string | null }) => {
-            if (r?.text) setChatMsgs((m) => [...m.slice(0, -1), { from: "npc", text: r.text as string }]);
+            if (r?.text) {
+              setChatMsgs((m) => [...m.slice(0, -1), { from: "npc", text: r.text as string }]);
+              voiceNpcLine(c.npcId, r.text as string); // AI-polished line still gets THEIR voice
+            }
           })
           .catch(() => undefined) // local line already on screen — nothing to do
           .finally(() => {
@@ -1339,6 +1386,29 @@ export default function Game() {
   useEffect(() => {
     gameRef.current?.setStoryContext(mode, storyStep);
   }, [mode, storyStep, phase]);
+
+  // §5: the cinematic OPENING — plays once when Story Mode boots into play.
+  // Establishes the world, the cat, and the situation before control begins.
+  const introPlayedRef = useRef(false);
+  useEffect(() => {
+    if (phase !== "playing" || mode !== "story" || introPlayedRef.current) return;
+    introPlayedRef.current = true;
+    const t = window.setTimeout(() => setCineBeat(STORY_INTRO), 900); // let the forest fade in first
+    return () => window.clearTimeout(t);
+  }, [phase, mode]);
+
+  // §2/§9: each story step opens with its SHORT voiced beat (cutscene →
+  // gameplay alternation) — once per step per session, never replayed.
+  useEffect(() => {
+    if (phase !== "playing" || mode !== "story") return;
+    const step = storySteps[storyStep];
+    if (!step || beatPlayedRef.current.has(step.id)) return;
+    beatPlayedRef.current.add(step.id);
+    const beat = STORY_BEATS[step.id];
+    if (!beat) return;
+    const t = window.setTimeout(() => setCineBeat(beat), 600);
+    return () => window.clearTimeout(t);
+  }, [phase, mode, storyStep]);
 
   // story: visit objectives trigger on area change
   useEffect(() => {
@@ -1590,6 +1660,16 @@ export default function Game() {
           </Button>
         </div>
       </div>
+
+      {/* §3/§5/§7: cinematic cutscene player (Story Mode only) — beats,
+          choices and per-character meow dialogue over the living world */}
+      {mode === "story" && (
+        <StoryCutscenePlayer
+          beat={cineBeat}
+          game={gameRef.current}
+          onDone={() => setCineBeat(null)}
+        />
+      )}
 
       {/* Story tracker (story mode) */}
       {mode === "story" && currentStep && (
