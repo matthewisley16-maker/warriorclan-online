@@ -269,15 +269,38 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                       variant="outline"
                       className="w-full mt-4"
                       onClick={handleGoogleLogin}
-                      disabled={googleLoading || isLoading || googleCfg === undefined}
+                      disabled={
+                        googleLoading ||
+                        isLoading ||
+                        googleCfg === undefined ||
+                        googleCfg?.configured === false
+                      }
+                      title={
+                        googleCfg && !googleCfg.configured
+                          ? "Pending one-time setup — see the note below"
+                          : undefined
+                      }
                     >
                       {googleLoading ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       ) : (
                         <GoogleIcon className="mr-2 h-4 w-4" />
                       )}
-                      {googleLoading ? "Signing in…" : "Continue with Google"}
+                      {googleLoading
+                        ? "Signing in…"
+                        : googleCfg && !googleCfg.configured
+                          ? "Continue with Google — setup pending"
+                          : "Continue with Google"}
                     </Button>
+                    {googleCfg && !googleCfg.configured && (
+                      <p className="mt-2 text-center text-[11px] leading-relaxed text-muted-foreground">
+                        Google sign-in is safely disabled until its credentials exist — there is no
+                        fake or placeholder login. Add your own{" "}
+                        <span className="font-mono">GOOGLE_CLIENT_ID</span> +{" "}
+                        <span className="font-mono">GOOGLE_CLIENT_SECRET</span> in the Keys tab; the
+                        secret is only ever read server-side. Email and Guest sign-in work right now.
+                      </p>
+                    )}
 
                     <Button
                       type="button"
