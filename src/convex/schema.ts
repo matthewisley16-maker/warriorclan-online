@@ -60,6 +60,9 @@ const schema = defineSchema(
       emailVerificationTime: v.optional(v.number()),
       isAnonymous: v.optional(v.boolean()),
       role: v.optional(roleValidator),
+      // username sign-in: the player's chosen username (lowercase; the
+      // password hash itself lives in the authTables row, never here)
+      username: v.optional(v.string()),
     }).index("email", ["email"]),
 
     // One cat per signed-in player.

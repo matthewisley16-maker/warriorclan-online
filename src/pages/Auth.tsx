@@ -16,7 +16,8 @@ import {
 
 import { useAuth } from "@/hooks/use-auth";
 import logo from "@/assets/logo.svg";
-import { ArrowRight, Loader2, Mail, UserX } from "lucide-react";
+import { ArrowRight, KeyRound, Loader2, Mail, User, UserX } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Suspense, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useQuery } from "convex/react";
@@ -67,6 +68,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const [error, setError] = useState<string | null>(null);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [googleError, setGoogleError] = useState<string | null>(null);
+  // username & password sign-in — a third way in, alongside email + Google
+  const [method, setMethod] = useState<"username" | "email">("username");
+  const [usernameMode, setUsernameMode] = useState<"signIn" | "signUp">("signUp");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [usernameBusy, setUsernameBusy] = useState(false);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
@@ -101,7 +109,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
         const msg = e instanceof Error ? e.message : String(e);
         setGoogleError(
           /not configured/i.test(msg)
-            ? "Google sign-in isn't configured on this server yet. Use email sign-in below — it works the same."
+            ? "Google sign-in becomes available once its credentials are added in the Keys tab. Username and email sign-in work right now."
             : /exchange/i.test(msg)
               ? "Google's one-time code expired. Try again."
               : "Unable to sign in with Google. Please try again.",
@@ -117,7 +125,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     const clientId = googleCfg?.clientId;
     if (!clientId) {
       setGoogleError(
-        "Google sign-in isn't configured yet. Use email sign-in below — it works the same.",
+        "Google sign-in becomes available once its credentials are added in the Keys tab. Username and email sign-in work right now.",
       );
       return;
     }
@@ -131,6 +139,30 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       prompt: "select_account",
     });
     window.location.assign(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+  };
+
+  /** Username + password: create an account or sign in — no email needed.
+   *  The server's "username" provider (Convex Auth Password) hashes the
+   *  secret with Scrypt; nothing sensitive returns to the client. */
+  const handleUsernameSubmit = async () => {
+    const name = username.trim();
+    if (!name || !password) return;
+    setUsernameBusy(true);
+    setUsernameError(null);
+    try {
+      await signIn("username", { username: name, password, flow: usernameMode });
+      navigate(redirect);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setUsernameError(
+        /invalid credentials/i.test(msg)
+          ? "Wrong username or password."
+          : /already|exists|taken/i.test(msg)
+            ? "That username is taken — try another."
+            : msg || "Sign-in failed. Please try again.",
+      );
+      setUsernameBusy(false);
+    }
   };
 
   const handleEmailSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -214,13 +246,42 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   </div>
                 <CardTitle className="text-xl">Get Started</CardTitle>
                 <CardDescription>
-                  Enter your email to log in or sign up
+                  {method === "username"
+                    ? "Choose your own username and password — no email needed"
+                    : "Enter your email to log in or sign up"}
                 </CardDescription>
               </CardHeader>
-              <form onSubmit={handleEmailSubmit}>
-                <CardContent>
-                  
-                  <div className="relative flex items-center gap-2">
+              <CardContent>
+                {/* sign-in method: username+password or email */}
+                <div
+                  role="tablist"
+                  aria-label="Sign-in method"
+                  className="mb-4 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+                >
+                  {([
+                    ["username", "Username"],
+                    ["email", "Email"],
+                  ] as const).map(([m, label]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      role="tab"
+                      aria-selected={method === m}
+                      onClick={() => setMethod(m)}
+                      className={cn(
+                        "rounded-md px-2 py-1.5 text-xs font-semibold transition-colors",
+                        method === m
+                          ? "bg-background shadow-sm text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {method === "email" ? (
+                  <form onSubmit={handleEmailSubmit} className="relative flex items-center gap-2">
                     <div className="relative flex-1">
                       <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                       <Input
@@ -244,77 +305,131 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                         <ArrowRight className="h-4 w-4" />
                       )}
                     </Button>
-                  </div>
-                  {googleError && (
-                    <p className="mt-2 text-sm text-red-500">{googleError}</p>
-                  )}
-                  {error && (
-                    <p className="mt-2 text-sm text-red-500">{error}</p>
-                  )}
-                  
-                  <div className="mt-4">
+                  </form>
+                ) : (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleUsernameSubmit();
+                    }}
+                    className="space-y-2"
+                  >
                     <div className="relative">
-                      <div className="absolute inset-0 flex items-center">
-                        <span className="w-full border-t" />
-                      </div>
-                      <div className="relative flex justify-center text-xs uppercase">
-                        <span className="bg-background px-2 text-muted-foreground">
-                          Or
-                        </span>
-                      </div>
+                      <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="Pick a username (3–20 letters, numbers, _)"
+                        className="pl-9"
+                        disabled={usernameBusy}
+                        required
+                        minLength={3}
+                        maxLength={20}
+                        autoComplete="username"
+                      />
                     </div>
-                    
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full mt-4"
-                      onClick={handleGoogleLogin}
-                      disabled={
-                        googleLoading ||
-                        isLoading ||
-                        googleCfg === undefined ||
-                        googleCfg?.configured === false
-                      }
-                      title={
-                        googleCfg && !googleCfg.configured
-                          ? "Pending one-time setup — see the note below"
-                          : undefined
-                      }
-                    >
-                      {googleLoading ? (
+                    <div className="relative">
+                      <KeyRound className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        type="password"
+                        placeholder={
+                          usernameMode === "signUp"
+                            ? "Create a password (6+ characters)"
+                            : "Your password"
+                        }
+                        className="pl-9"
+                        disabled={usernameBusy}
+                        required
+                        minLength={6}
+                        autoComplete={
+                          usernameMode === "signUp" ? "new-password" : "current-password"
+                        }
+                      />
+                    </div>
+                    <Button type="submit" className="w-full" disabled={usernameBusy}>
+                      {usernameBusy ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <GoogleIcon className="mr-2 h-4 w-4" />
-                      )}
-                      {googleLoading
-                        ? "Signing in…"
-                        : googleCfg && !googleCfg.configured
-                          ? "Continue with Google — setup pending"
-                          : "Continue with Google"}
+                      ) : null}
+                      {usernameBusy
+                        ? "Working…"
+                        : usernameMode === "signUp"
+                          ? "Create account"
+                          : "Sign in"}
                     </Button>
-                    {googleCfg && !googleCfg.configured && (
-                      <p className="mt-2 text-center text-[11px] leading-relaxed text-muted-foreground">
-                        Google sign-in is safely disabled until its credentials exist — there is no
-                        fake or placeholder login. Add your own{" "}
-                        <span className="font-mono">GOOGLE_CLIENT_ID</span> +{" "}
-                        <span className="font-mono">GOOGLE_CLIENT_SECRET</span> in the Keys tab; the
-                        secret is only ever read server-side. Email and Guest sign-in work right now.
-                      </p>
-                    )}
-
-                    <Button
+                    <button
                       type="button"
-                      variant="outline"
-                      className="w-full mt-3"
-                      onClick={handleGuestLogin}
-                      disabled={isLoading}
+                      className="w-full text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() =>
+                        setUsernameMode(usernameMode === "signUp" ? "signIn" : "signUp")
+                      }
                     >
-                      <UserX className="mr-2 h-4 w-4" />
-                      Continue as Guest
-                    </Button>
+                      {usernameMode === "signUp"
+                        ? "Already have a username? Sign in"
+                        : "New player? Create a username & password"}
+                    </button>
+                  </form>
+                )}
+
+                {usernameError && (
+                  <p className="mt-2 text-sm text-red-500">{usernameError}</p>
+                )}
+                {error && (
+                  <p className="mt-2 text-sm text-red-500">{error}</p>
+                )}
+
+                <div className="mt-4">
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="w-full border-t" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-background px-2 text-muted-foreground">
+                        Or
+                      </span>
+                    </div>
                   </div>
-                </CardContent>
-              </form>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full mt-4"
+                    onClick={handleGoogleLogin}
+                    disabled={
+                      googleLoading ||
+                      isLoading ||
+                      usernameBusy ||
+                      googleCfg === undefined ||
+                      googleCfg?.configured === false
+                    }
+                  >
+                    {googleLoading ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <GoogleIcon className="mr-2 h-4 w-4" />
+                    )}
+                    {googleLoading ? "Signing in…" : "Continue with Google"}
+                  </Button>
+                  {googleCfg && !googleCfg.configured && (
+                    <p className="mt-2 text-center text-[11px] leading-relaxed text-muted-foreground">
+                      Google sign-in switches on automatically once its credentials are added in
+                      the Keys tab — meanwhile, username and email sign-in are ready to go.
+                    </p>
+                  )}
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full mt-3"
+                    onClick={handleGuestLogin}
+                    disabled={isLoading || usernameBusy}
+                  >
+                    <UserX className="mr-2 h-4 w-4" />
+                    Continue as Guest
+                  </Button>
+                </div>
+              </CardContent>
             </>
           ) : (
             <>
