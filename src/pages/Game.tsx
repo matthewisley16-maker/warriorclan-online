@@ -46,6 +46,7 @@ import { buildDialogue, type DialogueContext } from "@/game/dialogue";
 import { buildAskMenu, npcChatReply, FACT_LABELS, type AskOption, type ChatMsg } from "@/game/npcChat";
 // §2/§3/§13: cinematic story layer — beats, choices, per-character meow voices
 import { STORY_INTRO, STORY_BEATS, type StoryBeat } from "@/game/storyCinematics";
+import { beatActorIds, resolveStaging } from "@/game/storyStaging";
 import { pickVocal, emotionForLine } from "@/game/vocal";
 import { useAction } from "convex/react";
 import { profileFor } from "@/game/characters";
@@ -1496,12 +1497,19 @@ export default function Game() {
   useEffect(() => {
     if (phase !== "playing" || mode !== "story" || introPlayedRef.current) return;
     introPlayedRef.current = true;
-    const t = window.setTimeout(() => setCineBeat(STORY_INTRO), 900); // let the forest fade in first
+    // §12: the opening waits for its cast (Smudge) to reach the garden mark
+    const t = window.setTimeout(() => {
+      gameRef.current
+        ?.waitForStoryArrival(["smudge"], 5000)
+        .then(() => setCineBeat(STORY_INTRO)); // let the forest fade in first
+    }, 900);
     return () => window.clearTimeout(t);
   }, [phase, mode]);
 
   // §2/§9: each story step opens with its SHORT voiced beat (cutscene →
   // gameplay alternation) — once per step per session, never replayed.
+  // §12/§22: dialogue starts only after the beat's cast has ARRIVED at its
+  // staging marks (bounded wait — a stuck cat can never stall the story).
   useEffect(() => {
     if (phase !== "playing" || mode !== "story") return;
     const step = storySteps[storyStep];
@@ -1509,9 +1517,85 @@ export default function Game() {
     beatPlayedRef.current.add(step.id);
     const beat = STORY_BEATS[step.id];
     if (!beat) return;
-    const t = window.setTimeout(() => setCineBeat(beat), 600);
-    return () => window.clearTimeout(t);
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      gameRef.current
+        ?.waitForStoryArrival(beatActorIds(beat), 4500)
+        .then(() => {
+          if (!cancelled) setCineBeat(beat);
+        });
+    }, 600);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
   }, [phase, mode, storyStep]);
+
+  // §1/§19/§20: apply the step's character staging — every important
+  // character physically WALKS to (or, for scene init/loading, is placed at)
+  // their story mark, everyone else resumes normal life where they stand,
+  // and background cats keep out of the scene's staging area (§17).
+  useEffect(() => {
+    const g = gameRef.current;
+    if (!g || phase !== "playing" || mode !== "story") return;
+    const step = storySteps[storyStep];
+    if (!step) return;
+    const plan = resolveStaging(step.id);
+    const keep = new Set<string>();
+    for (const role of plan?.npcs ?? []) {
+      const pos = g.getNpcWorldPos(role.npcId);
+      if (!pos) continue; // not spawned in this timeline window (§19)
+      keep.add(role.npcId);
+      const dist = Math.hypot(pos.x - role.x, pos.y - role.y);
+      if (dist > 1400) {
+        // §32 allowed case: scene initialization / loading a story state
+        g.placeNpcForStory(role.npcId, role.x, role.y, role.face, role.pose);
+      } else {
+        g.setNpcStoryAnchor(role.npcId, {
+          x: role.x,
+          y: role.y,
+          face: role.face,
+          pose: role.pose,
+          run: dist > 260,
+          label: role.label,
+        });
+      }
+    }
+    g.clearOtherStoryAnchors(keep); // released cats resume life in place
+    if (plan?.scene) g.setStoryStagingExclusion({ x: plan.scene.x, y: plan.scene.y, r: plan.scene.r });
+    else g.setStoryStagingExclusion(null);
+  }, [phase, mode, storyStep]);
+
+  // §33: dev-only staging readout — OFF for players; enable with
+  // ?storydebug=1 or localStorage wcrpg-story-debug=1
+  const [storyDebug, setStoryDebug] = useState(false);
+  const [storyDebugRows, setStoryDebugRows] = useState<
+    { npcId: string; mode: string; label?: string; arrived: boolean; pose: string; facing: number }[]
+  >([]);
+  useEffect(() => {
+    try {
+      setStoryDebug(
+        new URLSearchParams(window.location.search).has("storydebug") ||
+          localStorage.getItem("wcrpg-story-debug") === "1",
+      );
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
+  useEffect(() => {
+    if (!storyDebug || phase !== "playing" || mode !== "story") return;
+    const iv = window.setInterval(() => {
+      const g = gameRef.current;
+      if (!g) return;
+      const plan = resolveStaging(storySteps[storyStep]?.id);
+      setStoryDebugRows(
+        (plan?.npcs ?? [])
+          .map((r) => g.getNpcStoryInfo(r.npcId))
+          .filter((i): i is NonNullable<typeof i> => Boolean(i)),
+      );
+    }, 600);
+    return () => window.clearInterval(iv);
+  }, [storyDebug, phase, mode, storyStep]);
 
   // story: visit objectives trigger on area change
   useEffect(() => {
@@ -1799,6 +1883,19 @@ export default function Game() {
             </div>
             <p className="mt-1 text-right text-[10px] text-muted-foreground">{storyStep}/{storySteps.length}</p>
           </div>
+        </div>
+      )}
+
+      {/* §33: dev-only staging readout — never rendered without the flag */}
+      {storyDebug && mode === "story" && storyDebugRows.length > 0 && (
+        <div className="pointer-events-none absolute bottom-2 left-2 z-40 max-w-[300px] rounded-lg border border-red-500/40 bg-black/85 p-2 font-mono text-[9px] leading-tight text-red-200 shadow-xl">
+          <p className="font-bold uppercase tracking-wider">Story staging (dev)</p>
+          {storyDebugRows.map((r) => (
+            <p key={r.npcId}>
+              {r.npcId}: {r.mode}
+              {r.label ? ` · ${r.label}` : ""} · {r.arrived ? "arrived" : "TRAVELING"} · {r.pose} · f{r.facing}
+            </p>
+          ))}
         </div>
       )}
 

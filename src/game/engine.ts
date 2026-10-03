@@ -1619,6 +1619,29 @@ interface NPCState {
   poseHoldUntil?: number;
   // --- story availability: a cat whose timeline window has closed ---
   gone?: boolean;
+  // --- §1/§24 STORY OVERRIDE: while set, the cat is driven by its story
+  // anchor (travel → arrive → face → hold) instead of its normal schedule.
+  storyAnchor?: StoryAnchor;
+  /** engine time until which this cat keeps clear of the story exclusion zone */
+  storyAvoidUntil?: number;
+}
+
+/** §5: a story staging mark — where the story says this cat must BE. */
+export interface StoryAnchor {
+  x: number;
+  y: number;
+  face: "player" | "left" | "right" | "up" | "down" | "scene";
+  pose?: CatPose;
+  run: boolean;
+  arriveR: number;
+  label: string;
+  arrived: boolean;
+  lastX: number;
+  lastY: number;
+  /** engine time of the LAST real progress (drives stuck detection) */
+  travelSince: number;
+  /** engine time of the last sidestep attempt (throttle) */
+  sidestepAt: number;
 }
 
 /** Stable rest seats inside a den: tucked into the WALKABLE mouth corridor
@@ -2033,6 +2056,8 @@ export class GameCanvas {
   storyStep = 0;
 
   private npcStates: NPCState[] = [];
+  // §17: active story scene staging exclusion (background cats keep out)
+  private storyExclusion: { x: number; y: number; r: number } | null = null;
   private prey: PreyState[] = [];
 
   private lastArea = "";
@@ -2296,6 +2321,252 @@ export class GameCanvas {
       n.pose = "walk";
       n.waitUntil = this.time + 0.4;
       n.aiThinkAt = this.time + 2 + Math.random() * 2;
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // §1/§2/§24: STORY STAGING — the story script is the source of truth for
+  // important characters. An anchored cat physically WALKS to its mark (never
+  // teleports), arrives, faces the right way and holds the spot until the
+  // story releases it. Normal AI resumes from wherever the cat actually is.
+  // ------------------------------------------------------------------------
+
+  /** §1/§4: send a cat to its story mark. It travels on foot; the engine's
+   *  own collision + sidestep machinery applies on the way. */
+  setNpcStoryAnchor(
+    npcId: string,
+    opts: { x: number; y: number; face?: StoryAnchor["face"]; pose?: CatPose; run?: boolean; arriveR?: number; label?: string; arrived?: boolean },
+  ) {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n || n.gone) return;
+    // cancel parallel lives while the story holds this cat (§24)
+    n.convoActive = false;
+    n.preyId = null;
+    n.denId = null;
+    n.houseInterior = undefined;
+    n.houseGoal = undefined;
+    const arriveR = opts.arriveR ?? 26;
+    const arrived = opts.arrived ?? Math.hypot(opts.x - n.x, opts.y - n.y) <= arriveR;
+    n.storyAnchor = {
+      x: opts.x,
+      y: opts.y,
+      face: opts.face ?? "player",
+      pose: opts.pose,
+      run: opts.run ?? false,
+      arriveR,
+      label: opts.label ?? "story mark",
+      arrived,
+      lastX: n.x,
+      lastY: n.y,
+      travelSince: this.time,
+      sidestepAt: 0,
+    };
+    n.ai = arrived ? "idle" : "wander";
+    n.tx = opts.x;
+    n.ty = opts.y;
+    n.waitUntil = 0;
+    n.pose = arrived ? (opts.pose && opts.pose !== "walk" ? opts.pose : "sit") : "walk";
+  }
+
+  /** §32: controlled scene-INIT placement (loading a story state / first
+   *  introduction) — the only story reposition that is not walking, and it
+   *  happens before the scene is on screen. Snaps to the nearest free tile. */
+  placeNpcForStory(
+    npcId: string,
+    x: number,
+    y: number,
+    face: StoryAnchor["face"] = "down",
+    pose?: CatPose,
+  ) {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n || n.gone) return;
+    const free = this.nearestFreeNpcSpot(x, y) ?? { x, y };
+    n.x = free.x;
+    n.y = free.y;
+    this.setNpcStoryAnchor(npcId, {
+      x: free.x,
+      y: free.y,
+      face,
+      pose,
+      arrived: true,
+      label: "placed by the story",
+    });
+  }
+
+  /** §2/§30: release a cat from staging — normal AI resumes FROM HERE, with
+   *  no position reset and no teleport home (the territory watchdog walks
+   *  them back physically when they are out of their ground). */
+  clearNpcStoryAnchor(npcId: string) {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n || !n.storyAnchor) return;
+    n.storyAnchor = undefined;
+    n.ai = "idle";
+    n.tx = n.x;
+    n.ty = n.y;
+    n.waitUntil = this.time + 0.5;
+    n.aiThinkAt = this.time + 1.5;
+    n.pose = "sit";
+  }
+
+  /** §20: at each story step change, release every cat the new step no
+   *  longer stages (they keep living from where they stand). */
+  clearOtherStoryAnchors(keepIds: Iterable<string>) {
+    const keep = new Set(keepIds);
+    for (const n of this.npcStates) {
+      if (n.storyAnchor && !keep.has(n.def.id)) this.clearNpcStoryAnchor(n.def.id);
+    }
+  }
+
+  /** §17: background cats avoid the active scene's staging area. */
+  setStoryStagingExclusion(zone: { x: number; y: number; r: number } | null) {
+    this.storyExclusion = zone;
+  }
+
+  /** §33: dev-only positioning readout (never rendered for players). */
+  getNpcStoryInfo(npcId: string): {
+    npcId: string;
+    mode: string;
+    destination?: { x: number; y: number };
+    arrived: boolean;
+    facing: number;
+    pose: string;
+    label?: string;
+  } | null {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n) return null;
+    const a = n.storyAnchor;
+    return {
+      npcId,
+      mode: a ? (a.arrived ? "story_hold" : "story_travel") : n.ai,
+      destination: a ? { x: a.x, y: a.y } : undefined,
+      arrived: a ? a.arrived : false,
+      facing: n.facing,
+      pose: String(n.pose),
+      label: a?.label,
+    };
+  }
+
+  /** §12/§22: resolve once every listed story actor has ARRIVED at its mark
+   *  (or after timeoutMs — the story never stalls forever on a stuck cat). */
+  waitForStoryArrival(npcIds: string[], timeoutMs = 4500): Promise<void> {
+    const started = performance.now();
+    return new Promise((resolve) => {
+      const poll = window.setInterval(() => {
+        const pending = npcIds.some((id) => {
+          const n = this.npcStates.find((s) => s.def.id === id);
+          return n && n.storyAnchor && !n.storyAnchor.arrived;
+        });
+        if (!pending || performance.now() - started > timeoutMs) {
+          window.clearInterval(poll);
+          resolve();
+        }
+      }, 120);
+    });
+  }
+
+  /** §4/§10-§13: drive one anchored cat — travel → arrive → face → hold. */
+  private stepNpcStoryAnchor(n: NPCState, dt: number) {
+    const a = n.storyAnchor!;
+    if (n.convoActive) return; // conversation direction wins while it lasts
+    const dx = a.x - n.x;
+    const dy = a.y - n.y;
+    const dist = Math.hypot(dx, dy);
+
+    if (!a.arrived) {
+      if (dist <= a.arriveR) {
+        // ARRIVED: slow down, stop, face correctly, settle into the pose
+        a.arrived = true;
+        n.ai = "idle";
+        n.tx = n.x;
+        n.ty = n.y;
+        n.preyId = null;
+        this.npcFaceStoryMark(n, a.face);
+        n.pose = a.pose && a.pose !== "walk" ? a.pose : "sit";
+        n.waitUntil = this.time + 1.2;
+        return;
+      }
+      // TRAVELING on foot — collision-checked per axis, believable speed
+      const speed = a.run ? 96 : 60;
+      const step = Math.min(dist, speed * dt);
+      const nx = n.x + (dx / dist) * step;
+      const ny = n.y + (dy / dist) * step;
+      if (!isSolidPoint(nx, n.y)) n.x = nx;
+      if (!isSolidPoint(n.x, ny)) n.y = ny;
+      if (Math.abs(dx) > 2) n.facing = dx >= 0 ? 1 : -1;
+      n.pose = "walk";
+      // §11 stuck detection: no real progress for 2.5s → sidestep waypoint;
+      // 9s without ANY progress → recover onto the nearest free tile by the
+      // mark (safe, local — the story continues, never breaks)
+      const progressing = Math.hypot(n.x - a.lastX, n.y - a.lastY) > 5;
+      if (progressing) {
+        a.lastX = n.x;
+        a.lastY = n.y;
+        a.travelSince = this.time;
+      } else {
+        if (this.time - a.travelSince > 2.5 && this.time - a.sidestepAt > 1.2) {
+          const px = -dy / dist;
+          const py = dx / dist;
+          const side = Math.random() < 0.5 ? 1 : -1;
+          const sx = n.x + px * 46 * side;
+          const sy = n.y + py * 46 * side;
+          if (!isSolidPoint(sx, sy)) {
+            n.tx = sx;
+            n.ty = sy;
+          }
+          a.sidestepAt = this.time;
+        }
+        if (this.time - a.travelSince > 9) {
+          const free = this.nearestFreeNpcSpot(a.x, a.y) ?? { x: a.x, y: a.y };
+          n.x = free.x;
+          n.y = free.y;
+          a.x = free.x;
+          a.y = free.y;
+          a.arrived = true;
+          n.ai = "idle";
+          n.pose = a.pose && a.pose !== "walk" ? a.pose : "sit";
+        }
+      }
+      return;
+    }
+
+    // HOLD the mark: pinned position, small living reactions (§15)
+    n.ai = "idle";
+    const beatPoseActive = n.storyBeat?.until !== undefined && this.time < n.storyBeat.until;
+    if (!beatPoseActive && n.pose === "walk") n.pose = a.pose && a.pose !== "walk" ? a.pose : "sit";
+    if (a.face === "player") {
+      const pdx = this.px - n.x;
+      if (Math.abs(pdx) > 6) n.facing = pdx >= 0 ? 1 : -1;
+    }
+    if (!beatPoseActive && Math.random() < dt * 0.05) n.tailFxUntil = this.time + 1.6;
+  }
+
+  private npcFaceStoryMark(n: NPCState, face: StoryAnchor["face"]) {
+    if (face === "left") n.facing = -1;
+    else if (face === "right") n.facing = 1;
+    else if (face === "player") {
+      const pdx = this.px - n.x;
+      if (Math.abs(pdx) > 6) n.facing = pdx >= 0 ? 1 : -1;
+    }
+    // "up"/"down"/"scene": keep the approach facing (staged direction)
+  }
+
+  /** §17: nudge background cats out of the active scene's staging area. */
+  private avoidStoryExclusion() {
+    const ex = this.storyExclusion;
+    if (!ex) return;
+    for (const n of this.npcStates) {
+      if (n.gone || n.convoActive || n.storyAnchor || n.ai === "in_den" || n.houseInterior) continue;
+      if (this.time < (n.storyAvoidUntil ?? 0)) continue;
+      const d = Math.hypot(n.x - ex.x, n.y - ex.y);
+      if (d < ex.r + 24) {
+        const ang = Math.atan2(n.y - ex.y, n.x - ex.x) + (Math.random() - 0.5) * 0.8;
+        n.tx = ex.x + Math.cos(ang) * (ex.r + 70);
+        n.ty = ex.y + Math.sin(ang) * (ex.r + 70);
+        n.ai = "wander";
+        n.activity = "giving the scene space";
+        n.pose = "walk";
+        n.storyAvoidUntil = this.time + 3;
+      }
     }
   }
 
@@ -3651,7 +3922,7 @@ export class GameCanvas {
       // scheduled destinations still apply (dens/night spots) when idle
       // schedule slots only move wanderers (and only real wanderers)
       const target = scheduleTarget(n.def, hr);
-      if (target && hr !== n.lastScheduleHour && n.ai === "idle" && n.def.wander) {
+      if (target && hr !== n.lastScheduleHour && n.ai === "idle" && n.def.wander && !n.storyAnchor) {
         n.tx = target.x;
         n.ty = target.y;
         n.lastScheduleHour = hr;
@@ -3675,7 +3946,7 @@ export class GameCanvas {
       // decision tick: distant cats think every ~4s, nearby every ~1.2s
       const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
       const cadence = dPlayer < 700 ? 1.2 : 4;
-      if (!this.paused && !this.dead && this.time >= n.aiThinkAt && !n.convoActive) {
+      if (!this.paused && !this.dead && this.time >= n.aiThinkAt && !n.convoActive && !n.storyAnchor) {
         n.aiThinkAt = this.time + cadence * (0.8 + Math.random() * 0.5);
         // territory watchdog FIRST: a cat displaced out of its home ground
         // (chase gone wrong, rescue nudge, story teleport) stops everything
@@ -3782,6 +4053,12 @@ export class GameCanvas {
         }
         continue;
       }
+      // §1/§24: STORY OVERRIDE — a story-staged cat is driven by its anchor
+      // (travel → arrive → face → hold) instead of its normal schedule.
+      if (n.storyAnchor) {
+        this.stepNpcStoryAnchor(n, dt);
+        continue;
+      }
       if (n.ai === "in_den") {
         // asleep inside a den: skip movement + rendering entirely
         if (this.nightAlpha() < 0.4 || this.time > n.waitUntil) this.npcAct(n, dt);
@@ -3799,6 +4076,9 @@ export class GameCanvas {
         this.engineSfx("mew", { volume: dPlayer < 200 ? 0.5 : 0.3, throttleMs: 900 });
       }
     }
+
+    // §17: background cats politely keep out of the active story scene
+    if (this.storyExclusion) this.avoidStoryExclusion();
 
     this.drainActions();
     // --- NPC↔NPC ambient conversations: pair two idle-ish cats that are
