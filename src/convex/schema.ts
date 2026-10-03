@@ -103,6 +103,20 @@ const schema = defineSchema(
         fight: v.number(),
         herb: v.number(),
       })),
+      // §27: cosmetic profile title (validated against src/game/titles.ts)
+      title: v.optional(v.string()),
+      // §8: today's daily activities — date-keyed progress + streak
+      // (optional so existing saves load unchanged; task TEXT is derived,
+      // never stored)
+      dailies: v.optional(
+        v.object({
+          date: v.string(),
+          progress: v.array(v.number()),
+          claimed: v.array(v.boolean()),
+          streak: v.number(),
+          lastFullDay: v.optional(v.string()),
+        }),
+      ),
       // survival stats (hunger/energy/health, 0..100) — optional so existing
       // saves load unchanged; defaults fill in on first write
       stats: v.optional(v.object({

@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { SPAWN, CLAN_SPAWNS, appearance } from "../game/saveShared";
+import { TITLE_IDS } from "../game/titles";
 
 export const defaultAppearance = {
   fur: "#d96b2f",
@@ -274,6 +275,26 @@ export const joinClan = mutation({
       y: spawn.y,
       updatedAt: Date.now(),
     });
+    return true;
+  },
+});
+
+/**
+ * §27: set the cosmetic profile title. Whitelisted against the shared title
+ * list — descriptive only, never gameplay power.
+ */
+export const setTitle = mutation({
+  args: { title: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    if (args.title !== undefined && !TITLE_IDS.includes(args.title)) return false;
+    await ctx.db.patch(p._id, { title: args.title, updatedAt: Date.now() });
     return true;
   },
 });

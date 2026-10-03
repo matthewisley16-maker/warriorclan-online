@@ -5,17 +5,20 @@ import { useMutation, useQuery } from "convex/react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
+  ChevronDown,
   Clock,
   Mail,
   MessageCircle,
   PawPrint,
   ScrollText,
+  Sun,
   Users,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
+import { cn } from "@/lib/utils";
 import { GameCanvas, type MovementState, type NearbyTarget, type RemotePlayer, type WeatherKind } from "@/game/engine";
 type NpcConvoChoice = { label: string; reply: string; effect?: "bond" | "patrol" | "learn" | "end"; learn?: string };
 type ConvoView = "root" | "ask" | "chat";
@@ -154,6 +157,10 @@ export default function Game() {
   const saveAppearance = useMutation(api.customization.saveAppearance);
   const leavePresence = useMutation(api.presence.leave);
   const sendChat = useMutation(api.chat.send);
+  // §8: rotating daily activities — optional reasons to come back tomorrow
+  const progressDaily = useMutation(api.dailies.progressDaily);
+  const setTitle = useMutation(api.players.setTitle);
+  const dailiesQ = useQuery(api.dailies.getDaily, phase === "playing" ? {} : "skip");
 
   const remotesRaw = useQuery(api.presence.listOnline, phase === "playing" && mode === "open" ? {} : "skip");
   // Shared world clock + weather — the SERVER is the single authority.
@@ -162,6 +169,16 @@ export default function Game() {
   // each run their own clock + weather; passing this mode's worldId pins the
   // subscription to THIS mode's row (never inherits another mode's state).
   const worldState = useQuery(api.worldState.getWorldState, phase === "playing" ? { worldId: mode } : "skip");
+
+  // --- §8/§71/§9: daily activities + world-event state ---
+  const [dailiesMin, setDailiesMin] = useState(false);
+  const [dailyToast, setDailyToast] = useState<string | null>(null);
+  const [worldEvent, setWorldEvent] = useState<string | null>(null);
+  const todayVisitedRef = useRef<Set<string>>(new Set());
+  const preyBonusUntilRef = useRef(0);
+  // dailies progress is driven by REAL gameplay events; the ref keeps engine
+  // callbacks stable while always seeing the latest reporter
+  const reportDailyRef = useRef<(kind: string) => void>(() => undefined);
 
   // --- HUD state ---
   const [areaName, setAreaName] = useState("Warrior Territories");
@@ -441,6 +458,15 @@ export default function Game() {
         setAreaName(name);
         posAreaIdRef.current = id; // audio: biome id for footsteps + ambience
         if (id) setDiscovered((d) => (d.includes(id) ? d : [...d, id]));
+        // §8 dailies: first visit today to each distinct area = patrol;
+        // a brand-new discovery = explore. (Ref keeps this closure stable.)
+        if (id) {
+          if (!todayVisitedRef.current.has(id)) {
+            todayVisitedRef.current.add(id);
+            reportDailyRef.current("patrol");
+          }
+          if (!discRef.current.includes(id)) reportDailyRef.current("explore");
+        }
       },
       onNearby: (t) => setNearby(t),
       onMove: (x, y) => {
@@ -452,6 +478,11 @@ export default function Game() {
         audio().playSfx("hunt_pounce", { volume: 0.9, throttleMs: 150 }); // capture impact
         window.setTimeout(() => audio().playSfx("collect", { volume: 0.7, throttleMs: 300 }), 500); // prey claimed
         addXp({ amount: 4 }).catch(() => undefined);
+        // §8 dailies: hunt progress (+ wet-weather variant when it is wet out)
+        reportDailyRef.current("hunt");
+        if (["rain", "storm", "snow"].includes(weatherRef.current)) reportDailyRef.current("weather");
+        // §9: "prey stirring" world event makes hunting briefly extra rewarding
+        if (Date.now() < preyBonusUntilRef.current) addXp({ amount: 6 }).catch(() => undefined);
       },
       onSfx: (name, opts) => {
         if (name === "mew") audio().playMew("ambient");
@@ -1022,6 +1053,76 @@ export default function Game() {
   const discRef = useRef(discovered);
   discRef.current = discovered;
 
+  // §8: report daily-activity progress by KIND (open/free only — Story is an
+  // authored timeline and never touches rotating dailies). The server ignores
+  // kinds that are not among today's tasks, so stale reports are harmless.
+  const reportDaily = useCallback(
+    (kind: string) => {
+      if (mode === "story") return;
+      progressDaily({ kind }).catch(() => undefined);
+    },
+    [mode, progressDaily],
+  );
+  reportDailyRef.current = reportDaily;
+
+  // §8: celebrate a newly claimed daily exactly once (subtle sound + small
+  // toast — never a giant popup; the panel itself shows the new state).
+  const claimedPrevRef = useRef<boolean[]>([false, false, false]);
+  useEffect(() => {
+    const tasks = dailiesQ?.tasks;
+    if (!tasks) return;
+    tasks.forEach((t, i) => {
+      if (t.claimed && !claimedPrevRef.current[i]) {
+        audio().playSfx("quest_done", { throttleMs: 1200 });
+        setDailyToast(`Daily complete · +${t.xp} XP`);
+        window.setTimeout(() => setDailyToast(null), 3500);
+      }
+    });
+    claimedPrevRef.current = tasks.map((t) => t.claimed);
+  }, [dailiesQ]);
+
+  // §9/§49/§74: rare, believable world events (open/free only — Story Mode is
+  // an authored timeline). 90–240s gaps, skipped while talking/cinematic, so
+  // the world occasionally surprises without ever spamming.
+  useEffect(() => {
+    if (mode === "story") return;
+    let timer: number | undefined;
+    let bannerTimer: number | undefined;
+    const fire = () => {
+      timer = window.setTimeout(() => {
+        if (!dialogueRef.current && !npcConvoRef.current) {
+          const wet = ["rain", "storm", "snow"].includes(weatherRef.current);
+          const night = clockRef.current >= 21 || clockRef.current < 5;
+          const EVENTS: { text: string; sfx?: () => void; prey?: boolean }[] = [
+            { text: "A flurry of wings — a flock bursts from the canopy and scatters.", sfx: () => audio().playSfx("cat_mew3", { volume: 0.35 }) },
+            { text: "Prey is stirring everywhere — the territory feels alive.", sfx: () => audio().playSfx("hunt_rustle", { volume: 0.6 }), prey: true },
+            { text: "A strange scent drifts on the breeze from beyond the border…" },
+            { text: "You hear muffled mews — a border patrol passes in the distance.", sfx: () => audio().playMew("ambient") },
+            { text: "Several Clan cats are gathering near the camp clearing.", sfx: () => audio().playSfx("cat_mew2", { volume: 0.4 }) },
+            { text: wet
+              ? "Rain taps the leaves — the whole forest smells of petrichor."
+              : "Sunlight pools in the clearings; the forest hums quietly." },
+            { text: night
+              ? "Somewhere far off, a lost kit mewls into the dark…"
+              : "Leaves rustle — something small is hiding in the undergrowth." },
+          ];
+          const ev = EVENTS[Math.floor(Math.random() * EVENTS.length)];
+          setWorldEvent(ev.text);
+          ev.sfx?.();
+          if (ev.prey) preyBonusUntilRef.current = Date.now() + 90_000;
+          if (bannerTimer) window.clearTimeout(bannerTimer);
+          bannerTimer = window.setTimeout(() => setWorldEvent(null), 6500);
+        }
+        fire();
+      }, 90_000 + Math.random() * 150_000);
+    };
+    fire();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      if (bannerTimer) window.clearTimeout(bannerTimer);
+    };
+  }, [mode]);
+
   /** Context for the per-character dialogue engine (mode, timeline, world). */
   const dialogueCtx = useCallback((): DialogueContext => {
     const clan = myCat?.clan ?? "loner";
@@ -1088,6 +1189,7 @@ export default function Game() {
         talkedRef.current = nextTalked;
         setTalked(nextTalked);
         persistNpcMemory(npc.id);
+        reportDailyRef.current("social"); // §8: chatting with Clanmates counts
         // §1/§15: story completion counts the first line of the conversation —
         // STORY MODE ONLY. Online chats advance bonds and memories, never the
         // Into the Wild timeline.
@@ -1159,6 +1261,7 @@ export default function Game() {
         if (target.interact && lore[target.interact]) {
           const l = lore[target.interact];
           audio().playSfx("collect", { volume: 0.6, throttleMs: 700 }); // discovery/lore pickup
+          reportDailyRef.current("gather"); // §8: investigating markers counts
           setDialogue({ name: l.title, text: l.text });
           // §1/§15: lore markers advance story objectives in STORY MODE only —
           // in Online this is pure world flavor (discover + read, no timeline).
@@ -1486,6 +1589,7 @@ export default function Game() {
         y: posRef.current.y,
         text: trimmed,
       }).catch(() => undefined);
+      reportDailyRef.current("social"); // §8: chatting with Clanmates counts
     },
     [chatChannel, myCat, sendChat],
   );
@@ -1547,6 +1651,12 @@ export default function Game() {
                   achievements: player.achievements ?? [],
                   storyStep: player.storyStep ?? 0,
                   skills: player.skills ?? { hunt: 1, fight: 1, herb: 0 },
+                  // §27: title + the stats its earning rules derive from
+                  title: player.title,
+                  discoveredCount: player.discovered?.length ?? 0,
+                  questsCount: player.questsDone?.length ?? 0,
+                  npcTalkedCount: player.npcMemory?.talked?.length ?? 0,
+                  streak: player.dailies?.streak ?? 0,
                 }
               : null
           }
@@ -1571,6 +1681,7 @@ export default function Game() {
             return saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full) }).then(() => undefined);
           }}
           onSaveClan={(clan) => updateCat({ clan }).catch(() => undefined)}
+          onSaveTitle={(t) => setTitle({ title: t ?? undefined }).catch(() => undefined)}
           onSaveSettings={(s) => setGameSettings(s)}
         />
         <AnimatePresence>{phase === "loading" && <LoadingScreen mode={pendingMode ?? "open"} />}</AnimatePresence>
@@ -1690,6 +1801,73 @@ export default function Game() {
           </div>
         </div>
       )}
+
+      {/* §8/§71: "What can I do today?" — optional, minimizable activity panel
+          (open/free play). Every task is earned through real world actions. */}
+      {mode !== "story" && dailiesQ && (
+        <div className="pointer-events-none absolute left-3 top-14 z-20 w-60">
+          <div className="pointer-events-auto overflow-hidden rounded-2xl border border-border/60 bg-card/90 shadow-lg backdrop-blur-sm">
+            <button
+              onClick={() => setDailiesMin((m) => !m)}
+              className="flex w-full items-center gap-1.5 px-3 py-2 text-left transition-colors hover:bg-white/5"
+              aria-expanded={!dailiesMin}
+            >
+              <Sun className="size-3.5 text-amber-400" />
+              <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Today</span>
+              {dailiesQ.streak > 0 && (
+                <span className="text-[10px] font-semibold text-amber-300">{dailiesQ.streak}d streak</span>
+              )}
+              <span className="ml-auto text-[10px] text-muted-foreground">
+                {dailiesQ.tasks.filter((t) => t.claimed).length}/{dailiesQ.tasks.length}
+              </span>
+              <ChevronDown className={cn("size-3.5 text-muted-foreground transition-transform", !dailiesMin && "rotate-180")} />
+            </button>
+            <AnimatePresence>
+              {!dailiesMin && (
+                <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }} className="overflow-hidden">
+                  <div className="space-y-2 px-3 pb-2.5">
+                    {dailiesQ.tasks.map((t) => (
+                      <div key={t.id}>
+                        <div className="flex items-center gap-1">
+                          <p className={cn("text-[11px] font-semibold leading-tight", t.claimed ? "text-muted-foreground line-through" : "text-foreground")}>
+                            {t.label}
+                          </p>
+                          <span className="ml-auto text-[9px] font-semibold text-muted-foreground">
+                            {t.progress}/{t.target}
+                          </span>
+                        </div>
+                        {!t.claimed && <p className="text-[9.5px] leading-snug text-muted-foreground">{t.hint}</p>}
+                        <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className={cn("h-full rounded-full transition-all", t.claimed ? "bg-emerald-400" : "bg-amber-400")}
+                            style={{ width: `${Math.min(100, (t.progress / t.target) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      )}
+
+      {/* §9: rare world event — a quiet line of flavor, never blocking */}
+      <AnimatePresence>
+        {worldEvent && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="pointer-events-none absolute left-1/2 top-24 z-20 -translate-x-1/2"
+          >
+            <div className="rounded-full border border-white/15 bg-black/55 px-4 py-1.5 text-center text-[11px] font-medium italic text-white/85 shadow-lg backdrop-blur-sm">
+              {worldEvent}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Minimap — synced to the real world, with legend */}
       <div className="absolute right-3 top-14 z-20">
@@ -2061,6 +2239,20 @@ export default function Game() {
               setActiveUI("gameplay");
             }}
           />
+        )}
+      </AnimatePresence>
+
+      {/* §8: daily-complete micro-toast (subtle — the panel shows the state) */}
+      <AnimatePresence>
+        {dailyToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            className="pointer-events-none absolute bottom-24 left-1/2 z-30 -translate-x-1/2 rounded-full border border-amber-400/40 bg-[#1a1408]/90 px-4 py-1.5 text-[11px] font-bold text-amber-200 shadow-lg backdrop-blur-sm"
+          >
+            {dailyToast}
+          </motion.div>
         )}
       </AnimatePresence>
 

@@ -39,6 +39,7 @@ import { drawCat, type CatSkin } from "@/game/draw";
 import { MenuScene } from "@/game/menuScene";
 import { CatCustomizer, type CustomizerSave } from "./CatCustomizer";
 import type { CustomSkin as FullSkinT } from "@/game/catItems";
+import { TITLES, earnedTitleIds, titleLabel } from "@/game/titles";
 import { cn } from "@/lib/utils";
 
 export type GameMode = "story" | "open" | "free";
@@ -400,11 +401,16 @@ function CharacterScreen({
   onClose,
   onSave,
   onOpenCustomizer,
+  title,
+  onSetTitle,
 }: {
   player: MainMenuPlayer;
   onClose: () => void;
   onSave: (v: { name?: string; skin?: CatSkin; clan?: string }) => void;
   onOpenCustomizer: () => void;
+  /** §27: cosmetic title — chosen from EARNED titles only, saved instantly. */
+  title?: string;
+  onSetTitle?: (t: string | null) => void;
 }) {
   const [name, setName] = useState(player.name);
   const [clan, setClan] = useState(player.clan ?? "thunderclan");
@@ -467,6 +473,52 @@ function CharacterScreen({
               <p className="mt-1.5 text-[11px] text-white/50">
                 {CLANS.find((c) => c.id === clan)?.name} · {rankOf(player.xp, player.rank)}
               </p>
+              {title && titleLabel(title) && (
+                <p className="mt-0.5 text-[11px] font-semibold italic text-amber-200/90">
+                  “{titleLabel(title)}”
+                </p>
+              )}
+              {(() => {
+                const earned = earnedTitleIds({
+                  discoveredCount: player.discoveredCount,
+                  questsCount: player.questsCount,
+                  npcTalkedCount: player.npcTalkedCount,
+                  streak: player.streak,
+                  xp: player.xp,
+                  huntSkill: player.skills.hunt,
+                  storyStep: player.storyStep,
+                });
+                if (earned.length === 0) return null;
+                return (
+                  <div className="mt-2 w-full">
+                    <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-white/45">Title</p>
+                    <div className="mt-1 flex flex-wrap justify-center gap-1">
+                      {earned.map((id) => {
+                        const t = TITLES.find((x) => x.id === id);
+                        if (!t) return null;
+                        return (
+                          <button
+                            key={id}
+                            onClick={() => onSetTitle?.(title === id ? null : id)}
+                            title={t.how}
+                            className={cn(
+                              "rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors",
+                              title === id
+                                ? "bg-amber-400/25 text-amber-200 ring-1 ring-amber-300/40"
+                                : "bg-white/10 text-white/70 hover:bg-white/20",
+                            )}
+                          >
+                            {t.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-1 text-center text-[9px] text-white/35">
+                      Titles are earned by playing — explore, hunt, help the Clan.
+                    </p>
+                  </div>
+                );
+              })()}
             </div>
             <div className="w-full rounded-2xl border border-white/15 bg-black/40 p-3 text-xs text-white/75">
               <div className="flex items-center justify-between">
@@ -788,6 +840,13 @@ export interface MainMenuPlayer {
   achievements: string[];
   storyStep: number;
   skills: { hunt: number; fight: number; herb: number };
+  // §27: cosmetic title + the stats its earning rules derive from (optional —
+  // old callers/guests simply leave them out)
+  title?: string;
+  discoveredCount?: number;
+  questsCount?: number;
+  npcTalkedCount?: number;
+  streak?: number;
 }
 
 function SignOutControl() {
@@ -860,6 +919,7 @@ export default function MainMenu({
   onSaveName,
   onSaveAppearance,
   onSaveClan,
+  onSaveTitle,
   onSaveSettings,
   favorites = [],
   presets = [],
@@ -876,6 +936,8 @@ export default function MainMenu({
    * server write, so a failed save never looks like a saved one. */
   onPersistAppearance?: (s: { skin: CatSkin }) => Promise<void> | void;
   onSaveClan: (clan: string) => void;
+  /** §27: instant-save of the selected cosmetic title (null clears it) */
+  onSaveTitle?: (t: string | null) => void;
   onSaveSettings: (s: Settings) => void;
   favorites?: string[];
   presets?: { name: string; skin: FullSkinT }[];
@@ -978,6 +1040,8 @@ export default function MainMenu({
             }
             onClose={() => setScreen("menu")}
             onOpenCustomizer={() => setCustomizerOpen(true)}
+            title={player?.title}
+            onSetTitle={onSaveTitle}
             onSave={(v) => {
               if (v.name && (!player || v.name !== player.name)) onSaveName(v.name);
               // §38: appearance is NEVER saved from this screen — CatCustomizer
@@ -1060,6 +1124,9 @@ export default function MainMenu({
               <p className="text-xs text-white/65">
                 {clanName} · <span className="capitalize">{rank}</span>
               </p>
+              {player?.title && titleLabel(player.title) && (
+                <p className="text-[11px] italic text-amber-200/90">“{titleLabel(player.title)}”</p>
+              )}
               <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/10">
                 <div
                   className="h-full rounded-full bg-amber-400 transition-all"
