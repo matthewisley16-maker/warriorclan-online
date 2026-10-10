@@ -66,7 +66,18 @@ check(custom.includes("Math.max(150, Math.min(420"), "preview size clamps betwee
 check(custom.includes("md:flex-row"), "customizer main area stacks vertically on narrow windows, 3 columns on desktop");
 check(custom.includes('aria-label="Customization categories"'), "narrow windows get a category strip with the SAME full NAV list (nothing hidden)");
 check(custom.includes("md:hidden"), "category strip only appears when the sidebar is hidden (no duplicate nav)");
-check(custom.includes("max-h-[46dvh]"), "mobile preview column is height-bounded and scrolls internally");
+// the mobile preview column stays height-bounded AND shrinkable: the 46dvh cap
+// was a floor-less budget that let the ITEM panel next to it collapse to an
+// empty strip on short windows, so the cap is tighter and both columns can
+// shrink (see scripts/check-editor-items.ts)
+check(
+  custom.includes("max-h-[38dvh] min-h-[140px]") && custom.includes("shrink flex-col items-center overflow-y-auto"),
+  "mobile preview column is height-bounded, shrinkable and scrolls internally",
+);
+check(
+  custom.includes("min-h-[260px] w-full flex-1 flex-col") && custom.includes("md:min-h-0"),
+  "item panel keeps a height floor on narrow windows (never a blank strip)",
+);
 check(custom.includes("overflow-y-auto"), "item grid + presets scroll inside their panel (page/background/preview stay stable)");
 check((custom.match(/overflow-y-auto/g) ?? []).length >= 6, "every long list (nav, grid, morphs, presets, preview column) has its own scroll container");
 check(custom.includes('max-h-[130px] shrink-0 overflow-y-auto border-t border-white/10 px-3 py-2'), "presets strip wraps and scrolls within a bounded band (bottom bar stays visible)");

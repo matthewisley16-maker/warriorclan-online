@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Heart, RefreshCw, RotateCcw, Save, Search, Sparkles, Star, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Heart, PawPrint, RefreshCw, RotateCcw, Save, Search, Sparkles, Star, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { drawCat, type CatSkin } from "@/game/draw";
@@ -164,8 +164,25 @@ function useElementSize() {
 
 function ItemCardPreview({ item, baseSkin, tint }: { item: CatItem; baseSkin: CustomSkin; tint: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // §5: a thumbnail that cannot be drawn shows a fallback icon instead of an
+  // empty box — the item keeps its name, its selected state and its click.
+  const [drawFailed, setDrawFailed] = useState(false);
+  // Only on-screen cards run an animation loop: the "All Items" view holds the
+  // whole catalog (160 cards) and 160 always-on RAF loops would freeze the
+  // editor. Scrolling a card into view starts its loop, leaving it stops it.
+  const [inView, setInView] = useState(true);
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return; // animate as before
+    const io = new IntersectionObserver((entries) => setInView(entries.some((e) => e.isIntersecting)), {
+      rootMargin: "160px",
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   useRenderEffect(() => {
+    if (drawFailed || !inView) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -190,13 +207,31 @@ function ItemCardPreview({ item, baseSkin, tint }: { item: CatItem; baseSkin: Cu
         item.apply(skin);
       }
       skin.accColor = tint;
-      drawCat(ctx, skin as CatSkin, 45, 66, 1, "sit", t / 1000, 0);
+      try {
+        drawCat(ctx, skin as CatSkin, 45, 66, 1, "sit", t / 1000, 0);
+      } catch (err) {
+        // never silently blank: report the real error, then fall back to an icon
+        console.error("[customizer] item thumbnail failed to render", item.id, err);
+        setDrawFailed(true);
+        return;
+      }
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
     return () => cancelAnimationFrame(raf);
   });
 
+  if (drawFailed) {
+    return (
+      <div
+        className="flex h-[58px] w-[72px] items-center justify-center text-white/35"
+        role="img"
+        aria-label={`${item.name} preview unavailable`}
+      >
+        <PawPrint className="size-4" />
+      </div>
+    );
+  }
   return <canvas ref={canvasRef} width={72} height={58} className="h-[58px] w-[72px]" />;
 }
 
@@ -223,6 +258,79 @@ function PresetThumb({ skin, size = 64, pose = "sit" }: { skin: CustomSkin; size
     return () => cancelAnimationFrame(raf);
   });
   return <canvas ref={canvasRef} width={size} height={size} className="h-full w-full" />;
+}
+
+// ---------------------------------------------------------------------------
+// View model — pure and hook-free, so the panel's contents can be computed
+// (and asserted) without a browser, and so the component's hook order stays
+// stable.
+//
+// NOTE: these used to be `useMemo` calls sitting AFTER the component's
+// `if (!open) return null` guard. Any render where `open` was false then true
+// calls more hooks than the previous render, which makes React throw
+// "Rendered more hooks than during the previous render" and tear the editor
+// down. Pure helpers called from the render body have no such hazard.
+// ---------------------------------------------------------------------------
+
+export interface ViewOptions {
+  query: string;
+  category: string;
+  favorites: string[];
+  accSlot: AccessorySlot | "all";
+  accTheme?: AccTheme;
+}
+
+/** A selectable left-nav entry, with the number of items it will show. */
+export interface NavEntry {
+  id: string;
+  name: string;
+  count: number;
+}
+
+/**
+ * Every nav entry the editor actually offers: the real item categories that
+ * contain items (never an empty placeholder), the ACCESSORIES umbrella, the
+ * full catalog, morphs, WARRIORS presets and favorites.
+ */
+export function customizerNav(favoritesCount = 0): NavEntry[] {
+  const list: NavEntry[] = [{ id: "all", name: "All Items", count: CAT_ITEMS.length }];
+  for (const c of CATEGORIES) {
+    const count = CAT_ITEMS.filter((i) => i.category === c.id).length;
+    if (count > 0) list.push({ id: c.id, name: c.name, count });
+    // the umbrella view over all six accessory slots (ids differ per slot)
+    if (c.id === "paw") list.push({ id: "accessories", name: "Accessories", count: accessoriesFor("all").length });
+  }
+  list.push({ id: "morphs", name: "Morphs", count: CAT_MORPHS.length });
+  list.push({ id: "warriors", name: "Warriors Presets", count: CHARACTER_PRESETS.length });
+  list.push({ id: "favorites", name: "Favorites", count: favoritesCount });
+  return list;
+}
+
+/** True when a category renders the flat item grid (not morphs/presets). */
+export function isItemGridCategory(category: string): boolean {
+  return category !== "morphs" && category !== "warriors";
+}
+
+/** The exact items the panel shows for a view — the same call the UI makes. */
+export function itemsForView(o: ViewOptions): CatItem[] {
+  if (o.query.trim()) return searchItems(o.query, "all");
+  if (o.category === "all") return searchItems("", "all");
+  if (o.category === "favorites") return CAT_ITEMS.filter((i) => o.favorites.includes(i.id));
+  if (o.category === "accessories") return accessoriesFor(o.accSlot, o.accTheme);
+  return searchItems("", o.category as never);
+}
+
+/** Flat list of every item the WARRIORS preset library shows for a search. */
+export function characterListFor(query: string, group: PresetGroup | "all") {
+  const q = query.trim().toLowerCase();
+  return CHARACTER_PRESETS.filter(
+    (p) =>
+      (group === "all" || p.group === group) &&
+      (!q ||
+        p.displayName.toLowerCase().includes(q) ||
+        p.blurb.toLowerCase().includes(q) ||
+        p.tags.some((t) => t.includes(q))),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -264,8 +372,10 @@ export function CatCustomizer({
   const [pose, setPose] = useState<CatPose>("sit");
   const [accSlot, setAccSlot] = useState<AccessorySlot | "all">("all");
   const [accTheme, setAccTheme] = useState<AccTheme | undefined>(undefined);
-  const [favorites, setFavorites] = useState<string[]>(initialFavorites);
-  const [presets, setPresets] = useState<{ name: string; skin: CustomSkin }[]>(initialPresets);
+  // defensive: a caller that passes undefined must never crash the item panel
+  // (the grid reads `favorites.includes` on every render)
+  const [favorites, setFavorites] = useState<string[]>(() => (Array.isArray(initialFavorites) ? initialFavorites : []));
+  const [presets, setPresets] = useState<{ name: string; skin: CustomSkin }[]>(() => (Array.isArray(initialPresets) ? initialPresets : []));
   const [accColor, setAccColor] = useState<string>(initialSkin.accColor ?? "#d95f5f");
   const [selected, setSelected] = useState<CatItem | null>(null);
   const [presetConfirm, setPresetConfirm] = useState<{ name: string } | null>(null);
@@ -277,6 +387,9 @@ export function CatCustomizer({
   // §10: SAVE CAT awaits the real persistence before confirming — a failed
   // save keeps the editor open with the changes intact (never silently lost).
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  // §5: a view that cannot be computed must SAY so (with a Retry) instead of
+  // rendering a silently blank panel. `retryTick` re-runs the computation.
+  const [retryTick, setRetryTick] = useState(0);
 
   // scale-to-fit preview stage: min(available width, height/0.85) — uniform
   // scale only (proportions preserved), clamped so the cat stays readable on
@@ -286,43 +399,35 @@ export function CatCustomizer({
     Math.max(150, Math.min(420, (stageSize.w || 300) - 8, (stageSize.h || 300) / 0.85)),
   );
 
-  if (!open) return null;
-
   // Left-nav categories: only ones that actually contain items, plus the
   // ACCESSORIES umbrella (all six accessory slots in one browsable place),
   // the MORPHS view and the WARRIORS CHARACTER PRESETS library (§24).
-  const NAV = useMemo(() => {
-    const list: { id: string; name: string }[] = [];
-    for (const c of CATEGORIES) {
-      if (CAT_ITEMS.some((i) => i.category === c.id)) list.push({ id: c.id, name: c.name });
-      if (c.id === "paw") list.push({ id: "accessories", name: "Accessories" });
-    }
-    list.push({ id: "morphs", name: "Morphs" });
-    list.push({ id: "warriors", name: "Warriors Presets" });
-    list.push({ id: "favorites", name: "Favorites" });
-    return list;
-  }, []);
+  const nav = useMemo(() => customizerNav(favorites.length), [favorites.length]);
 
-  const items = useMemo(() => {
-    if (query.trim()) return searchItems(query, "all");
-    if (category === "favorites") return CAT_ITEMS.filter((i) => favorites.includes(i.id));
-    if (category === "accessories") return accessoriesFor(accSlot, accTheme);
-    if (category === "collars") return searchItems("", "collars" as never);
-    return searchItems("", category as never);
-  }, [query, category, favorites, accSlot, accTheme]);
+  // §3/§5: the grid is computed defensively — a failure is reported (and
+  // logged) instead of leaving the panel blank, and a later successful
+  // recompute clears it again (the error is DERIVED, never a stale flag).
+  const view = useMemo(() => {
+    try {
+      return { items: itemsForView({ query, category, favorites, accSlot, accTheme }), error: null as string | null };
+    } catch (err) {
+      console.error("[customizer] failed to build the item list", err);
+      return { items: [], error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [query, category, favorites, accSlot, accTheme, retryTick]);
+  const items = view.items;
+  const viewError = view.error;
 
   // §26: character library filtered by name search + group filter.
-  const charList = useMemo(() => {
-    const q = charQuery.trim().toLowerCase();
-    return CHARACTER_PRESETS.filter(
-      (p) =>
-        (charGroup === "all" || p.group === charGroup) &&
-        (!q ||
-          p.displayName.toLowerCase().includes(q) ||
-          p.blurb.toLowerCase().includes(q) ||
-          p.tags.some((t) => t.includes(q))),
-    );
-  }, [charQuery, charGroup]);
+  const charList = useMemo(() => characterListFor(charQuery, charGroup), [charQuery, charGroup]);
+
+  // The catalog is a local module, so it is either complete or absent — this
+  // distinguishes "nothing to show" from "the catalog did not load".
+  const catalogEmpty = CAT_ITEMS.length === 0;
+  const activeNav = nav.find((n) => n.id === category);
+
+  // --- the early return comes AFTER every hook (see the View model note) ---
+  if (!open) return null;
 
   const toggleFavorite = (id: string) => {
     setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
@@ -375,17 +480,14 @@ export function CatCustomizer({
         </div>
 
         {/* ---------- MAIN 3-COLUMN (stacks on narrow windows) ---------- */}
-        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {/* §3: on short/narrow windows the middle section scrolls as a whole —
+            the item panel keeps its own floor, so it can never be crushed to
+            an (empty-looking) zero-height strip. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
           {/* LEFT: categories (scrolls internally; full list preserved) */}
           <div className="hidden min-h-0 w-36 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-white/10 p-2 md:flex lg:w-44">
-            {NAV.map((c) => {
+            {nav.map((c) => {
               const active = !query && category === c.id;
-              const count =
-                c.id === "favorites"
-                  ? favorites.length
-                  : c.id === "accessories"
-                    ? accessoriesFor("all").length
-                    : CAT_ITEMS.filter((i) => i.category === c.id).length;
               return (
                 <button
                   key={c.id}
@@ -404,20 +506,20 @@ export function CatCustomizer({
                     {c.id === "favorites" && <Heart className={cn("size-3", favorites.length ? "fill-amber-300 text-amber-300" : "")} />}
                     {c.name}
                   </span>
-                  <span className="text-[10px] text-white/30">{count}</span>
+                  <span className="text-[10px] text-white/30">{c.count}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* category strip for narrow windows — the SAME NAV list, nothing
+          {/* category strip for narrow windows — the SAME nav list, nothing
               hidden: every category stays reachable (horizontally scrollable) */}
           <div
             role="tablist"
             aria-label="Customization categories"
             className="flex shrink-0 gap-1 overflow-x-auto border-b border-white/10 p-2 md:hidden"
           >
-            {NAV.map((c) => {
+            {nav.map((c) => {
               const active = !query && category === c.id;
               return (
                 <button
@@ -444,7 +546,7 @@ export function CatCustomizer({
               area. The stage keeps the cat fully visible (ears→tail); extra
               panels (details, colors, morph) scroll INSIDE this column so the
               title bars, presets strip and bottom bar never move. */}
-          <div className="flex max-h-[46dvh] min-h-0 min-w-0 shrink-0 flex-col items-center overflow-y-auto p-3 md:max-h-none md:flex-1 md:shrink">
+          <div className="flex max-h-[38dvh] min-h-[140px] min-w-0 shrink flex-col items-center overflow-y-auto p-3 md:max-h-none md:min-h-0 md:flex-1">
             <div ref={stageRef} className="flex min-h-[150px] w-full flex-1 items-center justify-center">
               <CatPreviewLarge skin={skin} pose={pose} size={previewSize} />
             </div>
@@ -631,14 +733,12 @@ export function CatCustomizer({
 
           {/* RIGHT: item grid (full-width below the preview on narrow windows,
               side panel on desktop; always scrolls internally) */}
-          <div className="flex min-h-0 w-full flex-1 flex-col border-t border-white/10 md:w-[360px] md:flex-none md:border-l md:border-t-0 lg:w-[400px]">
+          <div className="flex min-h-[260px] w-full flex-1 flex-col border-t border-white/10 md:min-h-0 md:w-[360px] md:flex-none md:border-l md:border-t-0 lg:w-[400px]">
             <div className="border-b border-white/10 px-3 py-1.5">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
                 {query
                   ? `Results for "${query}"`
-                  : category === "accessories"
-                    ? "Accessories"
-                    : (CATEGORIES.find((c) => c.id === category)?.name ?? "Items")}
+                  : (activeNav?.name ?? CATEGORIES.find((c) => c.id === category)?.name ?? "Items")}
                 <span className="ml-1.5 text-white/30">{items.length}</span>
               </p>
               {category === "accessories" && !query && (
@@ -690,8 +790,41 @@ export function CatCustomizer({
               )}
             </div>
             {/* --- MORPHS view (§22-23): every morph renders live on the cat --- */}
-            {category === "morphs" ? (
-              <div className="grid flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 max-[420px]:grid-cols-2 md:grid-cols-3">
+            {/* §5: never a silently blank panel — a failed view or an absent
+                catalog says so, with a Retry, instead of showing nothing. */}
+            {viewError ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+                <AlertTriangle className="size-5 text-amber-300" />
+                <p className="text-xs font-semibold text-white">The item list could not be built.</p>
+                <p className="max-w-[240px] break-words text-[10px] text-white/50">{viewError}</p>
+                <Button
+                  size="sm"
+                  onClick={() => setRetryTick((t) => t + 1)}
+                  className="h-7 rounded-lg bg-amber-400 px-3 text-[11px] font-bold text-[#0d160d] hover:bg-amber-300"
+                >
+                  <RefreshCw className="size-3" /> Retry
+                </Button>
+              </div>
+            ) : catalogEmpty ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+                <PawPrint className="size-5 text-white/40" />
+                <p className="text-xs font-semibold text-white">No items are available.</p>
+                <p className="max-w-[240px] text-[10px] text-white/50">
+                  The customization catalog loaded empty — this is not a search result. Reload the editor to try again.
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() => setRetryTick((t) => t + 1)}
+                  className="h-7 rounded-lg bg-amber-400 px-3 text-[11px] font-bold text-[#0d160d] hover:bg-amber-300"
+                >
+                  <RefreshCw className="size-3" /> Retry
+                </Button>
+              </div>
+            ) : category === "morphs" ? (
+              <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 max-[420px]:grid-cols-2 md:grid-cols-3">
+                {CAT_MORPHS.length === 0 && (
+                  <p className="col-span-full py-8 text-center text-xs text-white/40">No morphs are available.</p>
+                )}
                 {CAT_MORPHS.map((m) => {
                   const on = skin.morph === m.id;
                   const previewSkin: CustomSkin = { ...skin, ...m.skin, morph: m.id };
@@ -757,7 +890,7 @@ export function CatCustomizer({
                   ))}
                 </div>
               </div>
-              <div className="grid flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 md:grid-cols-3">
+              <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 md:grid-cols-3">
                 {charList.map((p) => {
                   const previewSkin: CustomSkin = { ...skin, ...p.skin, presetId: p.id, morph: undefined };
                   return (
@@ -790,7 +923,7 @@ export function CatCustomizer({
               </div>
             </div>
             ) : (
-            <div className="grid flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 max-[420px]:grid-cols-2 md:grid-cols-3">
+            <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto p-3 max-[420px]:grid-cols-2 md:grid-cols-3">
               {items.map((item) => {
                 const on = item.isOn(skin);
                 const fav = favorites.includes(item.id);
@@ -839,7 +972,11 @@ export function CatCustomizer({
               })}
               {items.length === 0 && (
                 <p className="col-span-full py-8 text-center text-xs text-white/40">
-                  {category === "favorites" ? "No favorites yet — tap the heart on any item." : "Nothing matches that search."}
+                  {query.trim()
+                    ? `No items match "${query.trim()}". Clear the search to see the catalog again.`
+                    : category === "favorites"
+                      ? "No favorites yet — tap the heart on any item."
+                      : `No items are available in ${activeNav?.name ?? "this category"}.`}
                 </p>
               )}
             </div>
