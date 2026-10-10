@@ -86,6 +86,12 @@ export function fullSkin(
     ...(a.accColors && Object.keys(a.accColors).length
       ? { accColors: Object.fromEntries(Object.entries(a.accColors).filter(([, v]) => typeof v === "string")) as Record<string, string> }
       : {}),
+    // §MULTIPLAYER: the morph/preset identity. These were dropped here, so a
+    // saved morph/preset look lost its tag (and the change was invisible to
+    // the appearance fingerprint) — every supported field must ride along so
+    // the FULL appearance synchronizes.
+    ...(a.morph ? { morph: a.morph } : {}),
+    ...(a.presetId ? { presetId: a.presetId } : {}),
   };
 }
 

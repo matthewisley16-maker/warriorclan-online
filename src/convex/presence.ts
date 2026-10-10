@@ -1,7 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { appearance } from "../game/saveShared";
+import { appearance, nextPresenceAppearance } from "../game/saveShared";
 
 const STALE_MS = 20_000;
 
@@ -84,9 +84,10 @@ export const heartbeat = mutation({
     inputSequence: v.optional(v.number()),
     movementState: v.optional(v.string()),
     animationState: v.optional(v.string()),
-    // §12/§13: fingerprint of the appearance riding this packet. When it
-    // matches the stored row the appearance payload is SKIPPED — identical
-    // coats are never re-broadcast at the 300ms movement cadence.
+    // §MULTIPLAYER: the client's local fingerprint of the look it is riding
+    // with. Accepted for protocol compatibility (and for older clients), but
+    // NEVER trusted as the row's stored version — the server derives that from
+    // the payload's content so a stale/hostile number can't overwrite it.
     appearanceVersion: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -130,17 +131,13 @@ export const heartbeat = mutation({
     }
 
     if (existing) {
-      // §12/§14: only re-broadcast appearance when its fingerprint CHANGED
-      // (or it is genuinely missing on a legacy row) — identical looks are
-      // never written at the movement cadence. A packet without an appearance
-      // NEVER unsets the stored one.
-      const appearanceChanged =
-        args.appearance !== undefined &&
-        !(
-          args.appearanceVersion !== undefined &&
-          existing.appearanceVersion === args.appearanceVersion &&
-          existing.appearance
-        );
+      // §12/§14/§MULTIPLAYER: the stored look and its version move TOGETHER.
+      // A packet that rides with only a version number can neither advance the
+      // row nor be trusted over the payload's actual content, and an identical
+      // coat is never rewritten at the movement cadence. (The old form trusted
+      // the client's number, so a saved re-skin could mark the row "already
+      // current" while the old appearance sat in it — remotes stayed stale.)
+      const look = nextPresenceAppearance(existing, args.appearance, now);
       await ctx.db.patch(existing._id, {
         x,
         y,
@@ -154,18 +151,9 @@ export const heartbeat = mutation({
         catName: args.catName,
         clan: args.clan,
         rank: args.rank,
-        // §12/§14: only re-broadcast appearance when its fingerprint CHANGED
-        // (or it is genuinely missing on a legacy row) — identical looks are
-        // never written at the movement cadence.
-        appearance:
-          args.appearance === undefined
-            ? existing.appearance
-            : appearanceChanged
-              ? args.appearance
-              : existing.appearance,
-        appearanceVersion:
-          args.appearanceVersion ??
-          (appearanceChanged ? (existing.appearanceVersion ?? 0) + 1 : existing.appearanceVersion),
+        // §MULTIPLAYER: server-authoritative look — see nextPresenceAppearance.
+        appearance: look.appearance,
+        appearanceVersion: look.appearanceVersion,
         inputSequence: args.inputSequence ?? existing.inputSequence,
         movementState,
         animationState,
@@ -188,6 +176,11 @@ export const heartbeat = mutation({
     // guaranteed non-empty: the players row always carries an appearance; the
     // literal default cat covers the (never expected) no-row edge case
     const stored = appToStore ?? { fur: "#d96b2f", furDark: "#a34a1a", eye: "#4fae6e", furLength: 1, size: 1, scar: false };
+    // §MULTIPLAYER: a FRESH row's version starts at the server clock — any
+    // version a remote client cached for this user in an earlier session is
+    // numerically older, so a returning/rejoining player's look is always
+    // re-applied at least once instead of being skipped as "already seen".
+    const freshLook = nextPresenceAppearance(null, stored, now);
     const id = await ctx.db.insert("presence", {
       userId,
       x,
@@ -203,7 +196,7 @@ export const heartbeat = mutation({
       clan: args.clan,
       rank: args.rank,
       appearance: stored,
-      appearanceVersion: args.appearanceVersion ?? (appToStore ? 1 : undefined),
+      appearanceVersion: freshLook.appearanceVersion,
       inputSequence: args.inputSequence,
       movementState,
       animationState,
@@ -246,6 +239,32 @@ export const listOnline = query({
         stateVersion: r.stateVersion,
         lastProcessedInput: r.inputSequence,
       }));
+  },
+});
+
+/**
+ * §9: developer diagnostic — my OWN presence row, so the appearance-sync
+ * readout can compare the locally saved version, the server's authoritative
+ * version and each remote client's applied version. Returns null when the row
+ * does not exist. Read-only, no side effects.
+ */
+export const myPresence = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return null;
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!row) return null;
+    return {
+      appearanceVersion: row.appearanceVersion,
+      appearance: row.appearance,
+      stateVersion: row.stateVersion,
+      serverTick: row.serverTick,
+      updatedAt: row.updatedAt,
+    };
   },
 });
 

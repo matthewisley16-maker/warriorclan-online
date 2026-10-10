@@ -11,7 +11,12 @@ kept in sync) → sent on every multiplayer heartbeat (`presence.appearance`).
 Fields: `fur, furDark, eye, chest?, pattern?, patternIntensity?, furLength,
 furStyle? ("thick"|"scruffy"|"tufted"), tail?, ears?, size, scar, eye2? (hetero),
 nose?, face?, markings?: string[], scars?: string[], acc?: slot→item,
-accColor?`.
+accColor?, accColors?: slot→tint, morph?, presetId?`.
+
+`fullSkin` (`src/pages/gameUi.tsx`) is the ONE normalizer: every supported field
+must survive it, or the field is neither saved nor synchronized (it was
+dropping `morph`/`presetId`), and `appearanceVersion` must react to that field
+too, or the edit is never broadcast at all (it ignored the classic `scar`).
 
 ## Catalog
 ~100 items in `catItems.ts`. Categories: FUR (8 styles), COLORS (22),
@@ -38,3 +43,33 @@ anchor poses, and the fully-loaded cat renders in all 21 poses.
 - Multiplayer: appearance rides the existing heartbeat → presence → remote
   watch; no extra frames are synchronized.
 - Suite: `bun scripts/check-custom.ts` (~90 checks).
+
+## Multiplayer skin sync (invariants)
+`appearanceVersion` is a CONTENT fingerprint of the look; the presence row's
+copy of it is derived by the SERVER (`nextPresenceAppearance`, `saveShared.ts`)
+and never taken from the client's number.
+
+1. **The look and its version move together.** Only a packet carrying an
+   appearance payload can change either. A version-only packet is inert — the
+   old failure mode was a client marking a saved look as "already broadcast",
+   so no packet ever carried it while the row kept the previous coat.
+2. **The send gate is invalidated on a confirmed save** (`sentAppearanceVerRef
+   = null`), never primed with the new fingerprint: the next packet (≤300ms)
+   must ride with the full new appearance.
+3. **Both cadences fingerprint the NORMALIZED skin.** Taking the raw save in the
+   300ms path made it disagree with the 5s heartbeat, so they re-broadcast at
+   each other's cadence forever.
+4. **A real change advances the version monotonically; a fresh row starts from
+   the server clock** so a returning player's look is always numerically newer
+   than anything a remote cached, and can never be skipped as "already seen".
+5. **Remote swaps are appearance-only**: the engine keyes cats by user id and
+   draws `r.appearance` live, so a swap preserves position, facing, pose,
+   interpolation buffer and object identity (no duplicate, flicker or
+   movement reset).
+6. Cat sprites are drawn procedurally (no image/texture cache to invalidate),
+   so there is no async asset load to wait on.
+
+Dev readout: `?mpdebug=1` (or `localStorage wcrpg-mp-debug=1`) renders the
+local fingerprint, the last broadcast fingerprint, the server row's version,
+the last save result and each remote's applied version — off for players.
+Suite: `bun scripts/check-skin-sync.ts` (20 checks incl. the stranding control).

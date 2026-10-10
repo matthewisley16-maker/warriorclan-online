@@ -62,15 +62,18 @@ export type AppearanceT = {
 
 /**
  * Bump helper for appearanceVersion (§13): a compact structural fingerprint of
- * the visual fields. The server stores it on the players row and the presence
- * row, so stale appearance updates can never overwrite newer ones and remotes
- * only re-render when the look actually changed.
+ * EVERY visual field. It is the client's change detector two ways: it tells the
+ * send gate when a new look must ride a packet, and the server uses it to
+ * compare the payload it received against the look it already stores (the
+ * presence row's version is derived from that comparison, never taken from the
+ * client's number). Add a field here whenever a customizable field is added, or
+ * editing only that field would never be broadcast at all.
  */
 export function appearanceVersion(a?: {
   fur?: string; furDark?: string; eye?: string; eye2?: string; chest?: string;
   pattern?: string; furLength?: number; furStyle?: string; tail?: string;
   ears?: string; size?: number; nose?: string; face?: string;
-  patternIntensity?: number; markings?: string[]; scars?: string[];
+  patternIntensity?: number; markings?: string[]; scars?: string[]; scar?: boolean;
   acc?: Record<string, string>; accColor?: string; accColors?: Record<string, string>;
   morph?: string; presetId?: string;
 } | null): number {
@@ -83,10 +86,60 @@ export function appearanceVersion(a?: {
     Math.round((a.size ?? 1) * 100), a.nose ?? "", a.face ?? "",
     a.patternIntensity !== undefined ? Math.round(a.patternIntensity * 100) : "",
     (a.markings ?? []).slice().sort().join(","), (a.scars ?? []).slice().sort().join(","),
+    // the classic single-scar toggle: without this, flipping ONLY the scar
+    // looked like "no change" to the send gate, so the edit was never
+    // broadcast to other players at all
+    a.scar ? 1 : 0,
     acc, accColors, a.accColor ?? "", a.morph ?? "", a.presetId ?? "",
   ].join("|")
     .split("")
     .reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 5381) >>> 0;
+}
+
+/**
+ * §MULTIPLAYER: authoritative merge for ONE presence row's look.
+ *
+ * The stored appearance and its version travel TOGETHER, atomically:
+ *   - a packet carrying no payload changes NEITHER field, so a bare version
+ *     number can never advance (and thereby strand) the stored look — the
+ *     exact bug where a saved re-skin never reached other players
+ *   - a payload is compared by CONTENT, so re-sending an identical coat is a
+ *     no-op (no version churn, no pointless remote re-renders at the 300ms
+ *     movement cadence)
+ *   - a real change advances the version MONOTONICALLY (server-owned); a
+ *     fresh row starts from the server clock so a returning player's look is
+ *     always numerically newer than anything a remote client cached before
+ */
+export function nextPresenceAppearance<T>(
+  existing: { appearance?: T; appearanceVersion?: number } | null | undefined,
+  incoming: T | undefined,
+  serverNow: number,
+): { appearance: T | undefined; appearanceVersion: number | undefined; changed: boolean } {
+  const prevApp = existing?.appearance;
+  const prevVer = existing?.appearanceVersion;
+  if (incoming === undefined) {
+    // no payload: the look is untouched. A row that has no version yet (created
+    // before versioning) is given the server clock ONCE so it has a defined
+    // baseline — never a bump of an existing version.
+    return {
+      appearance: prevApp,
+      appearanceVersion: prevVer ?? (prevApp !== undefined ? serverNow : undefined),
+      changed: false,
+    };
+  }
+  const changed = appearanceVersion(incoming as never) !== appearanceVersion(prevApp as never);
+  if (!changed) {
+    return {
+      appearance: prevApp ?? incoming,
+      appearanceVersion: prevVer ?? serverNow,
+      changed: false,
+    };
+  }
+  return {
+    appearance: incoming,
+    appearanceVersion: prevVer !== undefined ? prevVer + 1 : serverNow,
+    changed: true,
+  };
 }
 
 export const CLAN_SPAWNS: Record<string, { x: number; y: number }> = {

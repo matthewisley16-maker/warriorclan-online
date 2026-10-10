@@ -282,6 +282,8 @@ export default function Game() {
   // appearance object only rides packets when this CHANGES (or on rare
   // keepalive beacons) — identical looks are never re-uploaded at 300ms.
   const sentAppearanceVerRef = useRef<number | null>(null);
+  // §9: dev-only diagnostic — result of the last SAVE CAT appearance write
+  const lastSkinSaveRef = useRef<{ at: number; ok: boolean; ver?: number } | null>(null);
   // --- survival stats (hunger/energy/health) ---
   const [stats, setStats] = useState({ hunger: 80, energy: 90, health: 100 });
   const statsRef = useRef(stats);
@@ -573,7 +575,9 @@ export default function Game() {
         // drift beacon) — keepalives stay tiny; looks are never re-uploaded
         // for no reason. Name/clan read live so renames reach remotes too.
         const rideAlong = ver !== sentAppearanceVerRef.current || Math.random() < 0.2;
-        sentAppearanceVerRef.current = ver;
+        // the ref tracks the version of the last look actually BROADCAST —
+        // never a look that was merely computed
+        if (rideAlong) sentAppearanceVerRef.current = ver;
         heartbeat({
           inputSequence: ++inputSeq.current,
           x: p.x,
@@ -626,7 +630,12 @@ export default function Game() {
         // §4: movement packets carry ONLY the version number; the full
         // appearance object rides along exclusively when it CHANGED — the
         // 300ms stream stays lean (movement + states + a few bytes).
-        const ver = appearanceVersion(cat.appearance as Parameters<typeof appearanceVersion>[0]);
+        // NOTE: the fingerprint is taken from the NORMALIZED skin, exactly like
+        // the 5s heartbeat — reading the raw save here made the two intervals
+        // disagree, so they re-broadcast the appearance at each other's cadence
+        // and the send-gate never settled.
+        const full = fullSkin(cat.appearance);
+        const ver = appearanceVersion(full);
         const ride = ver !== sentAppearanceVerRef.current;
         if (ride) sentAppearanceVerRef.current = ver;
         heartbeat({
@@ -645,7 +654,7 @@ export default function Game() {
           clan: cat.clan,
           rank: "apprentice",
           appearanceVersion: ver,
-          ...(ride ? { appearance: fullSkin(cat.appearance) } : {}),
+          ...(ride ? { appearance: full } : {}),
         }).catch(() => undefined);
       }, 300);
     }
@@ -1597,6 +1606,39 @@ export default function Game() {
     return () => window.clearInterval(iv);
   }, [storyDebug, phase, mode, storyStep]);
 
+  // §9: dev-only appearance-sync diagnostics — OFF for players; enable with
+  // ?mpdebug=1 or localStorage wcrpg-mp-debug=1. Renders the four links of the
+  // skin pipeline (local fingerprint → last BROADCAST fingerprint → the
+  // server's authoritative row → each remote client's applied version) so a
+  // break can be located instead of guessed at.
+  const [mpDebug, setMpDebug] = useState(false);
+  const [mpRows, setMpRows] = useState<{ uid: string; name: string; applied?: number }[]>([]);
+  useEffect(() => {
+    try {
+      setMpDebug(
+        new URLSearchParams(window.location.search).has("mpdebug") ||
+          localStorage.getItem("wcrpg-mp-debug") === "1",
+      );
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
+  const myPresenceRow = useQuery(api.presence.myPresence, mpDebug ? {} : "skip");
+  useEffect(() => {
+    if (!mpDebug || phase !== "playing" || mode !== "open") return;
+    const iv = window.setInterval(() => {
+      const rows = remotesRaw as RemotePlayer[] | undefined;
+      setMpRows(
+        [...lastRemoteAppearanceVerRef.current.entries()].map(([uid, applied]) => ({
+          uid,
+          name: rows?.find((r) => r.userId === uid)?.catName ?? "(gone)",
+          applied,
+        })),
+      );
+    }, 600);
+    return () => window.clearInterval(iv);
+  }, [mpDebug, phase, mode, remotesRaw]);
+
   // story: visit objectives trigger on area change
   useEffect(() => {
     if (mode !== "story" || phase !== "playing") return;
@@ -1894,6 +1936,35 @@ export default function Game() {
             <p key={r.npcId}>
               {r.npcId}: {r.mode}
               {r.label ? ` · ${r.label}` : ""} · {r.arrived ? "arrived" : "TRAVELING"} · {r.pose} · f{r.facing}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {/* §9: dev-only skin-sync readout — never rendered without the flag */}
+      {mpDebug && mode === "open" && (
+        <div className="pointer-events-none absolute bottom-2 left-2 z-40 max-w-[330px] rounded-lg border border-cyan-400/40 bg-black/85 p-2 font-mono text-[9px] leading-tight text-cyan-100 shadow-xl">
+          <p className="font-bold uppercase tracking-wider">Skin sync (dev)</p>
+          <p>
+            me: {myCat?.name ?? "-"} · id {myUserId ? String(myUserId).slice(0, 8) : "?"}
+          </p>
+          <p>
+            local: {myCat ? appearanceVersion(fullSkin(myCat.appearance)) : "-"} · sent:{" "}
+            {sentAppearanceVerRef.current ?? "PENDING (next packet carries it)"}
+          </p>
+          <p>
+            server row: {myPresenceRow ? `v${myPresenceRow.appearanceVersion ?? "none"}` : "none"}
+          </p>
+          <p>
+            save: {lastSkinSaveRef.current
+              ? `${lastSkinSaveRef.current.ok ? "ok" : "FAILED"} ${lastSkinSaveRef.current.ver !== undefined ? `v${lastSkinSaveRef.current.ver}` : ""} @${new Date(lastSkinSaveRef.current.at).toLocaleTimeString()}`
+              : "—"}
+          </p>
+          <p>sprites: procedural (no async asset load)</p>
+          {mpRows.length === 0 && <p>remotes: none</p>}
+          {mpRows.map((r) => (
+            <p key={r.uid}>
+              {r.name} ({r.uid.slice(0, 6)}): applied {r.applied ?? "-"}
             </p>
           ))}
         </div>
@@ -2418,12 +2489,32 @@ export default function Game() {
               // with NO respawn/teleport, and the next sync packet broadcasts
               // it because the fingerprint changed.
               const full = fullSkin(skin);
-              return saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full), catName: myCat.name }).then(() => {
-                sentAppearanceVerRef.current = appearanceVersion(full); // next 300ms packet rides the new look
-                const g = gameRef.current;
-                if (g) g.mySkin = { ...full, furDark: full.furDark || "#5a3a20" };
-                setMyCat((c) => (c ? { ...c, appearance: full } : c));
-              });
+              return saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full), catName: myCat.name }).then(
+                () => {
+                  // §9: dev diagnostic — the account write really landed
+                  lastSkinSaveRef.current = { at: Date.now(), ok: true, ver: appearanceVersion(full) };
+                  // §MULTIPLAYER: INVALIDATE the send-gate instead of marking the
+                  // new look as already sent. Pretending it had been broadcast
+                  // (the old line) meant no packet ever carried the payload, so
+                  // the presence row kept the previous coat and every other
+                  // player stayed on the old skin. Null forces the very next
+                  // packet (≤300ms) to ride with the full new appearance.
+                  sentAppearanceVerRef.current = null;
+                  const g = gameRef.current;
+                  if (g) g.mySkin = { ...full, furDark: full.furDark || "#5a3a20" };
+                  // update the network ref in the SAME tick as the invalidation:
+                  // the very next packet (≤300ms) already carries the new look,
+                  // so the old coat is never re-broadcast even once
+                  const nextCat = { name: myCat.name, clan: myCat.clan, appearance: full };
+                  myCatRef.current = nextCat;
+                  setMyCat(nextCat);
+                },
+                (e: unknown) => {
+                  // the customizer keeps the editor open with "Retry save"
+                  lastSkinSaveRef.current = { at: Date.now(), ok: false };
+                  throw e;
+                },
+              );
             }}
             onSave={(v: CatClanSave) => {
               if (v.name && v.name !== myCat.name) {

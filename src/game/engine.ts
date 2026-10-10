@@ -201,8 +201,10 @@ export interface RemotePlayer {
   movementState?: MovementState;
   /** synchronized animation state: idle/walk/crouch/sit/... (never frames) */
   animationState?: CatPose;
-  /** §12: fingerprint of this remote's appearance — remotes re-render the look
-   * only when the version CHANGES, so identical looks never trigger redraws */
+  /** §12/§MULTIPLAYER: SERVER-owned version of this remote's stored look. It
+   * advances only when that look really changes (never from a client-supplied
+   * number), so a remote re-renders exactly once per confirmed skin update and
+   * identical looks never trigger redraws. */
   appearanceVersion?: number;
   // server authority metadata (ordering + staleness rejection)
   serverTick?: number;
