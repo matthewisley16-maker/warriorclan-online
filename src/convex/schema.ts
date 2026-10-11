@@ -206,6 +206,41 @@ const schema = defineSchema(
       leaderUserId: v.optional(v.id("users")),
     }).index("by_world_id", ["worldId"]),
 
+    // §30/§31: server-authoritative ONLINE NPC world state — ONE row per
+    // world holding the latest validated snapshot of every NPC plus the live
+    // conversation claims. Story Mode never writes here.
+    npcWorldState: defineTable({
+      worldId: v.string(),
+      authorityUserId: v.optional(v.id("users")),
+      authorityAt: v.number(),
+      serverTick: v.number(),
+      seq: v.number(),
+      stateVersion: v.number(),
+      npcs: v.array(
+        v.object({
+          id: v.string(),
+          x: v.number(),
+          y: v.number(),
+          facing: v.number(),
+          pose: v.string(),
+          ai: v.string(),
+          activity: v.string(),
+          movement: v.string(),
+          denId: v.optional(v.union(v.string(), v.null())),
+          convoWith: v.optional(v.union(v.string(), v.null())),
+          seq: v.number(),
+        }),
+      ),
+      busy: v.array(
+        v.object({
+          npcId: v.string(),
+          name: v.string(),
+          userId: v.id("users"),
+          until: v.number(),
+        }),
+      ),
+    }).index("by_world_id", ["worldId"]),
+
     // Direct messages — visible ONLY to the two participants.
     dmMessages: defineTable({
       fromUserId: v.id("users"),

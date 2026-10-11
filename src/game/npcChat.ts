@@ -45,6 +45,193 @@ export interface ChatMsg {
 }
 
 // ---------------------------------------------------------------------------
+// §26/§28: AI reply safety filter + request lifecycle
+//
+// The optional server AI layer may REPLACE the deterministic local line, so
+// every generated line is validated here first. A rejected line is never
+// shown: the caller keeps the local in-character reply (which is safe by
+// construction), so a bad generation degrades to "slightly less rich", never
+// to out-of-character text.
+// ---------------------------------------------------------------------------
+
+/** Reasons a generated line is discarded (exported for tests/diagnostics). */
+export const REPLY_REJECT_PATTERNS: [string, RegExp][] = [
+  // out-of-character / assistant voice (§40)
+  ["ooc", /\bas an (ai|assistant|language model)\b|\blanguage model\b|\bi'?m an? (ai|assistant)\b|\bhow can i (help|assist)\b|\bi understand your concern\b|\binteresting question\b|\blet me know if\b|\bfeel free to\b|\bi cannot (help|assist|discuss)\b/i],
+  // the machinery behind the curtain (§26)
+  ["meta", /\bsystem prompt\b|\bprompt\b|\bjson\b|\bapi\b|\bdeveloper\b|\bdebug\b|\bopenai\b|\bgpt\b|\bmodel\b.*\b(trained|weights)\b|\bvideo ?game\b|\bthe game\b|\bnovel\b|\bchapter \d+\b|\bauthor\b|\bfan-?made\b|\broleplay\b/i],
+  // a leaked transcript turn
+  ["role-leak", /^\s*(assistant|system|user|player|npc)\s*:/i],
+  // code / markup leaking into dialogue
+  ["markup", /```|<\|.*\|>|\{\s*"|\]\s*\}/],
+  // claims of a human/AI identity (§17)
+  ["identity", /\bi am (a )?(human|person|user|bot|program)\b|\byour (human|real) (friend|assistant)\b/i],
+  // future-book canon leaks (§19/§46)
+  ["spoiler", /\bwill (die|be killed|be exiled|become leader)\b|\bthe prophecy (says|means|will)\b|\bin the next book\b|\blater in the series\b/i],
+];
+
+/** Max length of a single in-world line (the server caps generation at 240). */
+export const NPC_REPLY_MAX_CHARS = 240;
+/** Spec §25: 1–4 short dialogue bubbles, never an essay. */
+export const NPC_REPLY_MAX_SENTENCES = 4;
+
+/**
+ * Validate a generated reply against the character + the spec's content
+ * rules. Returns the cleaned line when it may be shown; `ok:false` means the
+ * caller must keep the safe local reply instead.
+ */
+export function validateNpcReply(
+  raw: string,
+  p?: CharacterProfile,
+): { ok: boolean; text: string; reason?: string } {
+  let text = (raw ?? "").replace(/\r/g, "").trim();
+  if (!text) return { ok: false, text: "", reason: "empty" };
+  // strip wrapping quotes / leading list markers — a cat does not bullet-point
+  text = text.replace(/^[>\-*\u2022]\s+/, "").replace(/^["\u201c\u2018']([\s\S]*)["\u201d\u2019']$/, "$1").trim();
+  if (!text) return { ok: false, text: "", reason: "empty" };
+
+  for (const [reason, re] of REPLY_REJECT_PATTERNS) {
+    if (re.test(text)) return { ok: false, text: "", reason };
+  }
+  // the cat must never speak ABOUT the player's own name/lore as if human
+  if (p) {
+    const ooc = new RegExp(`\\bas ${p.name}\\b.*\\b(ai|assistant|model)\\b`, "i");
+    if (ooc.test(text)) return { ok: false, text: "", reason: "ooc" };
+  }
+
+  // normalise whitespace (bubbles are single lines) and cap the essay (§25)
+  text = text.replace(/\s*\n+\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+  const sentences = text.match(/[^.!?]+[.!?]*/g) ?? [text];
+  if (sentences.length > NPC_REPLY_MAX_SENTENCES) {
+    text = sentences.slice(0, NPC_REPLY_MAX_SENTENCES).join("").trim();
+  }
+  if (text.length > NPC_REPLY_MAX_CHARS) {
+    const cut = text.slice(0, NPC_REPLY_MAX_CHARS);
+    const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+    text = (lastStop > 40 ? cut.slice(0, lastStop + 1) : cut).trim();
+    if (!text) return { ok: false, text: "", reason: "too-long" };
+  }
+  if (text.length < 2) return { ok: false, text: "", reason: "too-short" };
+  return { ok: true, text };
+}
+
+/** Fallback line shown when generation keeps failing (§27) — in character. */
+export function npcAiTroubleLine(p?: CharacterProfile): string {
+  if (!p) return "...";
+  const bank: Record<string, string[]> = {
+    warm: ["Sorry — the wind took my words. Say that again?", "Hm. My ears are full of rain. What was that?"],
+    curious: ["What? Speak up, the river's loud today.", "Say that again — I lost it in the leaves."],
+    wary: ["...You'll have to say that again. Slowly.", "Mumbling won't get you answers."],
+    hostile: ["Speak clearly or don't speak.", "I'm not repeating myself for you."],
+    gruff: ["My old ears caught none of that. Again.", "Hmph. Try again, louder."],
+  };
+  const stance = p.voice?.stance ?? "warm";
+  const list = bank[stance] ?? bank.warm;
+  return list[0];
+}
+
+/**
+ * §28: the AI request lifecycle — one in-flight request per conversation,
+ * monotonic request ids (a stale response can never land), a response
+ * timeout, a retry limit, a send cooldown and a per-conversation call cap.
+ * Pure and clock-injected so it is directly testable.
+ */
+export interface ChatGateOptions {
+  timeoutMs?: number;
+  cooldownMs?: number;
+  maxPerConversation?: number;
+  /** how many RETRIES are permitted after a failed/timed-out generation */
+  retryLimit?: number;
+}
+
+export interface ChatGate {
+  begin(now: number): { id: number } | null;
+  isCurrent(id: number): boolean;
+  timedOut(id: number, now: number): boolean;
+  settle(id: number, ok: boolean, now: number): void;
+  cancel(): void;
+  reset(): void;
+  readonly inFlight: boolean;
+  readonly used: number;
+  readonly failures: number;
+  readonly exhausted: boolean;
+  retryAllowed(): boolean;
+  cooldownUntil: number;
+}
+
+export function createChatGate(opts: ChatGateOptions = {}): ChatGate {
+  const timeoutMs = opts.timeoutMs ?? 12_000;
+  const cooldownMs = opts.cooldownMs ?? 700;
+  const maxPerConversation = opts.maxPerConversation ?? 24;
+  const retryLimit = opts.retryLimit ?? 1;
+  let seq = 0;
+  let inFlight: number | null = null;
+  let startedAt = 0;
+  let used = 0;
+  let failures = 0;
+  let cooldownUntil = 0;
+  return {
+    begin(now) {
+      if (inFlight !== null) return null; // one request at a time — no duplicates
+      if (used >= maxPerConversation) return null; // conversation cap (rate limit)
+      if (now < cooldownUntil) return null; // send cooldown
+      seq += 1;
+      inFlight = seq;
+      startedAt = now;
+      used += 1;
+      return { id: seq };
+    },
+    isCurrent(id) {
+      return inFlight === id;
+    },
+    timedOut(id, now) {
+      return inFlight === id && now - startedAt >= timeoutMs;
+    },
+    settle(id, ok, now) {
+      if (inFlight !== id) return; // a stale response never changes state
+      inFlight = null;
+      startedAt = 0;
+      cooldownUntil = now + cooldownMs;
+      if (!ok) failures += 1;
+    },
+    cancel() {
+      inFlight = null;
+      startedAt = 0;
+    },
+    reset() {
+      inFlight = null;
+      startedAt = 0;
+      used = 0;
+      failures = 0;
+      cooldownUntil = 0;
+    },
+    get inFlight() {
+      return inFlight !== null;
+    },
+    get used() {
+      return used;
+    },
+    get failures() {
+      return failures;
+    },
+    get exhausted() {
+      return used >= maxPerConversation;
+    },
+    retryAllowed() {
+      // retryLimit counts the RETRIES permitted, so one failure still allows
+      // exactly one retry at the default setting (and never a third attempt)
+      return failures <= retryLimit;
+    },
+    get cooldownUntil() {
+      return cooldownUntil;
+    },
+    set cooldownUntil(v: number) {
+      cooldownUntil = v;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Topic classification (fast keyword buckets, no AI needed)
 // ---------------------------------------------------------------------------
 

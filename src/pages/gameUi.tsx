@@ -24,7 +24,8 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { GameCanvas, WeatherKind } from "@/game/engine";
-import { areas } from "@/game/world";
+import { areas, npcs, type NPCDef } from "@/game/world";
+import { drawCat } from "@/game/draw";
 import { storySteps } from "@/game/story";
 import { quests } from "@/game/quests";
 import type { GameMode } from "./MainMenu";
@@ -135,6 +136,68 @@ export const CLANS = [
     color: "#356840",
   },
 ];
+
+// ---------------------------------------------------------------------------
+// NPC portrait (§20): a live 2D sprite of the cat you are talking to, drawn
+// with the SAME renderer as the world — never a stock icon.
+// ---------------------------------------------------------------------------
+
+export function NpcPortrait({ npcId, size = 40 }: { npcId: string; size?: number }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [failed, setFailed] = useState(false);
+  const def: NPCDef | undefined = npcs.find((n) => n.id === npcId);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !def || failed) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    const render = (t: number) => {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // the cat is authored in a ~90px box: map that box onto the badge
+      const s = (size * 2) / 90;
+      ctx.scale(s, s);
+      try {
+        // a sit pose with the live breathing/ear animation of drawCat
+        drawCat(ctx, def, 45, 66, 1, "sit", t / 1000, 0);
+      } catch (err) {
+        // never silently blank: report, then fall back to the paw badge
+        console.error("[npc-portrait] sprite failed", npcId, err);
+        setFailed(true);
+        return;
+      }
+      raf = requestAnimationFrame(render);
+    };
+    raf = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(raf);
+  }, [def, failed, npcId, size]);
+
+  if (!def || failed) {
+    return (
+      <span
+        className="flex shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-300"
+        style={{ width: size, height: size }}
+        role="img"
+        aria-label={`${def?.name ?? "cat"} portrait`}
+      >
+        <PawPrint className="size-3.5" />
+      </span>
+    );
+  }
+  return (
+    <canvas
+      ref={canvasRef}
+      width={size * 2}
+      height={size * 2}
+      style={{ width: size, height: size }}
+      className="shrink-0 rounded-full bg-black/20 ring-1 ring-amber-500/25"
+      aria-label={`${def.name} portrait`}
+      role="img"
+    />
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Chat panel

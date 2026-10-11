@@ -18,6 +18,7 @@ import {
   npcs,
   territoryAt,
   TERRITORY_LABELS,
+  TILE,
   type TerritoryId,
   preyZones,
   trees,
@@ -29,6 +30,17 @@ import {
   type PreyKind,
 } from "./world";
 import type { WorldObject } from "./world";
+import {
+  NPC_SYNC_MAX_CROSS_MS,
+  NPC_SYNC_SNAP_PX,
+  clampToHomeTerritory,
+  homeTerritoryFor,
+  npcStatesDigest,
+  territoryLeashFor,
+  type NpcBusyClaim,
+  type NpcCrossClaim,
+  type NpcWire,
+} from "./npcSync";
 import { TP_Y, clearTraffic, drawTunnelPortal, drawVehicle, respawnBothDirections, trafficList, updateTraffic, vehicleLaneY } from "./traffic";
 import { isAvailable, pickNpcChatLines } from "./dialogue";
 import { profileFor } from "./characters";
@@ -1525,6 +1537,12 @@ interface PreyState {
   deadUntil: number;
 }
 
+/** §10/§44: sixteen evenly-spaced offsets a crowded cat tries, in order. */
+const SEPARATION_ANGLES: readonly [number, number][] = Array.from({ length: 16 }, (_, i) => {
+  const a = (i / 16) * Math.PI * 2;
+  return [Math.cos(a), Math.sin(a)] as [number, number];
+});
+
 const PREY_FLEE_DIST = 90;
 const PREY_CATCH_DIST = 16;
 // Fewer prey overall — and none spawn inside camps (see campPreyExclusion).
@@ -1537,6 +1555,10 @@ const PREY_MAX = 38;
 type NpcAiMode =
   | "idle" | "wander" | "patrol" | "hunt_stalk" | "hunt_chase"
   | "carry_home" | "deliver" | "return_home" | "go_eat" | "after_eat" | "go_drink"
+  // §4/§5 sanctioned excursion: a cat leaves its own ground ON PURPOSE (a
+  // Gathering, a medicine-cat herb trip) with a destination and a deadline,
+  // and always walks home again. Unsanctioned crossing stays impossible.
+  | "errand" | "errand_back"
   | "go_den" | "in_den" | "exit_den"
   // kittypet house life: a real indoors schedule (enter / move between
   // rooms / enjoy a spot / walk out) — physically pathed, never teleported
@@ -1626,6 +1648,33 @@ interface NPCState {
   storyAnchor?: StoryAnchor;
   /** engine time until which this cat keeps clear of the story exclusion zone */
   storyAvoidUntil?: number;
+  // --- §29 ONLINE: another player is talking with this cat right now. The
+  // cat holds still and its nameplate says who — the conversation's TEXT is
+  // never shared, only the fact that the cat is busy.
+  remoteBusyWith?: string | null;
+  // --- §4: the sanctioned excursion (never set by ordinary wandering) ---
+  errand?: NpcErrand;
+}
+
+/** §4: a legitimate, temporary trip outside the cat's home territory. */
+export interface NpcErrand {
+  /** where the cat is going (a real landmark: Fourtrees, a herb patch) */
+  x: number;
+  y: number;
+  /** allow-listed reason (see npcSync NPC_CROSS_REASONS) */
+  reason: "gathering" | "medicine";
+  phase: "out" | "rest" | "back";
+  /** engine-time deadline: after this the cat MUST be heading home */
+  untilT: number;
+  label: string;
+  /** §9: waypoints around the forest (a long trip never grinds obstacles) */
+  path?: { x: number; y: number }[];
+  pathIdx?: number;
+  /** the destination this path was routed to (re-routed when the leg changes) */
+  pathLegX?: number;
+  pathLegY?: number;
+  /** engine time the cat started walking home (drives emergency recovery) */
+  backSinceT?: number;
 }
 
 /** §5: a story staging mark — where the story says this cat must BE. */
@@ -1660,38 +1709,9 @@ function denSeatsFor(o: WorldObject): { x: number; y: number }[] {
 }
 
 // --- territory helpers (Warriors lore: each cat belongs to its own ground) ---
-
-/** The territory a cat's HOME point sits in (seeded from def.clan + role). */
-function homeTerritoryFor(def: { id: string; clan: string; role: string }): TerritoryId {
-  const n = territoryFindNearest(def.id);
-  if (n) return n;
-  const clan = def.clan;
-  if (clan === "thunderclan" || clan === "windclan" || clan === "riverclan" || clan === "shadowclan") return clan;
-  if (clan === "kittypet") return "kittypet";
-  if (clan === "rogue") return "rogue";
-  // story cats with odd clans (e.g. Yellowfang) follow their listed clan
-  return territoryAt(npcs.find((x) => x.id === def.id)?.home.x ?? CAMP_CENTER.x, npcs.find((x) => x.id === def.id)?.home.y ?? CAMP_CENTER.y) as TerritoryId;
-}
-
-/** Home coords for a cat id (def list lookup). */
-function territoryFindNearest(id: string): TerritoryId | null {
-  const def = npcs.find((d) => d.id === id);
-  if (!def) return null;
-  return territoryAt(def.home.x, def.home.y) as TerritoryId | null;
-}
-
-/** How far a cat may roam from home (px). Kits/elders/queens stay close. */
-function territoryLeashFor(clan: string, role: string): number {
-  const r = role.toLowerCase();
-  if (r.includes("kit")) return 260;
-  if (r.includes("elder")) return 220;
-  if (r.includes("queen")) return 300;
-  if (r.includes("medicine")) return 700;
-  if (clan === "kittypet") return 340;
-  if (clan === "rogue") return 600;
-  if (r.includes("deputy") || r.includes("leader")) return 1000;
-  return 850; // warriors/apprentices patrol widely but never across the map
-}
+// The RULES live in ./npcSync: the engine, the Convex server (§31) and the
+// test suites all clamp with the exact same function, so a locally-simulated
+// cat and a server-validated cat can never disagree about a border.
 
 /**
  * Clamp a wander/hunt/patrol target into the cat's own ground: if the raw
@@ -1705,33 +1725,7 @@ function clampTerritoryTarget(
   tx: number,
   ty: number,
 ): { x: number; y: number } {
-  const home = def.home;
-  // territory first: never target another Clan's ground — binary-search the
-  // furthest point along the home->target ray that stays in home territory
-  if (territoryAt(tx, ty) !== homeTerr) {
-    // bisect along the FIXED unit direction home->target (normalized once so
-    // the shrinking upper bound can never skew the sample points)
-    const rlen = Math.hypot(tx - home.x, ty - home.y) || 1;
-    const ux = (tx - home.x) / rlen;
-    const uy = (ty - home.y) / rlen;
-    let lo = 0;
-    let hi = rlen;
-    for (let i = 0; i < 14; i++) {
-      const mid = (lo + hi) / 2;
-      if (territoryAt(home.x + ux * mid, home.y + uy * mid) === homeTerr) lo = mid;
-      else hi = mid;
-    }
-    const d = lo * 0.92;
-    tx = home.x + ux * d;
-    ty = home.y + uy * d;
-  }
-  // leash second (kits, elders, kittypets stay near their dens/houses)
-  const dHome = Math.hypot(tx - home.x, ty - home.y) || 1;
-  if (dHome > leash) {
-    tx = home.x + ((tx - home.x) / dHome) * leash;
-    ty = home.y + ((ty - home.y) / dHome) * leash;
-  }
-  return { x: tx, y: ty };
+  return clampToHomeTerritory(def.home, homeTerr, leash, tx, ty);
 }
 
 function scheduleTarget(def: NPCDef, hour: number): { x: number; y: number } | null {
@@ -2110,6 +2104,20 @@ export class GameCanvas {
    */
   private remoteRender = new Map<string, RemoteRenderState>();
   public bubbles: ChatBubble[] = [];
+
+  // --- §30/§31 ONLINE NPC sync: the state a follower applies, and the wire
+  // snapshot the elected authority publishes. When inactive (solo play, free
+  // play, Story Mode) every cat is simulated locally exactly as before. ---
+  private npcSyncActive = false;
+  private npcSyncTargets = new Map<string, NpcWire>();
+  private npcSyncBusy = new Map<string, NpcBusyClaim>();
+  /** the name this client's player shows up as in OTHER players' conversations */
+  private npcSyncSelfName: string | null = null;
+  private npcSyncSeq = new Map<string, number>();
+  /** §4: next engine-time at which each Clan may send another sanctioned errand */
+  private errandAt = new Map<string, number>();
+  /** per-frame follower drift budget: authoritative states are GLIDED to */
+  private static readonly NPC_SYNC_MAX_SPEED = 420;
 
   // interiors
   private interiorId: string | null = null;
@@ -3108,6 +3116,10 @@ export class GameCanvas {
     if (!n || n.gone) return false;
     if (n.ai === "in_den") return false;
     if (n.houseInterior && n.ai !== "idle" && n.ai !== "wander") return false;
+    // §29: another player is already talking with this cat — one conversation
+    // at a time, so the TALK option is unavailable until they finish.
+    const busy = this.npcSyncBusy.get(npcId);
+    if (busy && busy.until > Date.now()) return false;
     return true;
   }
 
@@ -3200,6 +3212,219 @@ export class GameCanvas {
   get npcTalkTarget(): string | null {
     for (const n of this.npcStates) if (n.convoActive) return n.def.id;
     return null;
+  }
+
+  // -------------------------------------------------------------------------
+  // §29/§30/§31 ONLINE NPC world sync (server-authoritative)
+  //
+  // Solo play, Free play and Story Mode never enter this path: `npcSyncActive`
+  // is only ever set from the ONLINE world's sync subscription, and while it
+  // is unset every cat is simulated locally exactly as before.
+  // -------------------------------------------------------------------------
+
+  /** Am I rendering another client's authoritative NPC states right now? */
+  get npcSyncFollowing(): boolean {
+    return this.npcSyncActive && this.npcSyncTargets.size > 0;
+  }
+
+  /** The name other players see while I am talking with a cat (§29). */
+  setNpcSyncSelfName(name: string | null) {
+    this.npcSyncSelfName = name;
+  }
+
+  /**
+   * §29/§30: another player's live conversations. A claimed cat holds still
+   * and its nameplate says who holds it — the conversation's TEXT is never
+   * part of this, on any channel.
+   */
+  setNpcBusyClaims(claims: readonly NpcBusyClaim[] | undefined, untilMs: number) {
+    this.npcSyncBusy.clear();
+    for (const c of claims ?? []) {
+      if (c.until <= untilMs) continue;
+      if (this.npcSyncSelfName && c.name === this.npcSyncSelfName) continue; // that's me
+      this.npcSyncBusy.set(c.npcId, c);
+    }
+  }
+
+  /**
+   * §30/§31: the SNAPSHOT the elected authority publishes — every live NPC's
+   * state plus the sanctioned crossings still in progress. Called only by the
+   * authority, at NPC_SYNC_INTERVAL_MS, and only when the digest changed.
+   */
+  npcSyncSnapshot(): { npcs: NpcWire[]; cross: Record<string, NpcCrossClaim>; digest: string } {
+    const nowMs = Date.now();
+    const out: NpcWire[] = [];
+    const cross: Record<string, NpcCrossClaim> = {};
+    for (const n of this.npcStates) {
+      if (n.gone) continue;
+      const seq = (this.npcSyncSeq.get(n.def.id) ?? 0) + 1;
+      this.npcSyncSeq.set(n.def.id, seq);
+      const moving = n.pose === "walk" && !n.convoActive;
+      out.push({
+        id: n.def.id,
+        x: n.x,
+        y: n.y,
+        facing: n.facing,
+        pose: n.convoActive ? "sit" : n.pose,
+        ai: n.ai,
+        activity: n.convoActive ? "talking with a cat" : n.activity,
+        movement: n.pose === "crouch" ? "crouch" : moving ? "walk" : "idle",
+        denId: n.denId,
+        convoWith: n.convoActive ? this.npcSyncSelfName : null,
+        seq,
+      });
+      // §4/§5: declare the sanctioned excursion while it is happening, with a
+      // deadline the server enforces. Returning cats declare "return".
+      const here = territoryAt(n.x, n.y);
+      if (here !== n.homeTerritory && here !== "unclaimed") {
+        if (n.errand) {
+          cross[n.def.id] = { reason: n.errand.reason, until: nowMs + Math.max(15_000, (n.errand.untilT - this.time) * 1000) };
+        } else if (n.ai === "return_home" || n.ai === "errand_back") {
+          cross[n.def.id] = { reason: "return", until: nowMs + 90_000 };
+        } else if (n.ai === "patrol") {
+          cross[n.def.id] = { reason: "patrol", until: nowMs + 60_000 };
+        } else if (n.ai === "hunt_chase" || n.ai === "hunt_stalk") {
+          cross[n.def.id] = { reason: "prey-chase", until: nowMs + 45_000 };
+        }
+        // anything else out of ground is UNSANCTIONED: no claim is declared,
+        // so the server pulls the cat back into its own territory (§31/§32).
+      }
+    }
+    return { npcs: out, cross, digest: npcStatesDigest(out) };
+  }
+
+  /**
+   * §30: adopt the authoritative snapshot (follower mode). Positions are
+   * GLIDED to — never hard-set except on a large desync (join/teleport) — so
+   * remote players see NPCs moving smoothly instead of rubber-banding.
+   */
+  applyNpcSync(
+    states: readonly NpcWire[],
+    busy: readonly NpcBusyClaim[] | undefined,
+    nowMs: number,
+  ) {
+    this.npcSyncTargets.clear();
+    for (const s of states) {
+      // only cats that already exist are ever driven: remote states can never
+      // spawn a duplicate or resurrect a cat that is gone from this world
+      if (this.npcStates.some((n) => n.def.id === s.id)) this.npcSyncTargets.set(s.id, s);
+    }
+    this.setNpcBusyClaims(busy, nowMs);
+    this.npcSyncActive = this.npcSyncTargets.size > 0;
+  }
+
+  /** Leave follower mode: this client simulates the NPC world locally again. */
+  clearNpcSync() {
+    this.npcSyncActive = false;
+    this.npcSyncTargets.clear();
+    this.npcSyncBusy.clear();
+  }
+
+  /**
+   * §10/§44 CROWDING: a soft, bounded separation pass. Two cats inside one
+   * body-width push apart a little each frame (never through a solid), so a
+   * camp full of cats spreads out naturally instead of stacking sprites.
+   */
+  private separateNpcs() {
+    const live: NPCState[] = [];
+    for (const n of this.npcStates) {
+      if (n.gone || n.convoActive || n.ai === "in_den" || n.houseInterior) continue;
+      live.push(n);
+    }
+    const MIN = 15; // px: one cat body
+    for (let i = 0; i < live.length; i++) {
+      for (let j = i + 1; j < live.length; j++) {
+        const a = live[i]!;
+        const b = live[j]!;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const d = Math.hypot(dx, dy);
+        if (d >= MIN) continue;
+        const push = (MIN - d) / 2;
+        const ux = d > 0.001 ? dx / d : 1;
+        const uy = d > 0.001 ? dy / d : 0;
+        const ax = a.x - ux * push;
+        const ay = a.y - uy * push;
+        const bx = b.x + ux * push;
+        const by = b.y + uy * push;
+        if (!isSolidPoint(ax, ay)) {
+          a.x = ax;
+          a.y = ay;
+        }
+        if (!isSolidPoint(bx, by) && d > 0.001) {
+          b.x = bx;
+          b.y = by;
+          continue;
+        }
+        // the direct push is blocked (a wall, a doorway, or two cats on the
+        // exact same pixel): step to the nearest clear angle instead
+        if (!isSolidPoint(bx, by)) {
+          b.x = bx;
+          b.y = by;
+          continue;
+        }
+        for (const [cx, cy] of SEPARATION_ANGLES) {
+          const nx = a.x + cx * MIN;
+          const ny = a.y + cy * MIN;
+          if (isSolidPoint(nx, ny)) continue;
+          b.x = nx;
+          b.y = ny;
+          break;
+        }
+      }
+    }
+  }
+
+  /** One follower step: glide to the authoritative spot and adopt its state. */
+  private stepSyncedNpc(n: NPCState, dt: number) {
+    const t = this.npcSyncTargets.get(n.def.id)!;
+    const busy = this.npcSyncBusy.get(n.def.id);
+    const busyName = busy && busy.until > Date.now() ? busy.name : null;
+    n.remoteBusyWith = busyName;
+    // MY OWN conversation is local state: my client owns how it looks
+    if (n.convoActive) return;
+
+    if (busyName) {
+      // §29: another player is talking with this cat — it holds still
+      n.ai = "idle";
+      n.pose = "sit";
+      n.facing = t.facing < 0 ? -1 : 1;
+      n.activity = `talking with ${busyName}`;
+      n.talkFxUntil = Math.max(n.talkFxUntil, this.time + 0.6);
+      n.x += (t.x - n.x) * Math.min(1, dt * 4);
+      n.y += (t.y - n.y) * Math.min(1, dt * 4);
+      return;
+    }
+
+    n.ai = t.ai as NpcAiMode;
+    n.activity = t.activity;
+    n.denId = t.denId ?? null;
+    // smooth authoritative movement: glide at a bounded speed, snap only when
+    // the states are too far apart for interpolation to be meaningful
+    const dx = t.x - n.x;
+    const dy = t.y - n.y;
+    const d = Math.hypot(dx, dy);
+    if (d > NPC_SYNC_SNAP_PX) {
+      n.x = t.x;
+      n.y = t.y;
+    } else if (d > 0.5) {
+      const step = Math.min(d, GameCanvas.NPC_SYNC_MAX_SPEED * dt);
+      const px = n.x;
+      const py = n.y;
+      n.x += (dx / d) * step;
+      n.y += (dy / d) * step;
+      // never glide a follower INTO an obstacle: hold the last clear spot and
+      // let the next authoritative state route around it
+      if (isSolidPoint(n.x, n.y)) {
+        n.x = px;
+        n.y = py;
+      }
+    }
+    // a walking cat walks; a settled cat keeps the authoritative pose
+    n.pose = d > 14 ? "walk" : (t.pose as CatPose);
+    n.facing = t.facing < 0 ? -1 : 1;
+    n.stuckSince = null;
+    n.stuckCooldown = this.time;
   }
 
   /**
@@ -3903,6 +4128,27 @@ export class GameCanvas {
     const night = this.nightAlpha() > 0.6;
     for (const n of this.npcStates) {
       if (n.gone) continue;
+      // §30 ONLINE follower mode: the elected authority owns this cat's
+      // position/state — render its snapshot instead of simulating a second,
+      // conflicting version of the same cat.
+      if (this.npcSyncActive && this.npcSyncTargets.has(n.def.id)) {
+        this.stepSyncedNpc(n, dt);
+        continue;
+      }
+      // §29 ONLINE: a cat another player is talking with holds still here too,
+      // so every client shows the same interrupted cat.
+      const busyHere = this.npcSyncBusy.get(n.def.id);
+      if (busyHere && busyHere.until > Date.now()) {
+        n.remoteBusyWith = busyHere.name;
+        if (!n.convoActive) {
+          n.ai = "idle";
+          n.pose = "sit";
+          n.activity = `talking with ${busyHere.name}`;
+          n.talkFxUntil = Math.max(n.talkFxUntil, this.time + 0.6);
+        }
+        continue;
+      }
+      n.remoteBusyWith = null;
       // --- weather on the coat: rain soaks, clear dries, shake-off follows ---
       if (!this.interiorId) {
         if (this.weather === "rain" || this.weather === "heavy-rain" || this.weather === "storm") {
@@ -3970,7 +4216,8 @@ export class GameCanvas {
       const movingMode =
         n.ai === "wander" || n.ai === "patrol" || n.ai === "hunt_stalk" ||
         n.ai === "hunt_chase" || n.ai === "carry_home" || n.ai === "return_home" ||
-        n.ai === "go_eat" || n.ai === "go_den" || n.ai === "exit_den";
+        n.ai === "go_eat" || n.ai === "go_den" || n.ai === "exit_den" ||
+        n.ai === "errand" || n.ai === "errand_back";
       if (!n.convoActive && movingMode && this.time >= n.stuckCooldown) {
         if (Math.hypot(n.x - n.lastStuckX, n.y - n.lastStuckY) > 6) {
           // making progress: reset the stall timer
@@ -4016,6 +4263,33 @@ export class GameCanvas {
             n.stuckSince = null;
             n.tx = n.x;
             n.ty = n.y;
+            // §4: a cat on a SANCTIONED errand must never give up and idle
+            // far from home — it re-routes (the errand case re-picks the road
+            // home through the camp mouth) and keeps walking.
+            if (n.errand) {
+              const free = this.nearestFreeNpcSpot(n.x, n.y);
+              if (free && Math.hypot(free.x - n.x, free.y - n.y) > 2) {
+                // the cat crept inside solid ground: the documented last-resort
+                // recovery (a tiny relocation to the nearest free tile)
+                n.x = free.x;
+                n.y = free.y;
+              }
+              // re-route from wherever it now stands (skip the blocked leg)
+              n.errand.path = undefined;
+              n.errand.pathIdx = 0;
+              n.errand.pathLegX = undefined;
+              n.errand.pathLegY = undefined;
+              n.ai = n.errand.phase === "rest" ? "errand_back" : n.ai;
+              n.activity = "heading home";
+              n.sidestepCount = 0;
+              n.stuckSince = null;
+              n.lastStuckX = n.x;
+              n.lastStuckY = n.y;
+              n.waitUntil = Math.min(n.waitUntil, this.time + 1);
+              n.aiThinkAt = this.time + 1;
+              n.stuckCooldown = this.time + 2;
+              break;
+            }
             n.ai = "idle";
             n.activity = "rethinking the route";
             n.waitUntil = this.time + 2;
@@ -4082,6 +4356,10 @@ export class GameCanvas {
     // §17: background cats politely keep out of the active story scene
     if (this.storyExclusion) this.avoidStoryExclusion();
 
+    // §10/§44: personal spacing — cats never stack on one spot. The authority
+    // applies it before publishing, so followers inherit separated positions.
+    if (!this.paused && !this.npcSyncActive) this.separateNpcs();
+
     this.drainActions();
     // --- NPC↔NPC ambient conversations: pair two idle-ish cats that are
     // close together and exchange a few short lines as bubbles. Entirely
@@ -4096,6 +4374,9 @@ export class GameCanvas {
           n.ai !== "go_den" &&
           n.ai !== "exit_den" &&
           n.pose !== "sleep" &&
+          // §29: a cat another player is talking with is not chatting with
+          // Clanmates at the same time on any client
+          !this.npcSyncBusy.has(n.def.id) &&
           Math.hypot(n.x - this.px, n.y - this.py) < 620,
       );
       let started = false;
@@ -5006,7 +5287,10 @@ export class GameCanvas {
             // small PAW badge: an unmistakable "this is an NPC" marker
             ctx.font = "600 9px system-ui, sans-serif";
             ctx.fillStyle = "rgba(242, 212, 136, 0.8)";
-            ctx.fillText("🐾 NPC", n.x, n.y - 18);
+            // §29: when another player is talking with this cat, the badge
+            // says so — every player sees the cat is interacting, without any
+            // conversation text ever leaving the two participants.
+            ctx.fillText(n.remoteBusyWith ? `💬 with ${n.remoteBusyWith}` : "🐾 NPC", n.x, n.y - 18);
           }
         },
       });
@@ -6968,6 +7252,190 @@ export class GameCanvas {
     }
   }
 
+  /** Fourtrees — the Gathering ground every Clan may legitimately travel to. */
+  private fourtreesSpot(): { x: number; y: number } | null {
+    const area = areas.find((a) => a.id === "fourtrees");
+    const o = allObjects.find((w) => w.id === "fourtrees") ?? allObjects.find((w) => w.interact === "fourtrees");
+    const raw = area
+      ? { x: area.rect.x + area.rect.w / 2, y: area.rect.y + area.rect.h - 40 }
+      : o ? { x: o.x, y: o.y + o.h / 2 + 60 } : null;
+    if (!raw) return null;
+    // the Gathering is a CLEARING: land the cat on walkable ground, never in
+    // the Great Oak itself
+    return this.nearestFreeNpcSpot(raw.x, raw.y) ?? raw;
+  }
+
+  /**
+   * The nearest herb patch a MEDICINE cat may visit (own ground or neutral
+   * ground — never another Clan's camp/nursery patch).
+   */
+  private medicineHerbSpot(n: NPCState): { x: number; y: number } | null {
+    const patches = allObjects.filter((o) => o.interact === "herbs");
+    let best: { x: number; y: number } | null = null;
+    let bestD = Infinity;
+    for (const p of patches) {
+      const here = territoryAt(p.x, p.y);
+      const allowed = here === n.homeTerritory || here === "unclaimed";
+      if (!allowed) continue;
+      const d = Math.hypot(p.x - n.x, p.y - n.y);
+      if (d < bestD) { bestD = d; best = { x: p.x, y: p.y + 26 }; }
+    }
+    return best;
+  }
+
+  /**
+   * §9: a coarse WORLD route for long NPC trips. The daily AI only ever picks
+   * short local targets, so this exists for sanctioned excursions: a cat
+   * walking to the Gathering (or home from one) must go AROUND the forest —
+   * a straight greedy line grinds into the first big obstacle for minutes.
+   * Breadth-first over the tile grid with a diagonal-clearance rule,
+   * simplified into walkable waypoints. Cheap, bounded, and only computed
+   * when an excursion starts or turns around.
+   */
+  private npcWorldPath(
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+  ): { x: number; y: number }[] | null {
+    const S = TILE;
+    const cols = Math.floor(WORLD_W / S);
+    const rows = Math.floor(WORLD_H / S);
+    const cellX = (v: number) => Math.max(0, Math.min(cols - 1, Math.floor(v / S)));
+    const cellY = (v: number) => Math.max(0, Math.min(rows - 1, Math.floor(v / S)));
+    const clear = (cx: number, cy: number): boolean => {
+      if (cx < 1 || cy < 1 || cx >= cols - 1 || cy >= rows - 1) return false;
+      const x = cx * S + S / 2;
+      const y = cy * S + S / 2;
+      return !isSolidPoint(x, y) && !isSolidPoint(x + S * 0.45, y) && !isSolidPoint(x - S * 0.45, y)
+        && !isSolidPoint(x, y + S * 0.45) && !isSolidPoint(x, y - S * 0.45)
+        && !isSolidPoint(x + S * 0.3, y + S * 0.3) && !isSolidPoint(x - S * 0.3, y - S * 0.3)
+        && !isSolidPoint(x + S * 0.3, y - S * 0.3) && !isSolidPoint(x - S * 0.3, y + S * 0.3);
+    };
+    /** Snap an endpoint to the nearest walkable cell (a den mouth, a landmark
+     *  edge or a cat pressed against a wall must still be routable). */
+    const snap = (cx: number, cy: number): { x: number; y: number } | null => {
+      if (clear(cx, cy)) return { x: cx, y: cy };
+      for (let r = 1; r <= 12; r++) {
+        for (let dx = -r; dx <= r; dx++) {
+          for (let dy = -r; dy <= r; dy++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+            if (clear(cx + dx, cy + dy)) return { x: cx + dx, y: cy + dy };
+          }
+        }
+      }
+      return null;
+    };
+    const start = snap(cellX(from.x), cellY(from.y));
+    const end = snap(cellX(to.x), cellY(to.y));
+    if (!start || !end) return null;
+    const sx = start.x;
+    const sy = start.y;
+    const gx = end.x;
+    const gy = end.y;
+    const idx = (x: number, y: number) => y * cols + x;
+    const prev = new Int32Array(cols * rows).fill(-1);
+    const seen = new Uint8Array(cols * rows);
+    const queue: number[] = [idx(sx, sy)];
+    seen[idx(sx, sy)] = 1;
+    let head = 0;
+    const goal = idx(gx, gy);
+    const NEIGH: [number, number][] = [
+      [1, 0], [-1, 0], [0, 1], [0, -1],
+      [1, 1], [1, -1], [-1, 1], [-1, -1],
+    ];
+    let found = false;
+    let guard = 0;
+    while (head < queue.length && guard < 80_000) {
+      const cur = queue[head++]!;
+      guard++;
+      if (cur === goal) { found = true; break; }
+      const cx = cur % cols;
+      const cy = (cur - cx) / cols;
+      for (const [dx, dy] of NEIGH) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < 1 || ny < 1 || nx >= cols - 1 || ny >= rows - 1) continue;
+        const ni = idx(nx, ny);
+        if (seen[ni]) continue;
+        if (!clear(nx, ny)) continue;
+        // a diagonal step may not squeeze between two blocked cells
+        if (dx !== 0 && dy !== 0 && (!clear(cx + dx, cy) || !clear(cx, cy + dy))) continue;
+        seen[ni] = 1;
+        prev[ni] = cur;
+        queue.push(ni);
+      }
+    }
+    if (!found) return null;
+    const cells: number[] = [];
+    for (let cur = goal; cur !== -1; cur = prev[cur]!) {
+      cells.push(cur);
+      if (cur === idx(sx, sy)) break;
+    }
+    cells.reverse();
+    // thin the route: one waypoint every third cell, always the exact goal
+    const points: { x: number; y: number }[] = [];
+    for (let i = 2; i < cells.length; i += 3) {
+      const c = cells[i]!;
+      const cx = c % cols;
+      const cy = (c - cx) / cols;
+      points.push({ x: cx * S + S / 2, y: cy * S + S / 2 });
+    }
+    points.push({ x: to.x, y: to.y });
+    return points;
+  }
+
+  /**
+   * §4/§5: a SANCTIONED excursion. Only cats with a real, book-plausible
+   * reason leave their own ground — a Gathering (leader/deputy at moonhigh) or
+   * a medicine cat's herb trip — and every excursion carries a destination, a
+   * deadline and a guaranteed return. Ordinary wandering is still clamped, so
+   * an unauthorized border crossing remains impossible.
+   */
+  private maybeErrand(n: NPCState, night: boolean): boolean {
+    const clan = n.def.clan;
+    if (clan !== "thunderclan" && clan !== "riverclan" && clan !== "windclan" && clan !== "shadowclan") return false;
+    if (this.time < (this.errandAt.get(clan) ?? 0)) return false;
+    const role = n.role ?? "other";
+    const isGatherer = role === "leader" || role === "deputy";
+    const isMedicine = role === "medicine";
+    if (!isGatherer && !isMedicine) return false;
+    if (isGatherer && !night) return false; // Gatherings are held at moonhigh
+    if (isMedicine && night) return false; // herb-gathering is daylight work
+    if (Math.random() > (isMedicine ? 0.25 : 0.18)) return false;
+    const raw = isMedicine ? this.medicineHerbSpot(n) : this.fourtreesSpot();
+    if (!raw) return false;
+    const dest = this.nearestFreeNpcSpot(raw.x, raw.y) ?? raw;
+    const dist = Math.hypot(dest.x - n.x, dest.y - n.y);
+    if (dist < 120) return false; // already there: nothing to travel for
+    // §9: no route, no excursion — a cat is never sent somewhere it would
+    // grind against the forest for minutes
+    const route = this.npcWorldPath({ x: n.x, y: n.y }, dest);
+    if (!route || route.length === 0) return false;
+    const reason: NpcErrand["reason"] = isMedicine ? "medicine" : "gathering";
+    // walk-speed travel budget + the stay, clamped to the allowed excursion
+    // walk speed is 46px/s but waypoint detours make the real trip longer
+    const budget = Math.min(NPC_SYNC_MAX_CROSS_MS, Math.max(75_000, (dist / 30) * 1000 + 60_000));
+    n.errand = {
+      x: dest.x,
+      y: dest.y,
+      reason,
+      phase: "out",
+      untilT: this.time + budget / 1000,
+      label: isMedicine ? "walking out to gather herbs" : "travelling to the Gathering",
+    };
+    n.errand.path = route;
+    n.errand.pathIdx = 0;
+    n.errand.pathLegX = dest.x;
+    n.errand.pathLegY = dest.y;
+    n.ai = "errand";
+    n.activity = n.errand.label;
+    n.tx = dest.x;
+    n.ty = dest.y;
+    n.preyId = null;
+    // one excursion per Clan at a time; the next is minutes away
+    this.errandAt.set(clan, this.time + 900 + Math.random() * 1200);
+    return true;
+  }
+
   private npcThink(n: NPCState, _hr: number, night: boolean) {
     if (n.ai !== "idle") return; // mid-activity cats finish first
     if (this.time < n.waitUntil) return;
@@ -7026,6 +7494,9 @@ export class GameCanvas {
       n.ty = n.def.home.y + (Math.random() - 0.5) * 40;
       return;
     }
+
+    // --- §4 sanctioned excursions (before the ordinary role day) ----------
+    if (this.maybeErrand(n, night)) return;
 
     // --- role days -------------------------------------------------------
     if (r === "leader") return this.roleThinkLeader(n, roll);
@@ -7551,6 +8022,115 @@ export class GameCanvas {
           n.pose = (["sit", "groom", "lie", "yawn"] as CatPose[])[Math.floor(Math.random() * 4)];
           n.ai = "idle";
           n.waitUntil = this.time + 3 + Math.random() * 5;
+        }
+        break;
+      }
+      // --- §4/§5: sanctioned excursion — out to the destination, a short
+      // stay for the reason, then a guaranteed walk home. The deadline keeps
+      // a stuck cat from staying away: past it, the trip becomes a return.
+      case "errand": {
+        const e = n.errand;
+        if (!e) { n.ai = "return_home"; break; }
+        if (this.time > e.untilT) {
+          e.phase = "back";
+          n.ai = "errand_back";
+          n.activity = "heading home";
+          break;
+        }
+        // the arrival gap is measured against the REAL destination (a live
+        // sidestep waypoint must never fake "arrived")
+        const d = Math.hypot(e.x - n.x, e.y - n.y);
+        if (d > 24 && e.path && e.path.length > 0) {
+          // follow the routed waypoints; a stalled cat skips to the next one
+          let i = e.pathIdx ?? 0;
+          if (n.stuckSince !== null && i < e.path.length - 1) {
+            i++;
+            e.pathIdx = i;
+          }
+          const wp = e.path[Math.min(i, e.path.length - 1)]!;
+          if (Math.hypot(wp.x - n.x, wp.y - n.y) <= 34 && i < e.path.length - 1) e.pathIdx = i + 1;
+          stepTo(wp.x, wp.y, walkSpeed);
+        } else {
+          stepTo(e.x, e.y, walkSpeed);
+        }
+        if (d <= 24) {
+          e.phase = "rest";
+          n.pose = "sit";
+          n.activity = e.reason === "gathering" ? "sitting with the Clans at the Gathering" : "gathering herbs";
+          n.waitUntil = this.time + 18 + Math.random() * 22;
+          n.ai = "errand_back";
+          n.tx = n.def.home.x;
+          n.ty = n.def.home.y;
+          e.untilT = Math.max(e.untilT, this.time + 60);
+        }
+        break;
+      }
+      case "errand_back": {
+        const e = n.errand;
+        if (!e) { n.ai = "return_home"; break; }
+        if (e.phase === "rest" && this.time < n.waitUntil) {
+          n.pose = "sit";
+          break;
+        }
+        e.phase = "back";
+        const d = Math.hypot(n.def.home.x - n.x, n.def.home.y - n.y);
+        if (d <= 24) {
+          // home again: the excursion is over and life resumes normally
+          n.errand = undefined;
+          n.ai = "idle";
+          n.activity = "back in camp";
+          n.pose = "sit";
+          n.waitUntil = this.time + 2 + Math.random() * 3;
+          break;
+        }
+        // §4/§5 EMERGENCY RECOVERY: an errand cat unable to walk home for far
+        // too long is put down at its camp mouth's nearest free spot — the
+        // sanctioned exception to "never teleport" (§32), so a sanctioned
+        // excursion can never strand a cat in the wilds.
+        if (e.backSinceT === undefined) e.backSinceT = this.time;
+        if (this.time - e.backSinceT > 60) {
+          const mouthSpot = this.campEntranceFor(n);
+          const free = this.nearestFreeNpcSpot(mouthSpot.x, mouthSpot.y) ?? this.nearestFreeNpcSpot(n.def.home.x, n.def.home.y);
+          if (free) {
+            n.x = free.x;
+            n.y = free.y;
+          }
+          n.errand = undefined;
+          n.ai = "idle";
+          n.activity = "back in camp";
+          n.pose = "sit";
+          n.stuckSince = null;
+          n.sidestepCount = 0;
+          n.waitUntil = this.time + 2;
+          break;
+        }
+        // §4/§5 homeward route: while still OUTSIDE the camp the cat walks to
+        // its own camp mouth first (the camp wall is solid — a straight line
+        // home would grind it forever), then to its own spot inside. The route
+        // comes from the world path, never a long greedy line (§9).
+        const camp = clanCamp(n);
+        const outsideCamp = camp ? Math.hypot(n.x - camp.x, n.y - camp.y) > camp.r * 0.85 : true;
+        const mouth = this.campEntranceFor(n);
+        const legX = outsideCamp && Math.hypot(n.x - mouth.x, n.y - mouth.y) > 46 ? mouth.x : n.def.home.x;
+        const legY = outsideCamp && Math.hypot(n.x - mouth.x, n.y - mouth.y) > 46 ? mouth.y : n.def.home.y;
+        if (!e.path || e.path.length === 0 || e.pathLegX !== legX || e.pathLegY !== legY) {
+          // (re)route this leg — the camp mouth first, then the cat's own spot
+          const route = this.npcWorldPath({ x: n.x, y: n.y }, { x: legX, y: legY });
+          e.path = route && route.length > 0 ? route : [{ x: legX, y: legY }];
+          e.pathIdx = 0;
+          e.pathLegX = legX;
+          e.pathLegY = legY;
+        }
+        n.activity = "heading home";
+        {
+          let i = e.pathIdx ?? 0;
+          if (n.stuckSince !== null && i < e.path.length - 1) {
+            i++;
+            e.pathIdx = i;
+          }
+          const wp = e.path[Math.min(i, e.path.length - 1)]!;
+          if (Math.hypot(wp.x - n.x, wp.y - n.y) <= 34 && i < e.path.length - 1) e.pathIdx = i + 1;
+          stepTo(wp.x, wp.y, walkSpeed);
         }
         break;
       }

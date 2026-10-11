@@ -5,50 +5,17 @@
 //  3. Weather distribution over a long simulated run is clear-dominant.
 // Run: bun scripts/check-territory.ts
 import { npcs, territoryAt, territoryZones, type TerritoryId } from "../src/game/world";
+// ONE clamp rule for the engine, the Convex server (§31) and the tests: the
+// territory decision can never drift between the three.
+import { clampToHomeTerritory, territoryLeashFor } from "../src/game/npcSync";
 
-function territoryLeashFor(clan: string, role: string): number {
-  const r = role.toLowerCase();
-  if (r.includes("kit")) return 260;
-  if (r.includes("elder")) return 220;
-  if (r.includes("queen")) return 300;
-  if (r.includes("medicine")) return 700;
-  if (clan === "kittypet") return 340;
-  if (clan === "rogue") return 600;
-  if (r.includes("deputy") || r.includes("leader")) return 1000;
-  return 850;
-}
-
-// mirror of engine.ts clampTerritoryTarget (kept in sync)
-function clampTerritoryTarget(
+const clampTerritoryTarget = (
   def: { home: { x: number; y: number } },
   homeTerr: TerritoryId,
   leash: number,
   tx: number,
   ty: number,
-): { x: number; y: number } {
-  const home = def.home;
-  if (territoryAt(tx, ty) !== homeTerr) {
-    const rlen = Math.hypot(tx - home.x, ty - home.y) || 1;
-    const ux = (tx - home.x) / rlen;
-    const uy = (ty - home.y) / rlen;
-    let lo = 0;
-    let hi = rlen;
-    for (let i = 0; i < 14; i++) {
-      const mid = (lo + hi) / 2;
-      if (territoryAt(home.x + ux * mid, home.y + uy * mid) === homeTerr) lo = mid;
-      else hi = mid;
-    }
-    const d = lo * 0.92;
-    tx = home.x + ux * d;
-    ty = home.y + uy * d;
-  }
-  const dHome = Math.hypot(tx - home.x, ty - home.y) || 1;
-  if (dHome > leash) {
-    tx = home.x + ((tx - home.x) / dHome) * leash;
-    ty = home.y + ((ty - home.y) / dHome) * leash;
-  }
-  return { x: tx, y: ty };
-}
+): { x: number; y: number } => clampToHomeTerritory(def.home, homeTerr, leash, tx, ty);
 
 let fails = 0;
 

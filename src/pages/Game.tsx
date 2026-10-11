@@ -43,7 +43,11 @@ import { GROUND_CELL, GROUND_COLS, GROUND_ROWS, groundMap, lore, npcs, areaAt, a
 import { appearanceVersion } from "@/game/saveShared";
 import { storySteps } from "@/game/story";
 import { buildDialogue, type DialogueContext } from "@/game/dialogue";
-import { buildAskMenu, npcChatReply, FACT_LABELS, type AskOption, type ChatMsg } from "@/game/npcChat";
+import {
+  buildAskMenu, npcChatReply, FACT_LABELS, validateNpcReply, createChatGate, npcAiTroubleLine,
+  type AskOption, type ChatMsg,
+} from "@/game/npcChat";
+import { NPC_SYNC_INTERVAL_MS, NPC_SYNC_WORLD } from "@/game/npcSync";
 // §2/§3/§13: cinematic story layer — beats, choices, per-character meow voices
 import { STORY_INTRO, STORY_BEATS, type StoryBeat } from "@/game/storyCinematics";
 import { beatActorIds, resolveStaging } from "@/game/storyStaging";
@@ -58,6 +62,7 @@ import {
   ChatPanel,
   CodexPanel,
   EmoteBar,
+  NpcPortrait,
   type AnimAction,
   TouchControls,
   CLANS,
@@ -205,6 +210,25 @@ export default function Game() {
   const [chatBusy, setChatBusy] = useState(false);
   const npcAiAction = useAction(api.npcAi.reply);
   const npcAiAvailable = useQuery(api.authConfig.googleAuthConfigured, {})?.npcAi ?? false;
+  // §29/§30/§31 ONLINE: the server's authoritative NPC world state and this
+  // player's conversation claims. Outside the ONLINE world the query is
+  // skipped entirely — Story Mode and Free play never touch this system.
+  const npcWorld = useQuery(
+    api.npcSync.list,
+    phase === "playing" && mode === "open" ? { worldId: NPC_SYNC_WORLD } : "skip",
+  );
+  const publishNpcWorld = useMutation(api.npcSync.publish);
+  const claimNpcConversation = useMutation(api.npcSync.claimConversation);
+  const refreshNpcConversation = useMutation(api.npcSync.refreshConversation);
+  const releaseNpcConversation = useMutation(api.npcSync.releaseConversation);
+  const npcWorldRef = useRef(npcWorld);
+  npcWorldRef.current = npcWorld;
+  /** §27: a short, in-world note when a generated line could not be heard */
+  const [chatNote, setChatNote] = useState<string | null>(null);
+  /** §28: one in-flight AI request, response timeout, retry limit, cooldown */
+  const chatGateRef = useRef(createChatGate());
+  /** the last thing the player said (the note's "try again" re-asks it) */
+  const lastSentRef = useRef("");
   const npcConvoRef = useRef(npcConvo);
   npcConvoRef.current = npcConvo;
   // --- per-NPC social memory (knowledge is learned, never global) ---
@@ -245,11 +269,82 @@ export default function Game() {
     const c = npcConvoRef.current;
     if (!c) return;
     gameRef.current?.setNpcConversation(c.npcId, false);
+    // §29: hand the cat back to the world and drop any in-flight AI reply so
+    // a late answer can never appear in a closed conversation.
+    releaseNpcConversation({ worldId: NPC_SYNC_WORLD, npcId: c.npcId }).catch(() => undefined);
+    chatGateRef.current.cancel();
+    setChatNote(null);
     setNpcConvo(null);
     setConvoView("root");
     setChatMsgs([]);
     setAskOptions([]);
-  }, []);
+  }, [releaseNpcConversation]);
+
+  /**
+   * §30: while I hold the pen, publish the authoritative NPC snapshot. Only
+   * runs ONLINE with at least one other player present, at a fixed cadence,
+   * and only when the world visibly changed (never excessive updates).
+   */
+  const npcPublishSeqRef = useRef(0);
+  const npcDigestRef = useRef("");
+  const npcPublishAtRef = useRef(0);
+  useEffect(() => {
+    if (phase !== "playing" || mode !== "open") return;
+    if (!npcWorld?.isAuthority || (npcWorld.onlineCount ?? 0) < 2) return;
+    const iv = window.setInterval(() => {
+      const g = gameRef.current;
+      if (!g || offlineRef.current) return;
+      const snap = g.npcSyncSnapshot();
+      const nowMs = Date.now();
+      // skip untouched-world chatter, but STILL heartbeat: a sleeping camp must
+      // not let the shared snapshot go stale (followers would start their own
+      // simulation and the Clans would drift apart)
+      const changed = snap.digest !== npcDigestRef.current;
+      if (!changed && nowMs - npcPublishAtRef.current < 4000) return;
+      npcDigestRef.current = snap.digest;
+      npcPublishAtRef.current = nowMs;
+      npcPublishSeqRef.current += 1;
+      publishNpcWorld({
+        worldId: NPC_SYNC_WORLD,
+        seq: npcPublishSeqRef.current,
+        npcs: snap.npcs,
+        cross: Object.keys(snap.cross).length > 0 ? snap.cross : undefined,
+      }).catch(() => undefined);
+    }, NPC_SYNC_INTERVAL_MS);
+    return () => window.clearInterval(iv);
+  }, [phase, mode, npcWorld?.isAuthority, npcWorld?.onlineCount, publishNpcWorld]);
+
+  /**
+   * §30/§31: every other ONLINE client renders the server's validated NPC
+   * world (smoothly, never teleporting), and always honours the live
+   * conversation claims so one cat is never "in two conversations".
+   */
+  useEffect(() => {
+    const g = gameRef.current;
+    if (!g) return;
+    g.setNpcSyncSelfName(myCatRef.current?.name ?? null);
+    if (phase !== "playing" || mode !== "open" || !npcWorld) {
+      g.clearNpcSync();
+      return;
+    }
+    if (npcWorld.isAuthority || !npcWorld.fresh || (npcWorld.onlineCount ?? 0) < 2) {
+      // solo / authority / authority went quiet: local sim, but still respect
+      // other players' live conversations
+      g.clearNpcSync();
+      g.setNpcBusyClaims(npcWorld.busy, Date.now());
+      return;
+    }
+    g.applyNpcSync(npcWorld.npcs, npcWorld.busy, Date.now());
+  }, [npcWorld, phase, mode]);
+
+  /** §29: keep my conversation claim alive while the chat panel is open. */
+  useEffect(() => {
+    if (!npcConvo || mode !== "open" || offlineRef.current) return;
+    const iv = window.setInterval(() => {
+      refreshNpcConversation({ worldId: NPC_SYNC_WORLD, npcId: npcConvo.npcId }).catch(() => undefined);
+    }, 8000);
+    return () => window.clearInterval(iv);
+  }, [npcConvo, mode, refreshNpcConversation]);
 
   // §27: while talking with a cat, duck music/ambience under the written
   // dialogue; restore the moment the conversation ends.
@@ -1152,6 +1247,13 @@ export default function Game() {
   dialogueCtxRef.current = dialogueCtx;
 
   // --- interactions ---
+  /**
+   * §29: the real "start talking" body, shared by the local path and the
+   * server-claimed path (the claim can be refused when another player is
+   * already talking with that cat). Assigned after voiceNpcLine is defined.
+   */
+  const startNpcConvoRef = useRef<(npcId: string) => void>(() => undefined);
+
   const handleInteract = useCallback(
     (target: NearbyTarget) => {
       const cur = dialogueRef.current;
@@ -1178,37 +1280,35 @@ export default function Game() {
         // start: pause the NPC's AI, face the player, open the convo UI
         // (cleanly close any previous conversation first — never two at once)
         if (npcConvoRef.current) {
-          gameRef.current?.setNpcConversation(npcConvoRef.current.npcId, false);
+          const prevId = npcConvoRef.current.npcId;
+          releaseNpcConversation({ worldId: NPC_SYNC_WORLD, npcId: prevId }).catch(() => undefined);
+          gameRef.current?.setNpcConversation(prevId, false);
           setNpcConvo(null);
         }
-        setDialogue(null); // the dedicated conversation UI replaces chatter panels
-        gameRef.current?.setNpcConversation(npc.id, true);
-        audio().playMew("talk");
-        const built = buildDialogue(npc.id, dialogueCtx());
-        setConvoView("root");
-        setChatMsgs([{ from: "npc", text: built.opening }]);
-        // §13/§22: the cat does NOT read the line aloud — one short vocal in
-        // THEIR voice (profile-driven, emotion-inferred) accompanies the text.
-        voiceNpcLine(npc.id, built.opening);
-        const dCtx = dialogueCtx();
-        dCtx.npcActivity = gameRef.current?.getNpcActivity(npc.id) ?? undefined;
-        dCtx.npcLocation = gameRef.current?.getNpcLocation(npc.id) ?? undefined;
-        setAskOptions(buildAskMenu(npc.id, dCtx));
-        setNpcConvo({ npcId: npc.id, name: npc.name, role: profileFor(npc.id).rank, line: built.opening, choices: built.choices });
-        const nextTalked = { ...talkedRef.current, [npc.id]: (talkedRef.current[npc.id] ?? 0) + 1 };
-        talkedRef.current = nextTalked;
-        setTalked(nextTalked);
-        persistNpcMemory(npc.id);
-        reportDailyRef.current("social"); // §8: chatting with Clanmates counts
-        // §1/§15: story completion counts the first line of the conversation —
-        // STORY MODE ONLY. Online chats advance bonds and memories, never the
-        // Into the Wild timeline.
-        if (mode === "story") {
-          const step = storySteps[storyStepRef.current];
-          if (step && step.objective.kind === "talk" && step.objective.targetNpc === npc.id) {
-            advanceStory();
-          }
+        // §29 MULTIPLAYER: one conversation per cat. The server owns that
+        // claim, so a second player can never overwrite the first player's
+        // conversation — they are told who holds the cat instead.
+        if (mode === "open" && npcWorldRef.current) {
+          const npcId = npc.id;
+          claimNpcConversation({ worldId: NPC_SYNC_WORLD, npcId, name: myCatRef.current?.name ?? "a cat" })
+            .then((r) => {
+              if ((r as { accepted?: boolean }).accepted) {
+                startNpcConvoRef.current(npcId);
+                return;
+              }
+              const busyWith = (r as { busyWith?: string }).busyWith ?? "another cat";
+              setDialogue({
+                name: npc.name,
+                text: `${npc.name.split(" ")[0]} is talking with ${busyWith} right now — give them a moment.`,
+              });
+              window.setTimeout(() => setDialogue((d) => (d && d.name === npc.name ? null : d)), 4500);
+            })
+            // §27: a server hiccup must never block a conversation in the
+            // online world — fall back to the local talk path
+            .catch(() => startNpcConvoRef.current(npc.id));
+          return;
         }
+        startNpcConvoRef.current(npc.id);
         return;
       }
 
@@ -1359,12 +1459,51 @@ export default function Game() {
     audio().playCharacterVocal(v);
   }, []);
 
+  /** The real conversation opener (used by both the local and claimed paths). */
+  startNpcConvoRef.current = (npcId: string) => {
+    const npc = npcs.find((n) => n.id === npcId);
+    if (!npc) return;
+    setDialogue(null); // the dedicated conversation UI replaces chatter panels
+    setChatNote(null);
+    chatGateRef.current.reset(); // §28: a fresh conversation, a fresh budget
+    gameRef.current?.setNpcConversation(npc.id, true);
+    audio().playMew("talk");
+    const built = buildDialogue(npc.id, dialogueCtx());
+    setConvoView("root");
+    setChatMsgs([{ from: "npc", text: built.opening }]);
+    // §13/§22: the cat does NOT read the line aloud — one short vocal in
+    // THEIR voice (profile-driven, emotion-inferred) accompanies the text.
+    voiceNpcLine(npc.id, built.opening);
+    const dCtx = dialogueCtx();
+    dCtx.npcActivity = gameRef.current?.getNpcActivity(npc.id) ?? undefined;
+    dCtx.npcLocation = gameRef.current?.getNpcLocation(npc.id) ?? undefined;
+    setAskOptions(buildAskMenu(npc.id, dCtx));
+    setNpcConvo({ npcId: npc.id, name: npc.name, role: profileFor(npc.id).rank, line: built.opening, choices: built.choices });
+    const nextTalked = { ...talkedRef.current, [npc.id]: (talkedRef.current[npc.id] ?? 0) + 1 };
+    talkedRef.current = nextTalked;
+    setTalked(nextTalked);
+    persistNpcMemory(npc.id);
+    reportDailyRef.current("social"); // §8: chatting with Clanmates counts
+    // §1/§15: story completion counts the first line of the conversation —
+    // STORY MODE ONLY. Online chats advance bonds and memories, never the
+    // Into the Wild timeline.
+    if (mode === "story") {
+      const step = storySteps[storyStepRef.current];
+      if (step && step.objective.kind === "talk" && step.objective.targetNpc === npc.id) {
+        advanceStory();
+      }
+    }
+  };
+
   /** Send a free-typed message to the NPC (compact chat view). */
   const handleChatSend = useCallback(
     (text: string) => {
       const c = npcConvoRef.current;
       const msg = text.trim();
-      if (!c || !msg || chatBusyRef.current) return;
+      if (!c || !msg) return;
+      lastSentRef.current = msg;
+      // one AI request per player message at a time; extra sends still get the
+      // instant local reply and simply skip the polish layer (§28)
       setChatMsgs((m) => [...m, { from: "player", text: msg }]);
       // 1) instant deterministic in-character reply (never blocks, no network)
       const ctx = dialogueCtxRef.current();
@@ -1387,12 +1526,24 @@ export default function Game() {
           persistNpcMemory(c.npcId);
         }
       }
-      // 2) optional AI polish: replaces the local line only when a key exists
+      // 2) optional AI polish: replaces the local line only when a key exists,
+      // the reply passes the §26 filter, and the §28 request budget allows it.
       if (npcAiAvailable) {
+        const gate = chatGateRef.current;
+        const slot = gate.begin(Date.now());
+        if (!slot) {
+          // throttled / coalesced (§28): the safe local line is already shown
+          if (gate.exhausted) {
+            setChatNote(`${c.name.split(" ")[0]} has said all they will for now. Come back later.`);
+          }
+          return;
+        }
         setChatBusy(true);
         chatBusyRef.current = true;
         const p = profileFor(c.npcId);
-        npcAiAction({
+        const npcIdForRequest = c.npcId;
+        const history = [...chatMsgsRef.current, { from: "player" as const, text: msg }].slice(-6);
+        const ask = () => npcAiAction({
           npcName: p.name,
           npcRank: p.rank,
           npcClan: p.clan,
@@ -1406,31 +1557,67 @@ export default function Game() {
           npcMentor: p.mentor,
           npcApprentice: p.apprentice,
           npcRelationships: (p.relationships ?? []).join("; "),
-          npcActivity: gameRef.current?.getNpcActivity(c.npcId) ?? undefined,
-          npcLocation: gameRef.current?.getNpcLocation(c.npcId) ?? undefined,
+          npcActivity: gameRef.current?.getNpcActivity(npcIdForRequest) ?? undefined,
+          npcLocation: gameRef.current?.getNpcLocation(npcIdForRequest) ?? undefined,
           rememberedFacts: (ctx.facts ?? [])
-            .filter((f) => f.startsWith(`${c.npcId}:`))
-            .map((f) => FACT_LABELS[f.slice(c.npcId.length + 1)] ?? f.slice(c.npcId.length + 1)),
+            .filter((f) => f.startsWith(`${npcIdForRequest}:`))
+            .map((f) => FACT_LABELS[f.slice(npcIdForRequest.length + 1)] ?? f.slice(npcIdForRequest.length + 1)),
           playerName: ctx.player.name,
           playerClan: ctx.player.clan,
           playerRank: ctx.player.rank,
           bond: ctx.bonds[p.id] ?? 0,
           storyStep: ctx.storyStep,
           mode: ctx.mode,
-          history: chatMsgsRef.current.slice(-6),
+          history,
           message: msg,
-        })
-          .then((r: { available: boolean; text: string | null }) => {
-            if (r?.text) {
-              setChatMsgs((m) => [...m.slice(0, -1), { from: "npc", text: r.text as string }]);
-              voiceNpcLine(c.npcId, r.text as string); // AI-polished line still gets THEIR voice
-            }
-          })
-          .catch(() => undefined) // local line already on screen — nothing to do
-          .finally(() => {
-            setChatBusy(false);
-            chatBusyRef.current = false;
+        });
+        /** §28: a response that arrives after the timeout is ignored. */
+        const withTimeout = async (): Promise<{ text: string | null }> => {
+          let timer = 0;
+          const timeout = new Promise<{ text: string | null }>((resolve) => {
+            timer = window.setTimeout(() => resolve({ text: null }), 12_000);
           });
+          try {
+            const res = await Promise.race([
+              ask().then((r: { text: string | null }) => ({ text: r?.text ?? null })),
+              timeout,
+            ]);
+            return res;
+          } catch {
+            return { text: null };
+          } finally {
+            window.clearTimeout(timer);
+          }
+        };
+        /** One attempt; at most ONE retry, never an automatic loop (§28). */
+        const worker = async (s: { id: number }, attempt: number): Promise<void> => {
+          const res = await withTimeout();
+          // panel closed / switched cat / a newer request took over: drop it
+          if (!gate.isCurrent(s.id) || npcConvoRef.current?.npcId !== npcIdForRequest) return;
+          const verdict = res.text
+            ? validateNpcReply(res.text, p)
+            : { ok: false as const, text: "", reason: "unavailable" };
+          if (verdict.ok) {
+            setChatMsgs((m) => [...m.slice(0, -1), { from: "npc", text: verdict.text }]);
+            voiceNpcLine(npcIdForRequest, verdict.text); // polished line keeps THEIR voice
+            gate.settle(s.id, true, Date.now());
+            setChatNote(null);
+            return;
+          }
+          // §26: rejected or unavailable — the safe local line stays on screen
+          gate.settle(s.id, false, Date.now());
+          if (attempt < 1 && gate.retryAllowed()) {
+            await new Promise((r) => window.setTimeout(r, 900));
+            if (npcConvoRef.current?.npcId !== npcIdForRequest) return;
+            const again = gate.begin(Date.now());
+            if (again) return worker(again, attempt + 1);
+          }
+          setChatNote(npcAiTroubleLine(p));
+        };
+        void worker(slot, 0).finally(() => {
+          setChatBusy(gate.inFlight);
+          chatBusyRef.current = gate.inFlight;
+        });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2172,9 +2359,10 @@ export default function Game() {
                 if (convoView === "root" && !npcConvo.choices?.length) endNpcConvo();
               }}
             >
-              {/* header: name + rank + close */}
+              {/* header: §20 portrait + name + rank + close */}
               <div className="flex items-center justify-between gap-2 border-b border-amber-500/20 px-3 py-1.5">
                 <div className="flex min-w-0 items-center gap-1.5">
+                  <NpcPortrait npcId={npcConvo.npcId} size={26} />
                   <span className="truncate text-[13px] font-semibold tracking-tight">{npcConvo.name}</span>
                   {npcConvo.role && (
                     <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-amber-600/90 dark:text-amber-300/90">
@@ -2297,6 +2485,24 @@ export default function Game() {
                       </p>
                     ))}
                     {chatBusy && <p className="text-[10px] italic text-muted-foreground">{npcConvo.name.split(" ")[0]} is thinking…</p>}
+                    {!chatBusy && chatNote && (
+                      <p className="text-[10px] italic text-amber-600/90 dark:text-amber-300/80">
+                        {npcConvo.name.split(" ")[0]}: {chatNote}{" "}
+                        <button
+                          type="button"
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            setChatNote(null);
+                            // re-ask with the last thing the player said
+                            const last = lastSentRef.current;
+                            if (last) handleChatSend(last);
+                          }}
+                          className="underline decoration-dotted hover:text-foreground"
+                        >
+                          try again
+                        </button>
+                      </p>
+                    )}
                   </div>
                   <form
                     className="mt-1.5 flex items-center gap-1.5"
@@ -2316,9 +2522,10 @@ export default function Game() {
                       maxLength={140}
                       className="h-7 min-w-0 flex-1 rounded-lg border border-border/50 bg-background/60 px-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground/70 focus:border-amber-500/40"
                     />
+                    {/* §27/§28: sending is never blocked — the local reply is
+                        instant and the AI layer coalesces behind it */}
                     <button
                       type="submit"
-                      disabled={chatBusy}
                       className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 disabled:opacity-50"
                     >
                       Send

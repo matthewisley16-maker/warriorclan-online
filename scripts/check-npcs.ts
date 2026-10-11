@@ -398,7 +398,9 @@ if (denCat) {
   let sawInDen = false;
   let teleported = false;
   const mouth = { x: denObj.x, y: denObj.y + denObj.h / 2 + 14 };
-  for (let i = 0; i < 2400 && !sawInDen; i++) {
+  // generous budget: the elder's route is stochastic (schedule + sidesteps),
+  // and the assertions below are about HOW it arrives, not how fast
+  for (let i = 0; i < 6000 && !sawInDen; i++) {
     const lx = cat.x;
     const ly = cat.y;
     pump(100);
@@ -429,7 +431,7 @@ if (denCat) {
     let sawExitWalk = false;
     let outClean = false;
     let exitTeleport = false;
-    for (let i = 0; i < 1600 && !outClean; i++) {
+    for (let i = 0; i < 3600 && !outClean; i++) {
       const lx = cat.x;
       const ly = cat.y;
       pump(100);
