@@ -1,5 +1,14 @@
 // WarriorCatsRPG — programmatic sprite drawing: parameterized cats (patterns,
 // tails, ears, poses), prey animals, and camp/territory props.
+//
+// The tail is NOT drawn here: this file asks the ONE authoritative tail
+// controller (src/game/tail.ts) for the current geometry and draws it — the
+// tail stroke, the pale tail-tip marking and every tail accessory all read
+// that same geometry, so they can never disagree (see tail.ts for the two
+// original bugs: a second tail on the wrong side of the facing mirror, and a
+// frozen tail with a 33px snap when a conversation forced the sit pose).
+
+import { tailGeom, tailPoint, tailWidthOf, type TailFamilyHint, type TailGeom } from "./tail";
 
 export interface CatSkin {
   fur: string;
@@ -77,9 +86,17 @@ export function drawCat(
   pose: CatPose,
   time: number,
   phase: number,
-  /** optional body-level acting overlay: yawn/alert/tail-flick/blink/talk */
-  fx?: { yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean; wet?: boolean; hop?: number; head?: "nod" | "shake" | "look" | "sniff"; carry?: boolean },
+  /** optional body-level acting overlay: yawn/alert/tail-flick/blink/talk.
+   *  `tailId` is the cat's stable identity for the tail controller's smoothing
+   *  (pass it wherever one is available: "player", "npc:<id>", "p:<userId>", …) */
+  fx?: { yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean; wet?: boolean; hop?: number; head?: "nod" | "shake" | "look" | "sniff"; carry?: boolean; tailId?: string },
 ) {
+  // §6/§7 PREVIEW SAFETY: an editor, a thumbnail or a not-yet-loaded account row
+  // can hand us a partial/empty skin. Normalizing it here means a missing field
+  // renders the DEFAULT cat instead of throwing mid-frame — that throw used to
+  // happen before the next requestAnimationFrame call, which killed the editor's
+  // render loop and left a permanently blank ("invisible cat") canvas.
+  skin = normalizeSkin(skin);
   const size = skin.size ?? 1;
   const moving = pose === "walk" || pose === "swim";
   const SWIM_BOB_HZ = 1.1;
@@ -144,35 +161,42 @@ export function drawCat(
   // hop squash & stretch: compress at takeoff/landing, extend mid-air
   const hopP = fx?.hop ?? -1;
   const squash = hopP >= 0 ? 1 + Math.sin(hopP * Math.PI) * 0.08 : 1;
+  // ---- §4 THE tail: one geometry, asked of the authoritative controller -----
+  // Drawn inside the facing/scale transform, so it is always on the same side
+  // as the body; flicked, alerted and conversing states are all folded into
+  // this single curve (never a second stroke).
   const tail = skin.tail ?? "normal";
-  const tailLen = tail === "short" ? 0.5 : tail === "bob" ? 0.3 : tail === "long" ? 1.25 : 1;
-  const tailW = tail === "fluffy" ? 6.5 : tail === "slim" ? 3.2 : 4.5;
-
-  // tail
-  const tailSway = Math.sin(time * 2.2 + phase) * (moving ? 5 : 9);
+  const tg: TailGeom = tailGeom({
+    id: fx?.tailId,
+    family: tailFamilyOf(fam, pose),
+    pose,
+    tail,
+    time,
+    phase,
+    bodyMoving: moving,
+    tailFlick: fx?.tailFlick,
+    talking: fx?.talking,
+    alert: fx?.alert,
+  });
   ctx.strokeStyle = skin.furDark;
-  ctx.lineWidth = tailW;
+  ctx.lineWidth = tg.width;
   ctx.lineCap = "round";
   ctx.beginPath();
-  if (pose === "swim") {
-    // tail streams behind, tip above the wake
-    ctx.moveTo(-11, -5);
-    ctx.quadraticCurveTo(-20 * tailLen, -6 + tailSway * 0.3, -26 * tailLen, -12 + tailSway * 0.6);
-  } else if (fam === "sit") {
-    ctx.moveTo(-10, -4);
-    ctx.quadraticCurveTo(-18 * tailLen, -2, -16 * tailLen, 6);
-  } else if (fam === "sleep") {
-    ctx.moveTo(-8, -3);
-    ctx.quadraticCurveTo(-14, 0, -12 * tailLen, 4);
-  } else if (pose === "dance1" || pose === "dance3") {
-    // upright tail waving high on the beat
-    ctx.moveTo(-10, -8);
-    ctx.quadraticCurveTo(-17 * tailLen, -16 + Math.sin(dancePhase * 2) * 6, -20 * tailLen, -26 + Math.sin(dancePhase * 2) * 8);
-  } else {
-    ctx.moveTo(-11, -8);
-    ctx.quadraticCurveTo(-20 * tailLen, -14 + tailSway * 0.4, -24 * tailLen, -20 + tailSway);
-  }
+  ctx.moveTo(tg.baseX, tg.baseY);
+  ctx.quadraticCurveTo(tg.ctrlX, tg.ctrlY, tg.tipX, tg.tipY);
   ctx.stroke();
+  // §21: the pale tail-tip marking is stroked HERE, in the same transform that
+  // drew the tail it caps. Drawn later (in the markings layer) it inherited the
+  // head/marking transform and sat up to 5px off the tip in the crouch poses.
+  if ((skin.markings ?? []).includes("tailtip")) {
+    const capFrom = tailPoint(tg, 0.55);
+    ctx.strokeStyle = "rgba(244, 238, 226, 0.95)";
+    ctx.lineWidth = tg.width * 0.9;
+    ctx.beginPath();
+    ctx.moveTo(capFrom.x, capFrom.y);
+    ctx.quadraticCurveTo(tg.ctrlX, tg.ctrlY, tg.tipX, tg.tipY);
+    ctx.stroke();
+  }
 
   // body
   ctx.fillStyle = skin.fur;
@@ -622,6 +646,8 @@ export function drawCat(
   ctx.stroke();
 
   // --- white markings (multi-select, pose-anchored) ---
+  // The pale tail-tip rides with the tail itself (see the tail block above);
+  // it used to be gated here and was missing entirely for lying/swimming cats.
   const mk = new Set(skin.markings ?? []);
   if (mk.size > 0 && pose !== "swim" && !isLie(pose)) {
     ctx.fillStyle = "rgba(244, 238, 226, 0.95)";
@@ -641,17 +667,6 @@ export function drawCat(
     if (mk.has("socks")) {
       ctx.fillRect(-9, pose === "walk" ? -4 : -3.4, 4, pose === "walk" ? 6 : 5);
       ctx.fillRect(5, pose === "walk" ? -4 : -3.4, 4, pose === "walk" ? 6 : 5);
-    }
-    // tail tip: a pale cap over the tail end
-    if (mk.has("tailtip")) {
-      ctx.strokeStyle = "rgba(244, 238, 226, 0.95)";
-      ctx.lineWidth = tailW;
-      ctx.beginPath();
-      if (pose === "sit") { ctx.moveTo(-14 * tailLen, -2); ctx.quadraticCurveTo(-16 * tailLen, 1, -16 * tailLen, 6); }
-      else if (pose === "sleep") { ctx.moveTo(-11, 0); ctx.quadraticCurveTo(-12 * tailLen, 2, -12 * tailLen, 4); }
-      else { ctx.moveTo(-19 * tailLen, -16 + tailSway * 0.4); ctx.quadraticCurveTo(-22 * tailLen, -18 + tailSway * 0.7, -24 * tailLen, -20 + tailSway); }
-      ctx.stroke();
-      ctx.lineWidth = 1;
     }
     // pale ear rims
     if (mk.has("ears")) {
@@ -1054,10 +1069,12 @@ export function drawCat(
       ctx.fillRect(px2 - 1, py2 - 1.4, 4.4, 2);
     }
   }
-  // TAIL: band / ribbon / bow / flower — anchored to the tail base per pose
+  // TAIL: band / ribbon / bow / flower — anchored to the REAL tail base, read
+  // from the same geometry the tail is drawn from (so an accessory can never
+  // float off the tail during a pose transition)
   if (acc.tail) {
-    const tx = fam === "sit" ? -10 : fam === "sleep" ? -8 : -11;
-    const ty = fam === "sit" ? -4 : fam === "sleep" ? -3 : fam === "swim" ? -5 : -8;
+    const tx = tg.baseX;
+    const ty = tg.baseY;
     const tt = tintOf("tail");
     if (acc.tail === "band") {
       ctx.strokeStyle = tt;
@@ -1165,21 +1182,45 @@ export function drawCat(
   ctx.restore();
   ctx.restore();
 
-  // tail flick: drawn OUTSIDE the mirrored transform so it always sweeps to
-  // the same side regardless of facing (a visible, readable tail gesture)
-  if (fx?.tailFlick) {
-    const flick = Math.sin(time * 5.5) * 8;
-    ctx.save();
-    ctx.translate(x, y - 4);
-    ctx.strokeStyle = skin.furDark;
-    ctx.lineWidth = 4.5;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(-12, 0);
-    ctx.quadraticCurveTo(-20, -8 - flick * 0.4, -24, -14 - flick);
-    ctx.stroke();
-    ctx.restore();
-  }
+}
+
+/** Map a body-pose family (+ the dance poses) onto a tail family hint. */
+function tailFamilyOf(fam: string, pose: CatPose): TailFamilyHint {
+  if (pose === "dance1" || pose === "dance2" || pose === "dance3" || pose === "dance4") return "dance";
+  if (fam === "swim" || fam === "sit" || fam === "sleep" || fam === "crouch") return fam;
+  return "stand";
+}
+
+/**
+ * §6/§7/§11: fill in any missing appearance field so drawCat can render ANY
+ * skin it is handed — including `{}` from a preview that opened before the
+ * account row loaded. Returns a fresh object (never mutates the caller's).
+ */
+export function normalizeSkin(skin?: Partial<CatSkin> | null): CatSkin {
+  const a = (skin ?? {}) as Partial<CatSkin>;
+  const fur = a.fur || "#d96b2f";
+  const dark = a.furDark || shadeHex(fur, 0.62);
+  return {
+    ...a,
+    fur,
+    furDark: dark,
+    eye: a.eye || "#4fae6e",
+    size: typeof a.size === "number" && a.size > 0 ? a.size : 1,
+    furLength: typeof a.furLength === "number" ? a.furLength : 1,
+    tail: a.tail || "normal",
+    ears: a.ears || "normal",
+    pattern: a.pattern || "solid",
+  };
+}
+
+/** Darken a hex color (used for the derived outline/furDark fallbacks). */
+function shadeHex(hex: string, f: number): string {
+  const n = hex.replace("#", "");
+  if (n.length !== 6) return "#5a3a20";
+  const r = Math.round(parseInt(n.slice(0, 2), 16) * f);
+  const g = Math.round(parseInt(n.slice(2, 4), 16) * f);
+  const b = Math.round(parseInt(n.slice(4, 6), 16) * f);
+  return `#${[r, g, b].map((v) => Math.max(12, v).toString(16).padStart(2, "0")).join("")}`;
 }
 
 // ---------------------------------------------------------------------------

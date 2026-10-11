@@ -38,6 +38,7 @@ import { RefreshCw } from "lucide-react";
 import { drawCat, type CatSkin } from "@/game/draw";
 import { MenuScene } from "@/game/menuScene";
 import { CatCustomizer, type CustomizerSave } from "./CatCustomizer";
+import { fullSkin } from "./gameUi";
 import type { CustomSkin as FullSkinT } from "@/game/catItems";
 import { TITLES, earnedTitleIds, titleLabel } from "@/game/titles";
 import { cn } from "@/lib/utils";
@@ -1058,8 +1059,13 @@ export default function MainMenu({
           <CatCustomizer
             open
             playerName={player?.name ?? "Rusty"}
-            initialSkin={(player?.skin ?? {}) as FullSkinT}
-            savedSkin={(player?.skin ?? {}) as FullSkinT}
+            // §6/§11: never hand the editor an EMPTY skin. `player?.skin` is
+            // undefined until the account row loads, and `{}` used to reach
+            // drawCat (its first frame threw, killing the preview loop for
+            // good) and the save payload (which the server rejects).
+            initialSkin={fullSkin(player?.skin) as FullSkinT}
+            savedSkin={fullSkin(player?.skin) as FullSkinT}
+            loading={!player}
             favorites={favorites}
             presets={presets}
             onClose={() => setCustomizerOpen(false)}
@@ -1069,10 +1075,12 @@ export default function MainMenu({
                 : undefined
             }
             onSave={(v) => {
-              // §7/§8: ONE save path — the full appearance + version fingerprint
-              // through Game's saveAppearance (awaited by CatCustomizer's
-              // onPersist before onSave fires).
-              onSaveAppearance(v.skin as CatSkin, player?.name);
+              // §7/§8/§22: the appearance write already happened — and was
+              // AWAITED — in onPersist above, so it must not be written again
+              // here (that duplicate server call ran on every confirmed save).
+              // The legacy fire-and-forget path only remains as the fallback
+              // for a host that wired no persistence hook at all.
+              if (!onPersistAppearance) onSaveAppearance(v.skin as CatSkin, player?.name);
               onSaveCustomization?.({ favorites: v.favorites, presets: v.presets });
               setCustomizerOpen(false);
             }}

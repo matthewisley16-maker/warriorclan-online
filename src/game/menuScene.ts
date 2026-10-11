@@ -477,14 +477,14 @@ export class MenuScene {
     for (const c of this.campCats) {
       drawables.push({
         y: c.y,
-        draw: () => drawCat(ctx, c.skin, c.x, c.y, c.facing, c.pose, t, c.phase),
+        draw: () => drawCat(ctx, c.skin, c.x, c.y, c.facing, c.pose, t, c.phase, { tailId: `menu:${c.name}` }),
       });
     }
     // Player's cat, foreground center, standing proudly; slow orbit sway.
     const ox = 640 + Math.sin(this.baseT + t * 0.07) * 60;
     drawables.push({
       y: 610,
-      draw: () => drawCat(ctx, this.playerSkin, ox, 610, this.playerFacing, "sit", t, 0),
+      draw: () => drawCat(ctx, this.playerSkin, ox, 610, this.playerFacing, "sit", t, 0, { tailId: "menu:player" }),
     });
     drawables.sort((a, b) => a.y - b.y);
     for (const d of drawables) d.draw();

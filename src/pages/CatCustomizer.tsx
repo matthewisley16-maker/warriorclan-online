@@ -10,12 +10,12 @@
 // Everything renders through the same drawCat the game uses, so the preview
 // IS the in-game cat. Changes are temporary until SAVE CAT.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, Check, Heart, PawPrint, RefreshCw, RotateCcw, Save, Search, Sparkles, Star, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { drawCat, type CatSkin } from "@/game/draw";
+import { drawCat, normalizeSkin, type CatSkin } from "@/game/draw";
 import {
   ACCESSORY_SLOTS,
   ACC_SLOT_CATS,
@@ -82,6 +82,11 @@ function CatPreviewLarge({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [facing, setFacing] = useState<1 | -1>(1);
+  // §6/§15: if a frame ever fails to draw we SAY so (and keep the loop alive so
+  // it recovers) instead of showing an unexplained blank stage. The old code
+  // let the first throw kill the requestAnimationFrame chain outright, which is
+  // exactly how the preview ended up permanently empty.
+  const [drawError, setDrawError] = useState<string | null>(null);
 
   useRenderEffect(() => {
     const canvas = canvasRef.current;
@@ -94,9 +99,22 @@ function CatPreviewLarge({
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       const scale = size / 130;
       ctx.scale(scale, scale);
-      // ground point hugs the canvas floor so paws + shadow are never clipped
-      // (uniform scale only — proportions are preserved, never stretched)
-      drawCat(ctx, skin, 65, canvas.height / scale - 8, facing, pose, t / 1000, 0);
+      // ground point hugs the canvas floor so paws + shadow are never clipped;
+      // 12px of local head-room keeps the ANIMATED tail (which sweeps a few px
+      // below the shadow line) inside the stage at every editor size.
+      // (Uniform scale only — proportions are preserved, never stretched.)
+      // Every skin is normalized first, so a partial/loading appearance still
+      // renders the real cat rather than throwing.
+      const groundY = canvas.height / scale - 12;
+      try {
+        drawCat(ctx, normalizeSkin(skin), 65, groundY, facing, pose, t / 1000, 0, {
+          tailId: "editor:preview",
+        });
+        setDrawError((e) => (e === null ? e : null));
+      } catch (err) {
+        console.error("[customizer] live preview failed to render", err);
+        setDrawError(err instanceof Error ? err.message : String(err));
+      }
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
@@ -108,6 +126,11 @@ function CatPreviewLarge({
       {/* soft stage */}
       <div className="absolute inset-0 rounded-3xl bg-gradient-to-b from-emerald-900/40 to-[#0d160d]/10 ring-1 ring-white/10" />
       <canvas ref={canvasRef} width={size} height={size * 0.85} className="relative z-10 h-full w-full" />
+      {drawError && (
+        <div className="absolute inset-x-2 bottom-2 z-30 rounded-lg bg-red-500/85 px-2 py-1 text-center text-[10px] font-semibold text-white">
+          Preview error: {drawError}
+        </div>
+      )}
       <button
         onClick={() => setFacing(-1)}
         className="absolute left-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/40 px-2 py-1 text-xs text-white/70 hover:bg-black/60"
@@ -208,7 +231,7 @@ function ItemCardPreview({ item, baseSkin, tint }: { item: CatItem; baseSkin: Cu
       }
       skin.accColor = tint;
       try {
-        drawCat(ctx, skin as CatSkin, 45, 66, 1, "sit", t / 1000, 0);
+        drawCat(ctx, normalizeSkin(skin), 45, 66, 1, "sit", t / 1000, 0, { tailId: `editor:item:${item.id}` });
       } catch (err) {
         // never silently blank: report the real error, then fall back to an icon
         console.error("[customizer] item thumbnail failed to render", item.id, err);
@@ -239,7 +262,7 @@ function ItemCardPreview({ item, baseSkin, tint }: { item: CatItem; baseSkin: Cu
 // Preset thumbnail
 // ---------------------------------------------------------------------------
 
-function PresetThumb({ skin, size = 64, pose = "sit" }: { skin: CustomSkin; size?: number; pose?: CatPose }) {
+function PresetThumb({ skin, size = 64, pose = "sit", id = "editor:thumb" }: { skin: CustomSkin; size?: number; pose?: CatPose; id?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useRenderEffect(() => {
     const canvas = canvasRef.current;
@@ -251,7 +274,7 @@ function PresetThumb({ skin, size = 64, pose = "sit" }: { skin: CustomSkin; size
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.scale(size / 100, size / 100);
-      drawCat(ctx, skin as CatSkin, 50, 68, 1, pose, t / 1000, 0);
+      drawCat(ctx, normalizeSkin(skin), 50, 68, 1, pose, t / 1000, 0, { tailId: id });
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
@@ -352,6 +375,7 @@ export function CatCustomizer({
   onClose,
   onSave, // (skin, favorites, presets) — persists everything to the account
   onPersist, // §10: awaited persistence of the FULL appearance (all fields)
+  loading = false, // §15: the account's cat is still loading — say so, never guess
 }: {
   open: boolean;
   playerName: string;
@@ -365,8 +389,15 @@ export function CatCustomizer({
    * Receives the CURRENT editor skin so the parent saves exactly what is on
    * screen (never a stale initial value). */
   onPersist?: (s: { skin: CustomSkin }) => Promise<void> | void;
+  /** §15: the account's saved cat has not arrived yet */
+  loading?: boolean;
 }) {
-  const [skin, setSkin] = useState<CustomSkin>(initialSkin);
+  // §11/§6: an editor is ALWAYS handed a complete, renderable cat. An empty
+  // `{}` (an account row that has not loaded, or has no save yet) used to reach
+  // drawCat and to be written back on SAVE — normalizeSkin fills every field
+  // from the real defaults instead, so the preview shows the actual cat and the
+  // save payload is never missing `fur`.
+  const [skin, setSkin] = useState<CustomSkin>(() => normalizeSkin(initialSkin) as CustomSkin);
   const [category, setCategory] = useState<string>("fur");
   const [query, setQuery] = useState("");
   const [pose, setPose] = useState<CatPose>("sit");
@@ -426,6 +457,90 @@ export function CatCustomizer({
   const catalogEmpty = CAT_ITEMS.length === 0;
   const activeNav = nav.find((n) => n.id === category);
 
+  // §14/§16/§22: ONE serialized write path. Every save (manual or autosave)
+  // goes through it, an in-flight write is never overlapped, and the newest
+  // requested look always wins — no save-request spam, no lost update.
+  // (Declared HERE, above the early return, so the hook order never changes
+  // when the editor opens/closes.)
+  const savingRef = useRef(false);
+  const queuedRef = useRef<CustomSkin | null>(null);
+  const lastAutoRef = useRef<string | null>(null);
+  const [savedOnce, setSavedOnce] = useState(false);
+  const skinToSave = useMemo(() => normalizeSkin(skin) as CustomSkin, [skin]);
+  const savedNorm = useMemo(() => normalizeSkin(savedSkin) as CustomSkin, [savedSkin]);
+  const dirty = JSON.stringify(skinToSave) !== JSON.stringify(savedNorm);
+  const persist = useCallback(
+    async (next: CustomSkin): Promise<boolean> => {
+      if (!onPersist) return true; // no persistence hook wired: keep prior behaviour
+      try {
+        await onPersist({ skin: next });
+        return true;
+      } catch (err) {
+        // §14/§15: the real error is reported and the editor keeps the changes
+        console.error("[customizer] appearance save failed", err);
+        return false;
+      }
+    },
+    [onPersist],
+  );
+  const runSave = useCallback(
+    async (next: CustomSkin): Promise<boolean> => {
+      if (savingRef.current) {
+        queuedRef.current = next; // coalesce: the newest look wins
+        return true;
+      }
+      savingRef.current = true;
+      setSaveState("saving");
+      let ok = true;
+      let cur: CustomSkin | null = next;
+      while (cur) {
+        ok = await persist(cur);
+        setSaveState(ok ? "saved" : "failed");
+        cur = queuedRef.current;
+        queuedRef.current = null;
+      }
+      savingRef.current = false;
+      return ok;
+    },
+    [persist],
+  );
+
+  // §16 autosave: only AFTER one confirmed save in this session (so §20's
+  // "changes are temporary until SAVE" still holds), debounced 900ms, and only
+  // for a look that differs from the account's saved one — a distinct look is
+  // autosaved at most once.
+  useEffect(() => {
+    if (!savedOnce || loading) return;
+    const key = JSON.stringify(skinToSave);
+    if (key === JSON.stringify(savedNorm)) return; // already the account's cat
+    if (key === lastAutoRef.current) return; // this exact look is already written
+    const id = window.setTimeout(() => {
+      lastAutoRef.current = key;
+      void runSave(skinToSave);
+    }, 900);
+    return () => window.clearTimeout(id);
+  }, [savedOnce, loading, skinToSave, savedNorm, runSave]);
+  // §15: clear the confirmation after a moment, so "Saved successfully" is
+  // information and not a permanent label
+  useEffect(() => {
+    if (saveState !== "saved") return;
+    const id = window.setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 2500);
+    return () => window.clearTimeout(id);
+  }, [saveState]);
+
+  // §17: the account's saved cat can arrive AFTER the editor opened (e.g. the
+  // editor was opened from the menu while the save was still loading). Adopt it
+  // then — but NEVER over the player's own edits: `untouched` is true only while
+  // the editor still shows exactly what it was opened with.
+  const openedWithRef = useRef<string>(JSON.stringify(normalizeSkin(initialSkin)));
+  const untouched = JSON.stringify(skinToSave) === openedWithRef.current;
+  useEffect(() => {
+    if (!untouched) return;
+    const next = normalizeSkin(savedSkin) as CustomSkin;
+    openedWithRef.current = JSON.stringify(next);
+    setSkin((s) => (JSON.stringify(s) === JSON.stringify(next) ? s : next));
+  }, [savedSkin, untouched]);
+
   // --- the early return comes AFTER every hook (see the View model note) ---
   if (!open) return null;
 
@@ -443,8 +558,6 @@ export function CatCustomizer({
     setPresets((p) => [...p, { name: name.trim() || `Preset ${p.length + 1}`, skin: { ...skin } }].slice(0, 10));
     setPresetConfirm(null);
   };
-
-  const dirty = JSON.stringify(skin) !== JSON.stringify(savedSkin);
 
   return (
     <AnimatePresence>
@@ -843,7 +956,7 @@ export function CatCustomizer({
                       )}
                     >
                       <div className="flex items-center justify-center rounded-lg bg-gradient-to-b from-emerald-900/30 to-black/10">
-                        <PresetThumb skin={previewSkin} size={72} pose="sit" />
+                        <PresetThumb skin={previewSkin} size={72} pose="sit" id={`editor:morph:${m.id}`} />
                       </div>
                       <p className={cn("mt-1 truncate px-0.5 text-[10px] font-medium", on ? "text-amber-200" : "text-white/70")}>
                         {m.name}
@@ -908,7 +1021,7 @@ export function CatCustomizer({
                       )}
                     >
                       <div className="flex items-center justify-center rounded-lg bg-gradient-to-b from-emerald-900/30 to-black/10">
-                        <PresetThumb skin={previewSkin} size={72} pose="sit" />
+                        <PresetThumb skin={previewSkin} size={72} pose="sit" id={`editor:char:${p.id}`} />
                       </div>
                       <p className="mt-1 truncate px-0.5 text-[10px] font-medium text-white/80">{p.displayName}</p>
                       <p className="truncate px-0.5 text-[9px] text-white/40">
@@ -1001,7 +1114,7 @@ export function CatCustomizer({
                 onClick={() => setPresetApply(idx)}
               >
                 <div className="mx-auto h-12 w-12 overflow-hidden rounded-md bg-emerald-950/50">
-                  <PresetThumb skin={p.skin} />
+                  <PresetThumb skin={p.skin} id={`editor:preset:${idx}`} />
                 </div>
                 <p className="mt-0.5 truncate text-[9px] text-white/70">{p.name}</p>
                 <button
@@ -1078,7 +1191,7 @@ export function CatCustomizer({
               variant="outline"
               size="sm"
               className="h-8 gap-1.5 rounded-xl border-white/20 bg-black/30 text-xs text-white hover:bg-white/10"
-              onClick={() => setSkin({ ...savedSkin })}
+              onClick={() => setSkin({ ...savedNorm })}
               disabled={!dirty}
             >
               <RotateCcw className="size-3.5" /> Reset
@@ -1092,12 +1205,25 @@ export function CatCustomizer({
               <RefreshCw className="size-3.5" /> Randomize
             </Button>
           </div>
-          <p className="hidden text-[10px] text-white/40 md:block">
-            {saveState === "failed"
-              ? "Save failed — your previous cat is safe. Try again."
-              : dirty
-                ? "Unsaved changes — press SAVE CAT to keep them."
-                : "Saved cat"}
+          {/* §15: a real status line — never a fake "saved" message */}
+          <p
+            className={cn(
+              "hidden text-[10px] md:block",
+              saveState === "failed" ? "text-red-300" : saveState === "saved" ? "text-emerald-300" : "text-white/40",
+            )}
+            aria-live="polite"
+          >
+            {loading
+              ? "Loading character…"
+              : saveState === "failed"
+                ? "Save failed — your previous cat is safe. Try again."
+                : saveState === "saving"
+                  ? "Saving…"
+                  : saveState === "saved"
+                    ? "Saved successfully"
+                    : dirty
+                      ? "Unsaved changes — press SAVE CAT to keep them."
+                      : "Saved cat"}
           </p>
           <div className="flex gap-1.5">
             <Button
@@ -1111,18 +1237,22 @@ export function CatCustomizer({
             <Button
               size="sm"
               className="h-8 gap-1.5 rounded-xl bg-amber-400 px-4 text-xs font-bold text-[#0d160d] hover:bg-amber-300"
-              disabled={saveState === "saving"}
+              disabled={saveState === "saving" || loading}
               onClick={() => {
-                setSaveState("saving");
-                Promise.resolve(onPersist?.({ skin }))
-                  .then(() => {
-                    setSaveState("saved");
-                    onSave({ skin, favorites, presets });
-                  })
-                  .catch(() => setSaveState("failed"));
+                // §14: the account write happens FIRST and is awaited. Only a
+                // real success flips the button to "Saved" / closes the editor
+                // with the new cat applied — a failure keeps every change on
+                // screen and offers "Retry save".
+                lastAutoRef.current = JSON.stringify(skinToSave);
+                void runSave(skinToSave).then((ok) => {
+                  if (!ok) return;
+                  setSavedOnce(true);
+                  onSave({ skin: skinToSave, favorites, presets });
+                });
               }}
             >
-              <Save className="size-3.5" /> {saveState === "saving" ? "Saving…" : saveState === "failed" ? "Retry save" : "Save Cat"}
+              <Save className="size-3.5" />
+              {loading ? "Loading…" : saveState === "saving" ? "Saving…" : saveState === "failed" ? "Retry save" : "Save Cat"}
             </Button>
           </div>
         </div>

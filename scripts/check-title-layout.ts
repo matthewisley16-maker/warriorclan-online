@@ -57,7 +57,15 @@ check(menu.includes('<canvas ref={canvasRef} className="absolute inset-0 h-full 
 
 console.log("--- cat portraits: ground point measured from the real canvas ---");
 check(menu.includes("canvas.height / s - 7"), "CatPortrait draws the ground point relative to the canvas bottom (paws never clipped)");
-check(custom.includes("canvas.height / scale - 8"), "CatPreviewLarge draws the ground point relative to the canvas bottom (tail/paws never clipped)");
+// The preview's ground point is still measured from the real canvas bottom; it
+// now goes through a named `groundY` with 12px of head-room so the ANIMATED tail
+// (which sweeps a few px below the shadow line) cannot clip at the smallest
+// editor size — see scripts/check-tail.ts §7, which renders every editor size
+// and asserts the drawn box fits inside the stage.
+check(
+  /const groundY = canvas\.height \/ scale - 1[0-9];/.test(custom) && custom.includes("65, groundY, facing, pose"),
+  "CatPreviewLarge draws the ground point relative to the canvas bottom, with tail head-room (never clipped)",
+);
 
 console.log("--- customizer: internal scrolling + scale-to-fit preview ---");
 check(custom.includes("useElementSize"), "preview stage measures its container (ResizeObserver, resize-only recalcs)");
@@ -86,7 +94,14 @@ check(custom.includes("flex flex-wrap items-center justify-between"), "bottom ba
 console.log("--- customizer: save/randomize/reset always reachable ---");
 check(custom.includes('"Retry save" : "Save Cat"'), "SAVE CAT stays in the fixed bottom bar (never below the viewport)");
 check(custom.includes("onClick={randomize}"), "RANDOMIZE lives in the fixed bottom bar");
-check(custom.includes('onClick={() => setSkin({ ...savedSkin })}'), "RESET lives in the fixed bottom bar");
+// RESET must restore the ACCOUNT's saved cat (not the editor's current skin).
+// It now restores the normalized form of that saved cat (normalizeSkin fills any
+// missing field so the reset target always renders) — the intent is unchanged.
+check(
+  custom.includes('onClick={() => setSkin({ ...savedNorm })}') &&
+    /const savedNorm = useMemo\(\(\) => normalizeSkin\(savedSkin\)/.test(custom),
+  "RESET lives in the fixed bottom bar and restores the saved cat",
+);
 
 console.log("--- safe areas + no horizontal overflow ---");
 check(menu.includes("env(safe-area-inset-left)"), "menu column respects safe-area insets on all edges");

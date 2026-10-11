@@ -1988,10 +1988,16 @@ export default function Game() {
             saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full), catName }).catch(() => undefined);
           }}
           onPersistAppearance={({ skin }) => {
-            // §10: awaited by CatCustomizer before SAVE confirms; failure keeps
-            // the editor open with "Retry save" (data is never lost).
+            // §10/§11: awaited by CatCustomizer before SAVE confirms; failure
+            // keeps the editor open with "Retry save" (data is never lost).
+            // The cat name rides the SAME write, so one confirmed save persists
+            // the whole character (appearance + name) exactly once.
             const full = fullSkin(skin);
-            return saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full) }).then(() => undefined);
+            return saveAppearance({
+              appearance: full,
+              appearanceVersion: appearanceVersion(full),
+              catName: player?.catName ?? undefined,
+            }).then(() => undefined);
           }}
           onSaveClan={(clan) => updateCat({ clan }).catch(() => undefined)}
           onSaveTitle={(t) => setTitle({ title: t ?? undefined }).catch(() => undefined)}

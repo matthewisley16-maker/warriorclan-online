@@ -160,8 +160,9 @@ export function NpcPortrait({ npcId, size = 40 }: { npcId: string; size?: number
       const s = (size * 2) / 90;
       ctx.scale(s, s);
       try {
-        // a sit pose with the live breathing/ear animation of drawCat
-        drawCat(ctx, def, 45, 66, 1, "sit", t / 1000, 0);
+        // a sit pose with the live breathing/ear/tail animation of drawCat
+        // (its own tail state, so the portrait never borrows another cat's)
+        drawCat(ctx, def, 45, 66, 1, "sit", t / 1000, 0, { tailId: `portrait:${npcId}` });
       } catch (err) {
         // never silently blank: report, then fall back to the paw badge
         console.error("[npc-portrait] sprite failed", npcId, err);

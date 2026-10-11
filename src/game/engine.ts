@@ -5067,7 +5067,9 @@ export class GameCanvas {
       const hy = 2.5 + hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (gh2 - 6);
       const nxp = hx * 32 + 16;
       const nyp = hy * 32 + 16;
-      drawCat(ctx, n.def, nxp, nyp, n.facing, n.pose === "walk" ? "sit" : n.pose, this.animClock(), n.phase);
+      drawCat(ctx, n.def, nxp, nyp, n.facing, n.pose === "walk" ? "sit" : n.pose, this.animClock(), n.phase, {
+        tailId: `npc:${n.def.id}`,
+      });
       if (Math.random() < 0.0015 && performance.now() - this.lastNpcMewAt > 6000) {
         this.lastNpcMewAt = performance.now();
         this.engineSfx("mew", { volume: 0.5, throttleMs: 400 });
@@ -5083,7 +5085,9 @@ export class GameCanvas {
       ctx.fillText(n.def.name, nxp, nyp - 28);
     }
     // player (lifted mid-hop; the cat sprite itself is unchanged)
-    drawCat(ctx, this.playerSkin(), this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.animClock(), 0);
+    drawCat(ctx, this.playerSkin(), this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.animClock(), 0, {
+      tailId: "player",
+    });
     // bubbles anchored to the player are drawn indoors too
     for (const b of this.bubbles) {
       if (b.track !== "player" || Date.now() > b.until) continue;
@@ -5272,6 +5276,9 @@ export class GameCanvas {
             yawn: n.yawnFxUntil > this.time,
             tailFlick: n.tailFxUntil > this.time,
             alert: n.alertFxUntil > this.time,
+            // §4: gives this cat its OWN smoothed tail (a conversation forces
+            // the sit pose, which used to snap the tail ~33px in one frame)
+            tailId: `npc:${n.def.id}`,
           });
           const d = Math.hypot(n.x - this.px, n.y - this.py);
           if (d < 130) {
@@ -5307,14 +5314,19 @@ export class GameCanvas {
           // from animation state — never frames)
           const rem = this.remoteEmotePose(r.userId);
           const rPose = rem ? (rem.pose as CatPose) : rp.pose;
-          const remFx = rem
-            ? {
-                yawn: Boolean(rem.fx.yawn),
-                alert: Boolean(rem.fx.alert),
-                tailFlick: Boolean(rem.fx.tailFlick),
-                head: rem.fx.head,
-              }
-            : undefined;
+          const remFx = {
+            ...(rem
+              ? {
+                  yawn: Boolean(rem.fx.yawn),
+                  alert: Boolean(rem.fx.alert),
+                  tailFlick: Boolean(rem.fx.tailFlick),
+                  head: rem.fx.head,
+                }
+              : {}),
+            // §4: remote cats get their own tail state, keyed by account id, so
+            // a re-skin or a pose change never inherits another cat's blend
+            tailId: `p:${r.userId}`,
+          };
           drawCat(
             ctx,
             { ...r.appearance },
@@ -5390,6 +5402,7 @@ export class GameCanvas {
       this.time,
       0,
       {
+        tailId: "player",
         yawn: this.playerFx().yawn,
         alert: this.playerFx().alert,
         tailFlick: this.playerFx().tailFlick,
