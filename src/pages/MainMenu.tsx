@@ -926,6 +926,7 @@ export default function MainMenu({
   presets = [],
   onSaveCustomization,
   onPersistAppearance,
+  playerLoading = false,
 }: {
   player: MainMenuPlayer | null;
   /** mode + chosen Clan — Clan is picked every session, never locked */
@@ -936,6 +937,11 @@ export default function MainMenu({
   /** §10: awaited by CatCustomizer's SAVE before it confirms — the real
    * server write, so a failed save never looks like a saved one. */
   onPersistAppearance?: (s: { skin: CatSkin }) => Promise<void> | void;
+  /** §B: TRUE only while the account's cat row is still IN FLIGHT. It must
+   *  never be derived from "player is null" — an account without a row yet is
+   *  not loading, and treating it as such left SAVE disabled on a permanent
+   *  "Loading…" (the reported bug). */
+  playerLoading?: boolean;
   onSaveClan: (clan: string) => void;
   /** §27: instant-save of the selected cosmetic title (null clears it) */
   onSaveTitle?: (t: string | null) => void;
@@ -1065,7 +1071,10 @@ export default function MainMenu({
             // good) and the save payload (which the server rejects).
             initialSkin={fullSkin(player?.skin) as FullSkinT}
             savedSkin={fullSkin(player?.skin) as FullSkinT}
-            loading={!player}
+            // §B: the editor is told when the row is genuinely in flight — a
+            // signed-in account that simply has no character row yet can save
+            // (the write creates/reaches the row) instead of hanging.
+            loading={playerLoading}
             favorites={favorites}
             presets={presets}
             onClose={() => setCustomizerOpen(false)}

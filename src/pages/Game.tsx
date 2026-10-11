@@ -146,6 +146,16 @@ export default function Game() {
   navRef.current = navigate;
 
   const player = useQuery(api.players.getPlayer);
+  // §B: "the account row is still loading" must be a bounded, honest state.
+  // If the query has not answered within 8s (offline preview, dead socket) the
+  // editor stops claiming it is loading: a SAVE then performs a real attempt
+  // and reports the real error, instead of an endless "Loading…" button.
+  const [rowWaitOver, setRowWaitOver] = useState(false);
+  useEffect(() => {
+    if (player !== undefined) return;
+    const id = window.setTimeout(() => setRowWaitOver(true), 8000);
+    return () => window.clearTimeout(id);
+  }, [player]);
   const ensurePlayer = useMutation(api.players.ensurePlayer);
   const savePosition = useMutation(api.players.savePosition);
   const completeQuest = useMutation(api.players.completeQuest);
@@ -1952,6 +1962,7 @@ export default function Game() {
     return (
       <div className="relative h-[100dvh] w-full overflow-hidden">
         <MainMenu
+          playerLoading={player === undefined && !rowWaitOver}
           player={
             player
               ? {
@@ -1987,17 +1998,27 @@ export default function Game() {
             const full = fullSkin(skin);
             saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full), catName }).catch(() => undefined);
           }}
-          onPersistAppearance={({ skin }) => {
+          onPersistAppearance={async ({ skin }) => {
             // §10/§11: awaited by CatCustomizer before SAVE confirms; failure
             // keeps the editor open with "Retry save" (data is never lost).
             // The cat name rides the SAME write, so one confirmed save persists
             // the whole character (appearance + name) exactly once.
             const full = fullSkin(skin);
-            return saveAppearance({
+            // §B: a signed-in account can open the editor BEFORE it has a
+            // character row (the row used to be created only on PLAY). Create
+            // it here too, so SAVE reaches a real record and reports a definite
+            // success/error instead of failing on a missing row.
+            if (!player) {
+              await ensurePlayer({ mode: "open", catName: offlineCatName(), appearance: full });
+            }
+            const res = await saveAppearance({
               appearance: full,
               appearanceVersion: appearanceVersion(full),
               catName: player?.catName ?? undefined,
-            }).then(() => undefined);
+            });
+            // §B: the backend must actually CONFIRM the write before the editor
+            // reports success — a returned non-ok result is a failed save.
+            if (!res || res.ok !== true) throw new Error("the server did not confirm the save");
           }}
           onSaveClan={(clan) => updateCat({ clan }).catch(() => undefined)}
           onSaveTitle={(t) => setTitle({ title: t ?? undefined }).catch(() => undefined)}
@@ -2703,7 +2724,9 @@ export default function Game() {
               // it because the fingerprint changed.
               const full = fullSkin(skin);
               return saveAppearance({ appearance: full, appearanceVersion: appearanceVersion(full), catName: myCat.name }).then(
-                () => {
+                (res) => {
+                  // §B: only a backend-CONFIRMED write may report success
+                  if (!res || res.ok !== true) throw new Error("the server did not confirm the save");
                   // §9: dev diagnostic — the account write really landed
                   lastSkinSaveRef.current = { at: Date.now(), ok: true, ver: appearanceVersion(full) };
                   // §MULTIPLAYER: INVALIDATE the send-gate instead of marking the

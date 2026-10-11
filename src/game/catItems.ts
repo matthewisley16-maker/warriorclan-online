@@ -486,14 +486,136 @@ const ACC_PREFIX: Record<AccessorySlot, string> = {
   tail: "tl-",
 };
 
+// ---------------------------------------------------------------------------
+// Appearance validation (ONE model shared by randomize / preview / save)
+//
+// Everything the customizer can put on a cat is a CATALOG value, and every
+// catalog value is what `drawCat` matches on. `sanitizeSkin` enforces exactly
+// that contract: an appearance it returns can only contain values that exist
+// in the catalog and are rendered, every list is de-duplicated, tints only
+// exist for equipped slots, and heterochromia only when the eyes differ. It is
+// the load-bearing guarantee behind "randomize can never produce a broken,
+// detached or partially-applied cat".
+// ---------------------------------------------------------------------------
+
+const idsOf = (category: ItemCategory): string[] => CAT_ITEMS.filter((i) => i.category === category).map((i) => i.id);
+
+/** Catalog ids (the value the renderer reads), stripped of their category prefix. */
+export const PATTERN_IDS: string[] = idsOf("patterns").map((id) => id.replace("pat-", ""));
+export const TAIL_IDS: string[] = idsOf("tail").map((id) => id.replace("tail-", ""));
+export const EAR_IDS: string[] = idsOf("ears").map((id) => id.replace("ear-", ""));
+export const FACE_IDS: string[] = idsOf("face").filter((id) => id.startsWith("face-") && id !== "face-default").map((id) => id.slice(5));
+export const NOSE_IDS: string[] = idsOf("face").filter((id) => id.startsWith("nose-") && id !== "nose-default").map((id) => id.slice(5));
+export const MARKING_IDS: string[] = idsOf("markings").map((id) => id.replace("mk-", ""));
+/** catalog scars + the legacy renderer-only "leg" scar kept for old saves */
+export const SCAR_IDS: string[] = [...idsOf("scars").map((id) => id.replace("sc-", "")), "leg"];
+export const FUR_STYLES: string[] = ["thick", "scruffy", "tufted"];
+
+/** Every renderable accessory value per slot, derived from the real catalog. */
+const ACC_VALUES: Record<AccessorySlot, Set<string>> = (() => {
+  const m = {} as Record<AccessorySlot, Set<string>>;
+  for (const slot of Object.keys(ACC_SLOT_CATS) as AccessorySlot[]) m[slot] = new Set<string>();
+  for (const it of CAT_ITEMS) {
+    for (const slot of Object.keys(ACC_SLOT_CATS) as AccessorySlot[]) {
+      if (itemInSlot(it.category, slot) && it.id.startsWith(ACC_PREFIX[slot])) {
+        m[slot].add(it.id.slice(ACC_PREFIX[slot].length));
+      }
+    }
+  }
+  return m;
+})();
+
+/** The renderer value an accessory item equips into a slot (undefined = the
+ *  catalog entry cannot be rendered there, so it is never chosen). */
+export function accessoryValueOf(slot: AccessorySlot, item: CatItem): string | undefined {
+  const id = item.id.startsWith(ACC_PREFIX[slot]) ? item.id.slice(ACC_PREFIX[slot].length) : item.id;
+  return ACC_VALUES[slot].has(id) ? id : undefined;
+}
+
+/** Every value the renderer understands for a slot (used by validation/tests). */
+export function accessoryValues(slot: AccessorySlot): string[] {
+  return [...ACC_VALUES[slot]].sort();
+}
+
+const isHex = (v: unknown): v is string => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
+const num = (v: unknown, lo: number, hi: number, fallback: number): number =>
+  typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
+const pickIds = (list: unknown, allowed: string[]): string[] | undefined => {
+  if (!Array.isArray(list)) return undefined;
+  const out = [...new Set(list.filter((x): x is string => typeof x === "string" && allowed.includes(x)))];
+  return out.length ? out : undefined;
+};
+
+/**
+ * Coerce ANY appearance into one built only from catalog-backed, renderable
+ * values. Unknown ids are dropped rather than rendered as nothing, tints that
+ * belong to unequipped slots are removed, and every numeric/length field is
+ * clamped into the range the renderer supports — so a sanitized skin is always
+ * a complete, correctly assembled cat.
+ */
+export function sanitizeSkin(skin?: Partial<CustomSkin> | null): CustomSkin {
+  const a = skin ?? {};
+  const fur = isHex(a.fur) ? a.fur : "#d96b2f";
+  const out: CustomSkin = {
+    fur,
+    furDark: isHex(a.furDark) ? a.furDark : shade(fur, 0.62),
+    eye: isHex(a.eye) ? a.eye : "#4fae6e",
+    pattern: typeof a.pattern === "string" && PATTERN_IDS.includes(a.pattern) ? a.pattern : "solid",
+    furLength: num(a.furLength, 0.5, 1.7, 1),
+    tail: typeof a.tail === "string" && TAIL_IDS.includes(a.tail) ? a.tail : "normal",
+    ears: typeof a.ears === "string" && EAR_IDS.includes(a.ears) ? a.ears : "normal",
+    size: num(a.size, 0.85, 1.25, 1),
+    scar: a.scar === true,
+  };
+  if (typeof a.furStyle === "string" && FUR_STYLES.includes(a.furStyle)) out.furStyle = a.furStyle;
+  if (isHex(a.eye2) && a.eye2 !== out.eye) out.eye2 = a.eye2;
+  if (isHex(a.chest)) out.chest = a.chest;
+  if (typeof a.patternIntensity === "number" && Number.isFinite(a.patternIntensity)) {
+    out.patternIntensity = Math.min(1, Math.max(0.2, a.patternIntensity));
+  }
+  if (typeof a.nose === "string" && NOSE_IDS.includes(a.nose)) out.nose = a.nose;
+  if (typeof a.face === "string" && FACE_IDS.includes(a.face)) out.face = a.face;
+  const markings = pickIds(a.markings, MARKING_IDS);
+  if (markings) out.markings = markings;
+  const scars = pickIds(a.scars, SCAR_IDS);
+  if (scars) out.scars = scars;
+  // accessories: one rendered value per slot, nothing accepted on faith
+  const acc: Partial<Record<AccessorySlot, string>> = {};
+  for (const slot of Object.keys(ACC_SLOT_CATS) as AccessorySlot[]) {
+    const raw = a.acc?.[slot];
+    if (isHex(raw)) continue; // a color can never be an item id
+    if (typeof raw === "string" && ACC_VALUES[slot].has(raw)) acc[slot] = raw;
+  }
+  if (Object.keys(acc).length) out.acc = acc;
+  // tints only for slots that are actually equipped
+  const accColors: Partial<Record<AccessorySlot, string>> = {};
+  if (a.accColors) {
+    for (const [slot, color] of Object.entries(a.accColors)) {
+      if (isHex(color) && acc[slot as AccessorySlot]) accColors[slot as AccessorySlot] = color;
+    }
+  }
+  if (Object.keys(accColors).length) out.accColors = accColors;
+  if (isHex(a.accColor)) out.accColor = a.accColor;
+  if (typeof a.morph === "string") out.morph = a.morph;
+  if (typeof a.presetId === "string") out.presetId = a.presetId;
+  return out;
+}
+
 /**
  * Build a complete, valid randomized appearance. Never produces invalid
  * combinations: accessories come from the real catalog, only one per slot,
- * and every id matches what the renderer understands.
+ * and every id matches what the renderer understands. The result is passed
+ * through `sanitizeSkin`, and the WARRIORS preset/morph identity of the
+ * previous look is dropped — a random cat is nobody's preset.
  */
 export function randomSkin(prev?: CustomSkin): CustomSkin {
   const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
   const s: CustomSkin = { ...(prev ?? { fur: "#d96b2f", furDark: "#8a4a20", eye: "#4fae6e" }) };
+  // a rolled look owns no preset identity and no stale pale band: every visual
+  // field below is re-rolled from the catalog, so nothing survives by accident
+  delete s.morph;
+  delete s.presetId;
+  delete s.chest;
   const color = pick(COAT_COLORS);
   s.fur = color.hex;
   s.furDark = shade(color.hex, 0.62);
@@ -525,12 +647,16 @@ export function randomSkin(prev?: CustomSkin): CustomSkin {
   for (let i = 0; i < n; i++) {
     const it = pick(accPool);
     const slot = (Object.keys(ACC_SLOT_CATS) as AccessorySlot[]).find((sl) => itemInSlot(it.category, sl));
-    if (!slot || usedSlots.includes(slot)) continue;
+    // an item that does not resolve to a renderable value for its slot is
+    // SKIPPED deliberately — never equipped with a made-up id
+    const value = slot ? accessoryValueOf(slot, it) : undefined;
+    if (!slot || !value || usedSlots.includes(slot)) continue;
     usedSlots.push(slot);
-    const prefix = ACC_PREFIX[slot];
-    s.acc[slot] = it.id.startsWith(prefix) ? it.id.slice(prefix.length) : it.id;
+    s.acc[slot] = value;
     if (Math.random() < 0.6) s.accColors[slot] = pick(SLOT_COLORS[slot] ?? ACCESSORY_COLORS);
   }
   s.accColor = pick(ACCESSORY_COLORS);
-  return s;
+  // the ONE validation gate: the rolled look is exactly what the preview and
+  // the save payload will use, and it cannot carry an unrenderable value
+  return sanitizeSkin(s);
 }

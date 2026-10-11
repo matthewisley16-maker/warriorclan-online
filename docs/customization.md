@@ -24,8 +24,52 @@ PATTERNS (10 + intensity slider), MARKINGS (10 white overlays, multi-select),
 EYES (13 incl. heterochromia), FACE (7 facial markings + 5 nose colors),
 EARS (5), TAIL (5), SCARS (7, multi-select), ACCESSORIES (42 across six slots:
 head/ear/neck/body/paws/tail — one item per slot, all combinable), favorites.
-Accessory themes: Nature / Seasonal / Roleplay / Fun. `randomSkin()` builds a
-complete valid randomized appearance from the real catalog.
+Accessory themes: Nature / Seasonal / Roleplay / Fun.
+
+### Randomize (§A)
+`randomSkin(base?)` builds a complete appearance from the real catalog: coat,
+pattern (+intensity), fur style, eyes (heterochromia only when the two eyes
+differ), ears, tail, nose, face, white markings, scars and up to one accessory
+per slot — with each accessory's value resolved through
+`accessoryValueOf(slot, item)` so an item that has no renderer art for its slot
+is SKIPPED rather than equipped with a made-up id. A rolled look drops the
+previous look's preset/morph identity and its legacy pale chest band, and the
+result goes through `sanitizeSkin`, the ONE validation gate shared by the
+randomizer, the preview and the save payload. RANDOMIZE in the editor only
+replaces the PENDING look (`setSkin`) — it never touches the camera, the pose,
+the animation clock or the sprite transforms — and the player reviews it before
+SAVE CAT. The editor keeps NO second copy of the accessory tint (it lives on
+`skin.accColor`), so a rolled tint cannot be shadowed by stale component state.
+
+### Save path (§B)
+Every write goes through ONE serialized queue — `createSaveQueue` in
+`src/game/saveQueue.ts`, with the bounded write (`withTimeout`,
+`src/game/saveFlow.ts`) as its `write` — driven by `CatCustomizer`:
+
+- the write is bounded (`withTimeout(..., SAVE_TIMEOUT_MS)` from
+  `src/game/saveFlow.ts`): a request that never settles (offline socket,
+  reconnecting client) becomes a FAILURE — never an endless "Saving…" and never
+  a silent success;
+- each caller is answered with the real outcome of the write of ITS OWN look
+  (a queued save used to be answered with an immediate `true`, which closed the
+  editor and claimed "Saved" while the write was still in flight);
+- a look already confirmed on the server this session is not written again;
+- on failure the editor keeps every selection, shows the real reason with a
+  Retry button (visible at every screen size) and never reports success before
+  the backend confirmed the write (a non-`ok` mutation result is a failure);
+- `loading` means "the account row is still IN FLIGHT" (`player === undefined`,
+  bounded to 8s in `Game.tsx`) — never `player === null`. Deriving it from
+  `!player` left SAVE disabled behind a permanent "Loading…" for any signed-in
+  account without a character row yet; and a save with no row now creates that
+  record (`ensurePlayer`) instead of failing forever.
+
+Verified by `scripts/check-randomize.ts` (catalog ↔ renderer agreement, 30
+consecutive rolls checked for validity/assembly/attachment/depth in 8 poses,
+and a real save→reload→render round trip for 20 rolled cats) and
+`scripts/check-save.ts` (§12: a pending write can never hang the editor;
+§13: the queue is serialized, answers every caller with the truth about its own
+look, never overlaps writes, skips an already-confirmed look, retries a failed
+one, and turns a never-answering write into a failure).
 
 ## Rendering guarantees
 All accessories/markings/scars anchor to the same pose geometry as the body

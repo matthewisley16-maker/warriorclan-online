@@ -16,6 +16,8 @@ import { AlertTriangle, Check, Heart, PawPrint, RefreshCw, RotateCcw, Save, Sear
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { drawCat, normalizeSkin, type CatSkin } from "@/game/draw";
+import { SAVE_TIMEOUT_MS, errorMessage, withTimeout } from "@/game/saveFlow";
+import { createSaveQueue, type SaveQueue } from "@/game/saveQueue";
 import {
   ACCESSORY_SLOTS,
   ACC_SLOT_CATS,
@@ -27,6 +29,7 @@ import {
   accTint,
   itemById,
   randomSkin,
+  sanitizeSkin,
   searchItems,
   type AccTheme,
   type AccessorySlot,
@@ -409,7 +412,11 @@ export function CatCustomizer({
   // (the grid reads `favorites.includes` on every render)
   const [favorites, setFavorites] = useState<string[]>(() => (Array.isArray(initialFavorites) ? initialFavorites : []));
   const [presets, setPresets] = useState<{ name: string; skin: CustomSkin }[]>(() => (Array.isArray(initialPresets) ? initialPresets : []));
-  const [accColor, setAccColor] = useState<string>(initialSkin.accColor ?? "#d95f5f");
+  // §21/§C: the accessory tint lives ON the skin — `skin.accColor` — and nowhere
+  // else. A second copy in component state used to shadow it: RANDOMIZE wrote
+  // the rolled tint onto the skin, but the next card click copied the stale
+  // state value back over it, so a randomized cat silently lost its rolled
+  // tints. One appearance model, one source of truth.
   const [selected, setSelected] = useState<CatItem | null>(null);
   const [presetConfirm, setPresetConfirm] = useState<{ name: string } | null>(null);
   const [presetApply, setPresetApply] = useState<number | null>(null);
@@ -420,6 +427,10 @@ export function CatCustomizer({
   // §10: SAVE CAT awaits the real persistence before confirming — a failed
   // save keeps the editor open with the changes intact (never silently lost).
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  // the reason a save failed, shown to the player next to the Retry button
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // a non-save problem the player should know about (e.g. a refused randomize)
+  const [notice, setNotice] = useState<string | null>(null);
   // §5: a view that cannot be computed must SAY so (with a Retry) instead of
   // rendering a silently blank panel. `retryTick` re-runs the computation.
   const [retryTick, setRetryTick] = useState(0);
@@ -460,12 +471,17 @@ export function CatCustomizer({
   const activeNav = nav.find((n) => n.id === category);
 
   // §14/§16/§22: ONE serialized write path. Every save (manual or autosave)
-  // goes through it, an in-flight write is never overlapped, and the newest
-  // requested look always wins — no save-request spam, no lost update.
+  // goes through the shared save queue (`src/game/saveQueue.ts`), which never
+  // overlaps writes and answers EVERY caller with the real outcome of the write
+  // of ITS OWN look — so the editor can neither claim success before the
+  // backend confirmed it nor sit on "Saving…" forever:
+  //   - the write itself is bounded (SAVE_TIMEOUT_MS): a request that never
+  //     settles is reported as a FAILURE (see `persist` below);
+  //   - a queued request used to be answered with an immediate `true`, which
+  //     closed the editor while the write was still in flight;
+  //   - a look already confirmed-persisted this session is not written twice.
   // (Declared HERE, above the early return, so the hook order never changes
   // when the editor opens/closes.)
-  const savingRef = useRef(false);
-  const queuedRef = useRef<CustomSkin | null>(null);
   const lastAutoRef = useRef<string | null>(null);
   const [savedOnce, setSavedOnce] = useState(false);
   const skinToSave = useMemo(() => normalizeSkin(skin) as CustomSkin, [skin]);
@@ -475,37 +491,33 @@ export function CatCustomizer({
     async (next: CustomSkin): Promise<boolean> => {
       if (!onPersist) return true; // no persistence hook wired: keep prior behaviour
       try {
-        await onPersist({ skin: next });
+        // §15: NEVER wait on the backend without a bound. A pending mutation
+        // (offline socket, reconnecting client, slow deployment) is a failure
+        // the player can retry — never an endless loading state, and never
+        // silently treated as a success.
+        await withTimeout(() => Promise.resolve(onPersist({ skin: next })), SAVE_TIMEOUT_MS, "appearance save");
+        setSaveError(null);
         return true;
       } catch (err) {
         // §14/§15: the real error is reported and the editor keeps the changes
         console.error("[customizer] appearance save failed", err);
+        setSaveError(errorMessage(err));
         return false;
       }
     },
     [onPersist],
   );
-  const runSave = useCallback(
-    async (next: CustomSkin): Promise<boolean> => {
-      if (savingRef.current) {
-        queuedRef.current = next; // coalesce: the newest look wins
-        return true;
-      }
-      savingRef.current = true;
-      setSaveState("saving");
-      let ok = true;
-      let cur: CustomSkin | null = next;
-      while (cur) {
-        ok = await persist(cur);
-        setSaveState(ok ? "saved" : "failed");
-        cur = queuedRef.current;
-        queuedRef.current = null;
-      }
-      savingRef.current = false;
-      return ok;
-    },
-    [persist],
-  );
+  // the queue is created ONCE and always calls the newest persistence hook
+  const persistRef = useRef(persist);
+  persistRef.current = persist;
+  const queueRef = useRef<SaveQueue<CustomSkin> | null>(null);
+  if (!queueRef.current) {
+    queueRef.current = createSaveQueue<CustomSkin>({
+      write: (item) => persistRef.current(item),
+      onState: (state) => setSaveState(state),
+    });
+  }
+  const runSave = useCallback((next: CustomSkin): Promise<boolean> => queueRef.current!.save(next), []);
 
   // §16 autosave: only AFTER one confirmed save in this session (so §20's
   // "changes are temporary until SAVE" still holds), debounced 900ms, and only
@@ -550,15 +562,42 @@ export function CatCustomizer({
     setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
   };
 
+  // §A: RANDOMIZE edits THIS cat's appearance through the shared model — it
+  // never touches the camera, the pose, the animation clock or the sprite
+  // transforms. The rolled look is validated against the catalog before it is
+  // applied, and only ever replaces the editor's pending look (the player still
+  // has to press SAVE CAT), so a bad roll can never reach the account or leave
+  // the editor in a broken state.
   const randomize = () => {
-    // randomSkin() builds a complete VALID appearance from the real catalog
-    // (coats, patterns, markings, eyes, face, and up to two accessories).
-    setSkin(randomSkin(skin));
+    setNotice(null);
+    const rolled = sanitizeSkin(randomSkin(skin));
+    // Paranoia: randomSkin already sanitizes. If the model ever drifts, keep the
+    // current (known-good) cat and SAY so instead of applying a broken one.
+    if (!rolled.fur || !rolled.furDark || !rolled.eye) {
+      console.error("[customizer] randomize produced an invalid appearance; keeping the current cat", rolled);
+      setNotice("Randomize could not build a valid cat — your previous look is unchanged. Try again.");
+      return;
+    }
+    setSkin(rolled);
   };
 
   const savePreset = (name: string) => {
     setPresets((p) => [...p, { name: name.trim() || `Preset ${p.length + 1}`, skin: { ...skin } }].slice(0, 10));
     setPresetConfirm(null);
+  };
+
+  // §B: the ONE confirm action behind both the SAVE CAT button and the Retry
+  // button. The account write happens FIRST and is awaited; only a real success
+  // closes the editor with the new cat applied — a failure keeps every change
+  // on screen and re-offers Retry.
+  const confirmSave = () => {
+    setNotice(null);
+    lastAutoRef.current = JSON.stringify(skinToSave);
+    void runSave(skinToSave).then((ok) => {
+      if (!ok) return;
+      setSavedOnce(true);
+      onSave({ skin: skinToSave, favorites, presets });
+    });
   };
 
   return (
@@ -699,7 +738,9 @@ export function CatCustomizer({
                     size="sm"
                     className="h-7 rounded-lg bg-amber-400 px-3 text-[11px] font-bold text-[#0d160d] hover:bg-amber-300"
                     onClick={() => {
-                      const next = { ...skin, accColor };
+                      // the tint already lives on the skin — never copied back
+                      // from (or into) a second piece of state
+                      const next = { ...skin };
                       selected.apply(next);
                       setSkin(next);
                     }}
@@ -788,13 +829,10 @@ export function CatCustomizer({
                   {SHARED_ACC_COLORS.map((c) => (
                     <button
                       key={c}
-                      onClick={() => {
-                        setAccColor(c);
-                        setSkin((s) => ({ ...s, accColor: c }));
-                      }}
+                      onClick={() => setSkin((s) => ({ ...s, accColor: c }))}
                       className={cn(
                         "size-4 rounded-full border transition-transform hover:scale-110",
-                        accColor === c ? "border-white ring-2 ring-amber-300" : "border-white/20",
+                        (skin.accColor ?? "#d95f5f") === c ? "border-white ring-2 ring-amber-300" : "border-white/20",
                       )}
                       style={{ backgroundColor: c }}
                       aria-label={`Accessory color ${c}`}
@@ -1049,7 +1087,7 @@ export function CatCustomizer({
                     whileHover={{ y: -2 }}
                     whileTap={{ scale: 0.97 }}
                     onClick={() => {
-                      const next = { ...skin, accColor };
+                      const next = { ...skin };
                       item.apply(next);
                       setSkin(next);
                       setSelected(item);
@@ -1062,7 +1100,7 @@ export function CatCustomizer({
                     )}
                   >
                     <div className="flex items-center justify-center rounded-lg bg-gradient-to-b from-emerald-900/30 to-black/10">
-                      <ItemCardPreview item={item} baseSkin={skin} tint={accColor} />
+                      <ItemCardPreview item={item} baseSkin={skin} tint={skin.accColor ?? "#d95f5f"} />
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-1 px-0.5">
                       <span className={cn("truncate text-[10px] font-medium", on ? "text-amber-200" : "text-white/70")}>
@@ -1184,6 +1222,36 @@ export function CatCustomizer({
 
         {/* ---------- BOTTOM BAR (always visible — Randomize / Reset / Save
             can never scroll away) ---------- */}
+        {/* a failed save is loud on EVERY screen size (the status line above is
+            desktop-only): the player must never have to guess why the button
+            went back to "Save Cat" */}
+        {(saveState === "failed" || notice) && (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-2 border-t border-red-400/40 bg-red-500/15
+              pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] py-1.5"
+          >
+            <p className="text-[11px] font-semibold text-red-200">
+              <AlertTriangle className="mr-1 inline size-3.5 align-[-2px]" />
+              {saveState === "failed"
+                ? `Save failed: ${saveError ?? "your cat was not saved"}. Your changes are still here.`
+                : notice}
+            </p>
+            {saveState === "failed" ? (
+              <Button
+                size="sm"
+                className="h-7 rounded-lg bg-red-400 px-3 text-[11px] font-bold text-[#0d160d] hover:bg-red-300"
+                onClick={confirmSave}
+              >
+                Retry save
+              </Button>
+            ) : (
+              <Button size="sm" variant="ghost" className="h-7 rounded-lg px-2 text-[11px] text-white/70 hover:text-white" onClick={() => setNotice(null)}>
+                Dismiss
+              </Button>
+            )}
+          </div>
+        )}
         <div
           className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10
             pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pb-[max(0.625rem,env(safe-area-inset-bottom))] pt-2.5"
@@ -1218,7 +1286,7 @@ export function CatCustomizer({
             {loading
               ? "Loading character…"
               : saveState === "failed"
-                ? "Save failed — your previous cat is safe. Try again."
+                ? `Save failed: ${saveError ?? "your cat was not saved"} — your changes are still here, press Retry.`
                 : saveState === "saving"
                   ? "Saving…"
                   : saveState === "saved"
@@ -1240,18 +1308,7 @@ export function CatCustomizer({
               size="sm"
               className="h-8 gap-1.5 rounded-xl bg-amber-400 px-4 text-xs font-bold text-[#0d160d] hover:bg-amber-300"
               disabled={saveState === "saving" || loading}
-              onClick={() => {
-                // §14: the account write happens FIRST and is awaited. Only a
-                // real success flips the button to "Saved" / closes the editor
-                // with the new cat applied — a failure keeps every change on
-                // screen and offers "Retry save".
-                lastAutoRef.current = JSON.stringify(skinToSave);
-                void runSave(skinToSave).then((ok) => {
-                  if (!ok) return;
-                  setSavedOnce(true);
-                  onSave({ skin: skinToSave, favorites, presets });
-                });
-              }}
+              onClick={confirmSave}
             >
               <Save className="size-3.5" />
               {loading ? "Loading…" : saveState === "saving" ? "Saving…" : saveState === "failed" ? "Retry save" : "Save Cat"}

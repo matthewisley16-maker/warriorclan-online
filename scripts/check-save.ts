@@ -28,6 +28,8 @@ import { fullSkin } from "../src/pages/gameUi";
 import { normalizeSkin } from "../src/game/draw";
 import { appearanceVersion } from "../src/game/saveShared";
 import { defaultAppearance } from "../src/convex/players";
+import { SAVE_TIMEOUT_MS, SaveTimeoutError, errorMessage, withTimeout } from "../src/game/saveFlow";
+import { createSaveQueue } from "../src/game/saveQueue";
 
 let failures = 0;
 function check(ok: boolean, label: string, detail = "") {
@@ -370,15 +372,28 @@ console.log("\n--- 8. the UI cannot FAKE a save (§14/§15) ---");
     /void runSave\(skinToSave\)\.then\(\(ok\) => \{\s*if \(!ok\) return;/.test(editor),
     "SAVE CAT only confirms when the awaited write succeeded",
   );
-  check(/setSaveState\(ok \? "saved" : "failed"\)/.test(editor), "a failed write sets the failed state (Retry save)");
-  check(/saveState === "failed"\s*\n?\s*\?\s*"Save failed/.test(editor), "the editor tells the player the save failed");
+  check(
+    /onState: \(state\) => setSaveState\(state\)/.test(editor),
+    "a failed write sets the failed state (which is what offers Retry save)",
+  );
+  check(
+    /saveState === "failed"\s*\n?\s*\? `Save failed: \$\{saveError/.test(editor),
+    "the editor tells the player the save failed, with the real reason",
+  );
+  check(
+    /role="alert"[\s\S]{0,900}>\s*Retry save/.test(editor),
+    "a failed save shows an alert with a Retry button (visible at every screen size)",
+  );
   check(/console\.error\("\[customizer\] appearance save failed", err\)/.test(editor), "the real save error is logged, never swallowed");
   check(/"Saved successfully"/.test(editor) && /"Saving…"/.test(editor) && /"Loading character…"/.test(editor), "Saving/Saved/Loading statuses are all real states");
   check(/window\.setTimeout\(\(\) => \{\s*lastAutoRef\.current = key;\s*void runSave\(skinToSave\);/.test(editor), "autosave is debounced and written through the same single path");
 
   const menu = fs.readFileSync("src/pages/MainMenu.tsx", "utf8");
   check(/initialSkin=\{fullSkin\(player\?\.skin\)/.test(menu), "the editor is opened with a complete saved cat (never `{}`)");
-  check(/loading=\{!player\}/.test(menu), "the editor is told when the account's cat is still loading");
+  // §B: "loading" means the account row is IN FLIGHT — never "player is null".
+  // `loading={!player}` left Save disabled on a permanent "Loading…" for any
+  // signed-in account without a character row yet.
+  check(/loading=\{playerLoading\}/.test(menu), "the editor is told when the account's cat is still loading");
   check(
     /if \(!onPersistAppearance\) onSaveAppearance\(v\.skin as CatSkin, player\?\.name\);/.test(menu),
     "a confirmed save writes the appearance once (legacy call only as a fallback)",
@@ -392,6 +407,25 @@ console.log("\n--- 8. the UI cannot FAKE a save (§14/§15) ---");
   check(
     /g\.mySkin = \{ \.\.\.full/.test(game) && /sentAppearanceVerRef\.current = null;/.test(game),
     "a confirmed save updates the live cat and re-broadcasts the new look (§19)",
+  );
+  // §B: "loading" means the account row is IN FLIGHT — never "player is null".
+  // `loading={!player}` left Save disabled on a permanent "Loading…" for any
+  // signed-in account without a character row yet (the reported hang).
+  check(
+    /playerLoading=\{player === undefined && !rowWaitOver\}/.test(game),
+    "the row counts as loading only while the account query is genuinely in flight",
+  );
+  check(
+    /window\.setTimeout\(\(\) => setRowWaitOver\(true\), 8000\)/.test(game),
+    "even an unanswered account query stops claiming loading after a bounded wait",
+  );
+  check(
+    /if \(!player\) \{\s*await ensurePlayer\(/.test(game),
+    "a save with no character row yet creates that record instead of failing forever",
+  );
+  check(
+    /if \(!res \|\| res\.ok !== true\) throw new Error\("the server did not confirm the save"\)/.test(game),
+    "the editor only reports success after the BACKEND confirmed the write",
   );
 }
 
@@ -458,6 +492,144 @@ console.log("\n--- 11. the editor adopts the account's cat when it arrives late 
     typeof placeholder.fur === "string" && placeholder.fur.length > 1 && placeholder.tail === "normal",
     "the loading placeholder is a real default cat, never an empty skin",
   );
+}
+
+console.log("\n--- 12. a pending backend write can NEVER hang the editor (§B) ---");
+{
+  // behavioral: the bounded wait itself
+  const never = new Promise<void>(() => undefined); // never settles, like an offline mutation
+  const t0 = Date.now();
+  let timedOut = false;
+  try {
+    await withTimeout(never, 30, "appearance save");
+  } catch (err) {
+    timedOut = err instanceof SaveTimeoutError;
+  }
+  check(timedOut, "a write that never answers FAILS after the bound (never reported as saved)");
+  check(Date.now() - t0 < 500, "the editor is released promptly instead of waiting forever", `${Date.now() - t0}ms`);
+
+  // a request that answers only AFTER the timeout must not become a success
+  let becameSuccess = false;
+  try {
+    await withTimeout(new Promise<void>((r) => setTimeout(r, 40)), 10, "appearance save");
+    becameSuccess = true;
+  } catch { /* the timeout won */ }
+  await new Promise((r) => setTimeout(r, 60));
+  check(!becameSuccess, "a late answer after the timeout is NOT treated as a successful save");
+
+  let passed = false;
+  await withTimeout(() => { passed = true; }, 50);
+  check(passed, "a fast write passes straight through");
+  let verbatim = false;
+  try {
+    await withTimeout(() => { throw new Error("backend said no"); }, 50);
+  } catch (err) {
+    verbatim = errorMessage(err) === "backend said no";
+  }
+  check(verbatim, "a backend error reaches the player verbatim (never swallowed)");
+  check(
+    /timed out/.test(errorMessage(new SaveTimeoutError(`appearance save timed out after ${SAVE_TIMEOUT_MS}ms`))) && SAVE_TIMEOUT_MS <= 20_000,
+    "the timeout reason is readable and the bound is reasonable",
+    `${SAVE_TIMEOUT_MS}ms`,
+  );
+
+  // the editor uses the ONE shared queue and the bounded write
+  const editor = fs.readFileSync("src/pages/CatCustomizer.tsx", "utf8");
+  check(
+    /await withTimeout\(\(\) => Promise\.resolve\(onPersist\(\{ skin: next \}\)\), SAVE_TIMEOUT_MS, "appearance save"\)/.test(editor),
+    "the editor's write is bounded by SAVE_TIMEOUT_MS",
+  );
+  check(
+    /createSaveQueue<CustomSkin>\(\{\s*write: \(item\) => persistRef\.current\(item\),\s*onState: \(state\) => setSaveState\(state\),/.test(editor),
+    "the editor's saves go through the shared queue and report its real state",
+  );
+  check(
+    !/queuedRef|drainSaves/.test(editor),
+    "no second, hand-rolled save state machine is left in the editor",
+  );
+  const saveWiring = editor.slice(editor.indexOf("const persistRef"), editor.indexOf("// §16 autosave"));
+  check(
+    saveWiring.length > 200 && !/setSkin\(/.test(saveWiring),
+    "a failed save never touches the player's selections (unsaved work is preserved)",
+  );
+  check(
+    /disabled=\{saveState === "saving" \|\| loading\}/.test(editor),
+    "the Save button is locked only while a write is genuinely in flight",
+  );
+  check(
+    /saveState === "failed" \? \(\s*<Button/.test(editor),
+    "the Retry button is offered exactly when a save failed",
+  );
+}
+
+console.log("\n--- 13. the save queue itself: serialized, truthful, never hanging (§B) ---");
+{
+  // (1) writes run one at a time, in request order, and each caller is told the
+  //     truth about ITS OWN item
+  const log: string[] = [];
+  const states: string[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const q = createSaveQueue<string>({
+    write: async (item) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, item === "A" ? 15 : 1));
+      log.push(item);
+      inFlight--;
+      return item !== "A";
+    },
+    onState: (s) => states.push(s),
+  });
+  const [a, b] = await Promise.all([q.save("A"), q.save("B")]);
+  check(log.join(",") === "A,B", "writes run in request order", log.join(","));
+  check(maxInFlight === 1, "at most ONE write is ever in flight (never overlapped)", `${maxInFlight}`);
+  check(a === false, "a failed write answers its own caller with FAILURE");
+  check(b === true, "a later, successful write answers its own caller with success");
+  check(states.join(",") === "saving,failed,saving,saved", "every write reports saving → saved|failed", states.join(","));
+  check(q.busy === false, "the queue is idle once it drains (the Save button can be used again)");
+
+  // (2) the same look requested twice while another write is in flight is
+  //     written ONCE, and both callers get that write's outcome (never an
+  //     early "true" while the backend is still working)
+  let shared = 0;
+  const q2 = createSaveQueue<string>({
+    write: async () => {
+      shared++;
+      await new Promise((r) => setTimeout(r, 10));
+      return true;
+    },
+  });
+  const first = q2.save("Z"); // starts its write immediately
+  const [x, y] = await Promise.all([q2.save("Y"), q2.save("Y")]);
+  await first;
+  check(shared === 2 && x === true && y === true, "the same look queued twice is written once; both callers hear the truth", `writes=${shared}`);
+
+  // (3) a write that NEVER settles ends as a failure (bounded by the caller's
+  //     withTimeout) — the editor can never stay on "Saving…"
+  const q3 = createSaveQueue<string>({
+    write: (item) => withTimeout(new Promise<void>(() => undefined), 20, item).then(() => true).catch(() => false),
+  });
+  const t0 = Date.now();
+  const pendingOk = await q3.save("pending");
+  check(pendingOk === false && Date.now() - t0 < 500, "a write that never answers is reported as a FAILURE, not a save", `${pendingOk} in ${Date.now() - t0}ms`);
+  check(q3.busy === false, "the queue releases afterwards (loading can never be permanent)");
+
+  // (4) a confirmed look is not written twice; a FAILED one may be retried
+  let writes = 0;
+  const q4 = createSaveQueue<string>({ write: async () => { writes++; return true; } });
+  await q4.save("X");
+  await q4.save("X");
+  check(writes === 1, "a look already confirmed this session is not written twice (no duplicate requests)", `${writes} writes`);
+  let tries = 0;
+  const q5 = createSaveQueue<string>({ write: async () => { tries++; return false; } });
+  await q5.save("X");
+  await q5.save("X");
+  check(tries === 2, "a FAILED write is retried (Retry is never deduped away)", `${tries} tries`);
+
+  // (5) a throwing backend call is a FAILED save, never a swallowed success
+  const q6 = createSaveQueue<string>({ write: async () => { throw new Error("backend exploded"); } });
+  check((await q6.save("X")) === false, "a throwing write is reported as a failed save");
 }
 
 console.log(failures === 0 ? "\nALL SAVE CHECKS PASS" : `\n${failures} SAVE CHECK(S) FAILED`);
