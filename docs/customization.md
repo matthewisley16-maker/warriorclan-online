@@ -29,11 +29,29 @@ complete valid randomized appearance from the real catalog.
 
 ## Rendering guarantees
 All accessories/markings/scars anchor to the same pose geometry as the body
-(`fam`/`headX`/`headY`/`tailLen` in `drawCat`), so they track walk, sit, sleep,
+(`fam`/`headX`/`headY`/`tg.*` in `drawCat`), so they track walk, sit, sleep,
 swim, groom, stretch, crouch-family and all four dances. Head items ride the
 head; neck/tail/body/paw anchors follow each pose family. Verified by
 `scripts/check-custom.ts`: every accessory must produce extra draw ops in all 6
 anchor poses, and the fully-loaded cat renders in all 21 poses.
+
+### Attachment (one coordinate system per part)
+`drawCat` draws ONE cat in painter order; every layer is positioned from the
+pose anchors (`headX/headY`, `fam`, the tail's `tg`) rather than from a canvas
+translate that wraps unrelated parts:
+
+1. shadow → 2. tail stroke + pale tail-tip + **tail accessory** (behind body) →
+3. base body → 4. pattern/fur/chest → 5. legs → 6. head → 7. ears, eyes, nose,
+muzzle, face markings → 8. **body/leg markings** → 9. **collar** →
+10. back/paw items → 11. carried prey.
+
+Head acting (nod / shake / look / sniff) is folded into `headX/headY` — the
+HEAD'S own anchor — so head/face/ear parts move while body-anchored layers
+(chest/belly/leg markings, collar, back & paw items, the tail) stay attached.
+Tail layers (stroke, tip marking, accessory) all read the same `tg` geometry and
+share the tail's depth, so a band/bow can never float in front of the body.
+Verified by `scripts/check-align.ts` (attachment across every pose + head fx,
+depth/no-duplicate base, and the editor preview/thumbnails show the whole cat).
 
 ## Flow
 - Editor edits are temporary; SAVE CAT persists skin + favorites + presets
@@ -42,7 +60,8 @@ anchor poses, and the fully-loaded cat renders in all 21 poses.
 - In-game saves also live-update `mySkin` so the change is visible instantly.
 - Multiplayer: appearance rides the existing heartbeat → presence → remote
   watch; no extra frames are synchronized.
-- Suite: `bun scripts/check-custom.ts` (~90 checks).
+- Suite: `bun scripts/check-custom.ts` (~90 checks) + `bun scripts/check-align.ts`
+  (attachment, depth, preview/thumbnail framing).
 
 ## Multiplayer skin sync (invariants)
 `appearanceVersion` is a CONTENT fingerprint of the look; the presence row's

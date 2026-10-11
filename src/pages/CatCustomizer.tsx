@@ -214,7 +214,9 @@ function ItemCardPreview({ item, baseSkin, tint }: { item: CatItem; baseSkin: Cu
     const render = (t: number) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.scale(72 / 90, 72 / 90);
+      // 104-unit design box: the cat's canonical sprite box (see drawCat) fits
+      // with the paws/tail inside the 72x58 thumbnail (they used to be cut off)
+      ctx.scale(72 / 104, 72 / 104);
       // a NEUTRAL demo cat for color/pattern/eye cards; the player's coat for
       // markings/scars/accessories so the items read in context
       let skin: CustomSkin;
@@ -231,7 +233,7 @@ function ItemCardPreview({ item, baseSkin, tint }: { item: CatItem; baseSkin: Cu
       }
       skin.accColor = tint;
       try {
-        drawCat(ctx, normalizeSkin(skin), 45, 66, 1, "sit", t / 1000, 0, { tailId: `editor:item:${item.id}` });
+        drawCat(ctx, normalizeSkin(skin), 52, 68, 1, "sit", t / 1000, 0, { tailId: `editor:item:${item.id}` });
       } catch (err) {
         // never silently blank: report the real error, then fall back to an icon
         console.error("[customizer] item thumbnail failed to render", item.id, err);

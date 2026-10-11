@@ -197,6 +197,87 @@ export function drawCat(
     ctx.quadraticCurveTo(tg.ctrlX, tg.ctrlY, tg.tipX, tg.tipY);
     ctx.stroke();
   }
+  // §TAIL DEPTH: tail accessories are drawn HERE, at the tail's own depth
+  // (behind the body), reading the same `tg` geometry as the tail stroke — so a
+  // band/bow/ribbon sits ON the tail and can never float in front of the cat's
+  // body or legs. (They were drawn last, on top of the whole cat.)
+  const tailAcc = skin.acc?.tail;
+  if (tailAcc) {
+    const tx = tg.baseX;
+    const ty = tg.baseY;
+    const tt = (skin.accColors as Partial<Record<string, string>> | undefined)?.tail ?? skin.accColor ?? "#d95f5f";
+    if (tailAcc === "band") {
+      ctx.strokeStyle = tt;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty - 2);
+      ctx.lineTo(tx - 1, ty + 3);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    if (tailAcc === "ribbon") {
+      ctx.fillStyle = tt;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty); ctx.lineTo(tx - 4, ty - 4); ctx.lineTo(tx - 5.5, ty - 0.5); ctx.closePath();
+      ctx.moveTo(tx, ty); ctx.lineTo(tx - 4.5, ty + 3.5); ctx.lineTo(tx - 6.5, ty + 1); ctx.closePath();
+      ctx.fill();
+    }
+    if (tailAcc === "tuft") {
+      ctx.strokeStyle = "#c9c2b8";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty); ctx.lineTo(tx - 3, ty - 5); ctx.moveTo(tx, ty); ctx.lineTo(tx - 5, ty - 3); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    if (tailAcc === "flower") {
+      ctx.fillStyle = tt;
+      for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; ctx.beginPath(); ctx.arc(tx + Math.cos(a) * 1.5, ty + Math.sin(a) * 1.5, 1, 0, Math.PI * 2); ctx.fill(); }
+      ctx.fillStyle = "#f4e9d8";
+      ctx.beginPath(); ctx.arc(tx, ty, 0.9, 0, Math.PI * 2); ctx.fill();
+    }
+    if (tailAcc === "feather") {
+      ctx.strokeStyle = tt;
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.quadraticCurveTo(tx - 4, ty - 6, tx - 2.5, ty - 9.5);
+      ctx.stroke();
+      ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.moveTo(tx - 0.5, ty - 1); ctx.lineTo(tx - 2.6, ty - 9); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    if (tailAcc === "berries") {
+      ctx.strokeStyle = "#6a9a4a";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx - 2, ty - 3.5); ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.fillStyle = "#c23a3a";
+      ctx.beginPath(); ctx.arc(tx - 2.4, ty - 4.2, 0.9, 0, Math.PI * 2); ctx.arc(tx - 1, ty - 4.8, 0.7, 0, Math.PI * 2); ctx.fill();
+    }
+    if (tailAcc === "wrap") {
+      ctx.strokeStyle = tt;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(tx + 1, ty - 2.6);
+      ctx.lineTo(tx - 0.4, ty + 2.6);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    if (tailAcc === "leaf") {
+      ctx.fillStyle = "#6a9a4a";
+      ctx.beginPath(); ctx.ellipse(tx - 1, ty - 1, 2.6, 1.1, -0.7, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(tx + 0.5, ty + 1.5, 2.2, 1, 0.6, 0, Math.PI * 2); ctx.fill();
+    }
+    if (tailAcc === "bow") {
+      ctx.fillStyle = tt;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx - 3.4, ty - 3.2); ctx.lineTo(tx - 3.2, ty + 0.4); ctx.closePath();
+      ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx + 3.2, ty - 3.4); ctx.lineTo(tx + 3.4, ty + 0.2); ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#f4e9d8";
+      ctx.beginPath(); ctx.arc(tx, ty - 0.5, 0.9, 0, Math.PI * 2); ctx.fill();
+    }
+  }
 
   // body
   ctx.fillStyle = skin.fur;
@@ -420,9 +501,24 @@ export function drawCat(
   // head (groom pose dips toward the chest to lick it)
   const groomDip = pose === "groom" ? Math.max(0, Math.sin(time * 5.5)) : 0;
   const stretchOut = pose === "stretch" ? 3.5 + Math.max(0, Math.sin(time * 2.2)) * 2 : 0;
-  const headX = (fam === "sit" || pose === "groom" ? 4 : pose === "stretch" ? 13 : 9) - groomDip * 1.5 + stretchOut * 0.4;
-  const headY =
+  const baseHeadX = (fam === "sit" || pose === "groom" ? 4 : pose === "stretch" ? 13 : 9) - groomDip * 1.5 + stretchOut * 0.4;
+  const baseHeadY =
     (fam === "swim" ? -8 : fam === "sit" ? -16 : fam === "sleep" ? -8 : fam === "crouch" ? -8 : -11) + groomDip * 5;
+  // HEAD-ACTING (nod / shake / look-around / sniff): the offset is folded into
+  // the HEAD'S OWN ANCHOR (headX/headY) instead of a canvas translate that
+  // wrapped the rest of the cat. Head-anchored parts (head, ears, eyes, nose,
+  // muzzle, face, head markings, head/ear items, carried prey) all read
+  // headX/headY and move with it; body-anchored parts (chest/belly/leg markings,
+  // collar, back/paw items, the tail) use their own body coordinates and stay
+  // put. A single translate used to drag them all off their attachments.
+  let headActDx = 0;
+  let headActDy = 0;
+  if (fx?.head === "nod") headActDy = Math.abs(Math.sin(time * 4.2)) * 2.2;
+  else if (fx?.head === "shake") headActDx = Math.sin(time * 10) * 2.6;
+  else if (fx?.head === "look") headActDx = Math.sin(time * 1.7) * 2.4;
+  else if (fx?.head === "sniff") { headActDy = 3.2; headActDx = 1.4; }
+  const headX = baseHeadX + headActDx;
+  const headY = baseHeadY + headActDy;
   ctx.fillStyle = skin.fur;
   ctx.strokeStyle = outlineOf(skin);
   ctx.lineWidth = 1;
@@ -430,17 +526,6 @@ export function drawCat(
   ctx.arc(headX, headY, 6.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
-
-  // head-acting overlay: nod / head-shake / look-around / sniff move ONLY the
-  // head — everything after this point is drawn inside the head translate
-  let headActDx = 0;
-  let headActDy = 0;
-  if (fx?.head === "nod") headActDy = Math.abs(Math.sin(time * 4.2)) * 2.2;
-  else if (fx?.head === "shake") headActDx = Math.sin(time * 10) * 2.6;
-  else if (fx?.head === "look") headActDx = Math.sin(time * 1.7) * 2.4;
-  else if (fx?.head === "sniff") { headActDy = 3.2; headActDx = 1.4; }
-  ctx.save();
-  ctx.translate(headActDx, headActDy);
 
   // ears (alert pricks both ears upright and forward)
   const earH = skin.ears === "tall" ? 12 : skin.ears === "fold" ? 6 : 10;
@@ -1069,86 +1154,6 @@ export function drawCat(
       ctx.fillRect(px2 - 1, py2 - 1.4, 4.4, 2);
     }
   }
-  // TAIL: band / ribbon / bow / flower — anchored to the REAL tail base, read
-  // from the same geometry the tail is drawn from (so an accessory can never
-  // float off the tail during a pose transition)
-  if (acc.tail) {
-    const tx = tg.baseX;
-    const ty = tg.baseY;
-    const tt = tintOf("tail");
-    if (acc.tail === "band") {
-      ctx.strokeStyle = tt;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(tx, ty - 2);
-      ctx.lineTo(tx - 1, ty + 3);
-      ctx.stroke();
-      ctx.lineWidth = 1;
-    }
-    if (acc.tail === "ribbon") {
-      ctx.fillStyle = tt;
-      ctx.beginPath();
-      ctx.moveTo(tx, ty); ctx.lineTo(tx - 4, ty - 4); ctx.lineTo(tx - 5.5, ty - 0.5); ctx.closePath();
-      ctx.moveTo(tx, ty); ctx.lineTo(tx - 4.5, ty + 3.5); ctx.lineTo(tx - 6.5, ty + 1); ctx.closePath();
-      ctx.fill();
-    }
-    if (acc.tail === "tuft") {
-      ctx.strokeStyle = "#c9c2b8";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(tx, ty); ctx.lineTo(tx - 3, ty - 5); ctx.moveTo(tx, ty); ctx.lineTo(tx - 5, ty - 3); ctx.stroke();
-      ctx.lineWidth = 1;
-    }
-    if (acc.tail === "flower") {
-      ctx.fillStyle = tt;
-      for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; ctx.beginPath(); ctx.arc(tx + Math.cos(a) * 1.5, ty + Math.sin(a) * 1.5, 1, 0, Math.PI * 2); ctx.fill(); }
-      ctx.fillStyle = "#f4e9d8";
-      ctx.beginPath(); ctx.arc(tx, ty, 0.9, 0, Math.PI * 2); ctx.fill();
-    }
-    if (acc.tail === "feather") {
-      ctx.strokeStyle = tt;
-      ctx.lineWidth = 1.3;
-      ctx.beginPath();
-      ctx.moveTo(tx, ty);
-      ctx.quadraticCurveTo(tx - 4, ty - 6, tx - 2.5, ty - 9.5);
-      ctx.stroke();
-      ctx.lineWidth = 0.6;
-      ctx.beginPath(); ctx.moveTo(tx - 0.5, ty - 1); ctx.lineTo(tx - 2.6, ty - 9); ctx.stroke();
-      ctx.lineWidth = 1;
-    }
-    if (acc.tail === "berries") {
-      ctx.strokeStyle = "#6a9a4a";
-      ctx.lineWidth = 0.8;
-      ctx.beginPath(); ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx - 2, ty - 3.5); ctx.stroke();
-      ctx.lineWidth = 1;
-      ctx.fillStyle = "#c23a3a";
-      ctx.beginPath(); ctx.arc(tx - 2.4, ty - 4.2, 0.9, 0, Math.PI * 2); ctx.arc(tx - 1, ty - 4.8, 0.7, 0, Math.PI * 2); ctx.fill();
-    }
-    if (acc.tail === "wrap") {
-      ctx.strokeStyle = tt;
-      ctx.lineWidth = 2.4;
-      ctx.beginPath();
-      ctx.moveTo(tx + 1, ty - 2.6);
-      ctx.lineTo(tx - 0.4, ty + 2.6);
-      ctx.stroke();
-      ctx.lineWidth = 1;
-    }
-    if (acc.tail === "leaf") {
-      ctx.fillStyle = "#6a9a4a";
-      ctx.beginPath(); ctx.ellipse(tx - 1, ty - 1, 2.6, 1.1, -0.7, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(tx + 0.5, ty + 1.5, 2.2, 1, 0.6, 0, Math.PI * 2); ctx.fill();
-    }
-    if (acc.tail === "bow") {
-      ctx.fillStyle = tt;
-      ctx.beginPath();
-      ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx - 3.4, ty - 3.2); ctx.lineTo(tx - 3.2, ty + 0.4); ctx.closePath();
-      ctx.moveTo(tx, ty - 0.5); ctx.lineTo(tx + 3.2, ty - 3.4); ctx.lineTo(tx + 3.4, ty + 0.2); ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "#f4e9d8";
-      ctx.beginPath(); ctx.arc(tx, ty - 0.5, 0.9, 0, Math.PI * 2); ctx.fill();
-    }
-  }
-
   // shake droplets: spray off the head/back in an arc, fading over the pose
   if (pose === "shake") {
     const life = (Math.sin(time * 26) + 1) / 2; // 0..1 pulsing with the wobble
@@ -1179,7 +1184,6 @@ export function drawCat(
     ctx.lineWidth = 1;
   }
 
-  ctx.restore();
   ctx.restore();
 
 }
