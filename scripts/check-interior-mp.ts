@@ -533,21 +533,33 @@ console.log("\n--- 8. the client actually wires this up (source of truth) ---");
   const engine = fs.readFileSync("src/game/engine.ts", "utf8");
   const schema = fs.readFileSync("src/convex/schema.ts", "utf8");
   const presenceSrc = fs.readFileSync("src/convex/presence.ts", "utf8");
-  check(schema.includes("interior: v.optional(v.union(v.string(), v.null()))"), "the presence table stores the interior id");
-  check(presenceSrc.includes("interior: r.interior ?? null"), "listOnline projects the space to every client");
-  check(presenceSrc.includes("const sameSpace = prevInterior === interior;") && presenceSrc.includes("if (existing && sameSpace) {"), "the server clamps only within one space (an enter/exit is never a teleport)");
-  check(engine.includes("get space(): string | null {"), "the engine exposes the local player's space");
-  check(engine.includes("private remoteInMySpace(r: RemotePlayer): boolean {"), "one shared rule decides which remotes belong to a space");
-  check(engine.includes("if (!this.remoteInMySpace(r)) continue;") && engine.split("if (!this.remoteInMySpace(r)) continue;").length >= 3, "both the outdoor and indoor paths + prompts apply the space rule");
-  check(engine.includes("private drawRemoteCat(r: RemotePlayer, rp: RemoteRenderState) {"), "outdoors and interiors share ONE remote-cat renderer");
-  check(engine.includes("§MULTIPLAYER INTERIORS: other online players who are in THIS room render"), "interiors render same-space remote cats");
-  check(engine.includes("cur.space !== space"), "a space change rebuilds the interpolation timeline");
-  check(game.includes("interior: space,") && game.split("interior: space,").length >= 3, "every presence packet (5s heartbeat, 300ms sync, immediate push) carries the space");
-  check(game.includes("pushPresence(id)"), "entering/leaving a house pushes presence immediately, not up to 5s later");
-  check(!game.includes("if (!g || interiorRef.current) return; // room-local coords are not world positions"), "movement is no longer skipped indoors");
-  check(game.includes("if ((r.interior ?? null) !== mySpace) continue;"), "the client routes remotes by space");
-  check(game.includes("}, [remotesRaw, interior]);"), "a local space change re-routes the remote list");
-  check(game.includes("const saved = interiorRef.current ? outdoorRef.current : posRef.current;"), "the autosave never stores a room-local coordinate as a world position");
+  check("the presence table stores the interior id", schema.includes("interior: v.optional(v.union(v.string(), v.null()))"));
+  check("listOnline projects the space to every client", presenceSrc.includes("interior: r.interior ?? null"));
+  check(
+    "the server clamps only within one space (an enter/exit is never a teleport)",
+    presenceSrc.includes("const sameSpace = prevInterior === interior;") && presenceSrc.includes("if (existing && sameSpace) {"),
+  );
+  check("the engine exposes the local player's space", engine.includes("get space(): string | null {"));
+  check("one shared rule decides which remotes belong to a space", engine.includes("private remoteInMySpace(r: RemotePlayer): boolean {"));
+  check(
+    "both the outdoor and indoor paths + prompts apply the space rule",
+    engine.split("if (!this.remoteInMySpace(r)) continue;").length >= 4,
+  );
+  check("outdoors and interiors share ONE remote-cat renderer", engine.includes("private drawRemoteCat(r: RemotePlayer, rp: RemoteRenderState) {"));
+  check("interiors render same-space remote cats", engine.includes("§MULTIPLAYER INTERIORS: other online players who are in THIS room render"));
+  check("a space change rebuilds the interpolation timeline", engine.includes("cur.space !== space"));
+  check(
+    "every presence packet (5s heartbeat, 300ms sync, immediate push) carries the space",
+    game.split("interior: space,").length >= 3,
+  );
+  check("entering/leaving a house pushes presence immediately, not up to 5s later", game.includes("pushPresence(id)"));
+  check(
+    "movement packets go out indoors too (the old interior early-return is gone)",
+    game.includes("movement is synchronized INSIDE interiors too") && !game.includes("if (!g || interiorRef.current) return;"),
+  );
+  check("the client routes remotes by space", game.includes("if ((r.interior ?? null) !== mySpace) continue;"));
+  check("a local space change re-routes the remote list", game.includes("}, [remotesRaw, interior]);"));
+  check("the autosave never stores a room-local coordinate as a world position", game.includes("const saved = interiorRef.current ? outdoorRef.current : posRef.current;"));
 }
 
 console.log(failures === 0 ? "\nALL INTERIOR MULTIPLAYER CHECKS PASS" : `\n${failures} CHECK(S) FAILED`);
