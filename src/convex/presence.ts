@@ -39,6 +39,19 @@ function animIdOrNull(v: string | undefined): string | undefined {
   return v && v.length > 0 && v.length <= 40 ? v : undefined;
 }
 
+/**
+ * §MULTIPLAYER INTERIORS: which SPACE this player is in. `null` = the outdoor
+ * world; any other value is the stable interior id of the room they entered
+ * ("house-a", "tc-medicine-den", …). Rows written before interiors existed —
+ * and packets from clients that never send the field — read as outdoors, which
+ * is exactly what those clients can be rendering.
+ */
+function interiorOrNull(v: string | null | undefined): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t.length > 0 && t.length <= 64 ? t : null;
+}
+
 // server speed authority: clamp generously above RUN_SPEED (250 px/s) so
 // lag spikes never rubber-band honest clients, but impossible jumps
 // (teleports) are pulled back to the last confirmed position.
@@ -89,6 +102,9 @@ export const heartbeat = mutation({
     // NEVER trusted as the row's stored version — the server derives that from
     // the payload's content so a stale/hostile number can't overwrite it.
     appearanceVersion: v.optional(v.number()),
+    // §MULTIPLAYER INTERIORS: the space this player currently occupies —
+    // null/absent = outdoors, otherwise the interior id of the room.
+    interior: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -98,6 +114,12 @@ export const heartbeat = mutation({
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .first();
     const now = Date.now();
+    // §MULTIPLAYER INTERIORS: the space this packet claims. A change of space
+    // is NOT a teleport — the coordinate system itself changed (world px ⇄
+    // room-local px), so the outdoor speed authority below must not reject it.
+    const interior = interiorOrNull(args.interior);
+    const prevInterior = interiorOrNull(existing?.interior);
+    const sameSpace = prevInterior === interior;
 
     // ---- ordering: ignore old/duplicate/out-of-order packets outright ----
     if (existing && !isFreshInput(args.inputSequence, existing.inputSequence)) {
@@ -118,7 +140,7 @@ export const heartbeat = mutation({
     let y = args.y;
     let moving = args.moving;
     let facing = args.facing;
-    if (existing) {
+    if (existing && sameSpace) {
       const dtS = Math.max(0.25, (now - existing.updatedAt) / 1000);
       const dist = Math.hypot(x - existing.x, y - existing.y);
       if (dist <= MAX_TELEPORT_PX && dist / dtS > MAX_SPEED_PX_S) {
@@ -157,6 +179,8 @@ export const heartbeat = mutation({
         inputSequence: args.inputSequence ?? existing.inputSequence,
         movementState,
         animationState,
+        // §MULTIPLAYER INTERIORS: the room this player is inside (null = world)
+        interior,
         stateVersion: (existing.stateVersion ?? 0) + 1,
         serverTick: now,
         updatedAt: now,
@@ -200,6 +224,7 @@ export const heartbeat = mutation({
       inputSequence: args.inputSequence,
       movementState,
       animationState,
+      interior,
       stateVersion: 1,
       serverTick: now,
       updatedAt: now,
@@ -235,6 +260,11 @@ export const listOnline = query({
         animOneShot: r.animOneShot,
         movementState: r.movementState,
         animationState: r.animationState,
+        // §MULTIPLAYER INTERIORS: null = the outdoor world, otherwise the id of
+        // the room this player is in — the client keeps only the players who
+        // share ITS space (outdoors + the same interior), so cats in another
+        // room (or outside while you are in a den) are never rendered here.
+        interior: r.interior ?? null,
         serverTick: r.serverTick,
         stateVersion: r.stateVersion,
         lastProcessedInput: r.inputSequence,

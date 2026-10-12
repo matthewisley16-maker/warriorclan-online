@@ -218,6 +218,15 @@ export interface RemotePlayer {
    * number), so a remote re-renders exactly once per confirmed skin update and
    * identical looks never trigger redraws. */
   appearanceVersion?: number;
+  /**
+   * §MULTIPLAYER INTERIORS: the SPACE this player occupies. null = the outdoor
+   * world; any other value is the stable interior id of the room they are in.
+   * A remote is only ever DRAWN in the same space as the local player, and its
+   * x/y are then in that space's own coordinate system (world px outdoors,
+   * room-local px inside) — so an indoor cat is never painted onto the street
+   * and cats from different houses never appear together.
+   */
+  interior?: string | null;
   // server authority metadata (ordering + staleness rejection)
   serverTick?: number;
   stateVersion?: number;
@@ -246,6 +255,10 @@ interface RemoteRenderState {
   receivedAt: number;
   /** sliding window of recent valid server states, oldest first */
   buffer: RemoteStateSample[];
+  /** §MULTIPLAYER INTERIORS: the space this render state belongs to. A change
+   * of space is a coordinate-system change, never motion — the timeline is
+   * reset instead of interpolating across the jump. */
+  space?: string | null;
   /** anti-blink latch: keep "walk" briefly when movement state flickers */
   walkLatchUntil?: number;
   poseChangedAt?: number;
@@ -310,6 +323,20 @@ export interface GameCallbacks {
   onNpcIdle?: (name: string, line: string) => void;
   /** waypoint distance update: meters + tiles (1 tile = 6 m) + arrived flag */
   onWaypoint?: (info: { meters: number; tiles: number; arrived: boolean }) => void;
+  /**
+   * §STORY GUIDANCE: the ACTIVE story objective's live guidance. Emitted while
+   * the objective's waypoint is set — distance in the game's own units, whether
+   * the destination is inside the camera view, and the screen-space direction
+   * to it (so the HUD can pin an arrow to the screen edge when it is not).
+   */
+  onStoryWaypoint?: (info: {
+    meters: number;
+    tiles: number;
+    arrived: boolean;
+    onScreen: boolean;
+    /** screen-space angle (radians) from the player toward the objective */
+    angle: number;
+  }) => void;
   /** The cat died (currently: hit by a car on the Thunderpath). */
   onDeath?: (cause: string, respawn: { x: number; y: number }) => void;
   /** Engine-originated sound (ambient mews, shakes, splashes, hits). */
@@ -2136,6 +2163,11 @@ export class GameCanvas {
   /** active waypoint in world px (set from the map's real tile coordinates) */
   private waypoint: { x: number; y: number } | null = null;
   private waypointArrived = false;
+  /** §STORY GUIDANCE: the active objective's destination (world px) */
+  private storyWaypoint: { x: number; y: number; label: string; npcId?: string; radius: number } | null = null;
+  /** hidden during dialogue/cutscenes so it can never cover a story scene */
+  private storyWaypointVisible = true;
+  private lastStoryWpEmit = 0;
   private sneaking = false;
   private running = false;
   private pSpeed = 0; // live speed in px/s (drives pose + networking)
@@ -2978,6 +3010,65 @@ export class GameCanvas {
     return this.waypoint !== null;
   }
 
+  // -------------------------------------------------------------------------
+  // §STORY GUIDANCE: the active story objective's waypoint.
+  //
+  // This is deliberately a SEPARATE slot from the player's own map waypoint:
+  // setting a map pin must never delete the mission guidance, and completing a
+  // mission must never move the pin the player placed. Exactly one objective
+  // is guided at a time — the caller (Game.tsx) sets it when the story step
+  // changes and clears it when Story Mode ends.
+  // -------------------------------------------------------------------------
+  setStoryWaypoint(
+    target: { x: number; y: number; label: string; npcId?: string; radius?: number } | null,
+  ) {
+    this.storyWaypoint = target
+      ? { x: target.x, y: target.y, label: target.label, npcId: target.npcId, radius: target.radius ?? 120 }
+      : null;
+    if (!target) this.cb.onStoryWaypoint?.({ meters: 0, tiles: 0, arrived: false, onScreen: false, angle: 0 });
+  }
+
+  /** Hide/show the objective marker (dialogue and cutscenes own the screen). */
+  setStoryWaypointVisible(visible: boolean) {
+    this.storyWaypointVisible = visible;
+  }
+
+  /**
+   * The objective's CURRENT world position. An npc objective follows the real
+   * cat: as a staged character walks to its mark the marker walks with it, so
+   * the arrow always points at the cat, never at where it used to be.
+   */
+  getStoryWaypointPos(): { x: number; y: number } | null {
+    const w = this.storyWaypoint;
+    if (!w) return null;
+    if (w.npcId) {
+      const n = this.npcStates.find((s) => s.def.id === w.npcId);
+      if (n && !n.gone) return { x: n.x, y: n.y };
+    }
+    return { x: w.x, y: w.y };
+  }
+
+  get hasStoryWaypoint() {
+    return this.storyWaypoint !== null;
+  }
+
+  /** Nearest LIVE prey to a point (story hunt objectives, HUD hints). */
+  nearestPreyPos(from?: { x: number; y: number }): { x: number; y: number } | null {
+    const ax = from?.x ?? this.px;
+    const ay = from?.y ?? this.py;
+    let best: { x: number; y: number } | null = null;
+    let bestD = Infinity;
+    for (const p of this.prey) {
+      if (p.phase !== "alive") continue;
+      const d = Math.hypot(p.x - ax, p.y - ay);
+      if (d < bestD) {
+        bestD = d;
+        best = { x: p.x, y: p.y };
+      }
+    }
+    return best;
+  }
+
   addBubble(b: ChatBubble) {
     this.bubbles.push(b);
     if (this.bubbles.length > 16) this.bubbles.shift();
@@ -3580,6 +3671,29 @@ export class GameCanvas {
     return this.pxFacing;
   }
 
+  /**
+   * §MULTIPLAYER INTERIORS: the SPACE the local player occupies right now.
+   * null = the outdoor world, otherwise the stable interior id of the room.
+   * React broadcasts this with every position packet so the server (and every
+   * other client) can tell WHERE the player is, not just how far along. It is
+   * also what a remote's own space is compared against before drawing.
+   */
+  get space(): string | null {
+    return this.interiorId;
+  }
+
+  /**
+   * §MULTIPLAYER INTERIORS: may this remote cat be drawn in the local player's
+   * current space? Outdoors that means the outdoor world; inside a den it means
+   * that exact room. Cats in another house (or standing in the street while the
+   * player is indoors) are kept in state — never discarded, never disconnected —
+   * but they are not rendered into a coordinate system that would place them
+   * inside walls.
+   */
+  private remoteInMySpace(r: RemotePlayer): boolean {
+    return (r.interior ?? null) === (this.interiorId ?? null);
+  }
+
   /** Remote players currently known (for the minimap). */
   get remoteList(): RemotePlayer[] {
     return [...this.remotes.values()];
@@ -3607,6 +3721,33 @@ export class GameCanvas {
   /** Survival needs (hunger/energy/health) — UI reads, actions mutate. */
   get needs() {
     return this._needs;
+  }
+
+  // -------------------------------------------------------------------------
+  // §SURVIVAL UNLOCKS: which mechanics the CURRENT mode has introduced.
+  // Story Mode starts with none of them live (no bar, no drain, no penalty) and
+  // switches each one on when the story reaches its introduction; other modes
+  // never call this, so their meters behave exactly as before.
+  // -------------------------------------------------------------------------
+  setSurvivalActive(active: { hunger?: boolean; energy?: boolean }) {
+    this._needs.hungerActive = active.hunger ?? true;
+    this._needs.energyActive = active.energy ?? true;
+  }
+
+  get survivalActive(): { hunger: boolean; energy: boolean } {
+    return { hunger: this._needs.hungerActive, energy: this._needs.energyActive };
+  }
+
+  /**
+   * Start TRACKING a meter from now. A meter that was never live must begin at a
+   * healthy value — carrying an unmaintained `hunger = 0` (from a save written
+   * in another mode, or a legacy file) into the moment the bar appears would
+   * hand the player an instantly starving cat. Values already being tracked are
+   * never reset: story progress is preserved.
+   */
+  beginSurvivalMeter(meter: "hunger" | "energy") {
+    if (meter === "hunger") this._needs.hunger = Math.max(this._needs.hunger, 80);
+    else this._needs.energy = Math.max(this._needs.energy, 90);
   }
 
   /** Player eats from the pile: it visibly shrinks (shared with NPC cats). */
@@ -4454,15 +4595,28 @@ export class GameCanvas {
     for (const [uid, r] of this.remotes) {
       const nowMs = this.time * 1000;
       const wallMs = performance.now();
+      const space = r.interior ?? null;
       let cur = this.remoteRender.get(uid);
+      // §MULTIPLAYER INTERIORS: a player entering/leaving a house changes
+      // coordinate systems (world px ⇄ room-local px). That is not motion, so
+      // the interpolation timeline is REBUILT from the authoritative snapshot
+      // rather than eased across the jump (which would slide the cat through
+      // walls or drag it toward the wrong room's coordinates).
+      if (cur && cur.space !== space) {
+        const s = this.remoteStateOf(r, nowMs, wallMs);
+        cur = { x: s.x, y: s.y, facing: s.facing, pose: s.pose, serverTick: s.serverTick, receivedAt: s.receivedAt, buffer: [s], animMs: wallMs % 100000, lastSpeedPxS: 0, space };
+        this.remoteRender.set(uid, cur);
+        continue;
+      }
       if (!cur) {
         // fresh snapshot (first sight or reconnect): start exactly at the
         // authoritative position — never reuse stale interpolation state
         const s = this.remoteStateOf(r, nowMs, wallMs);
-        cur = { x: s.x, y: s.y, facing: s.facing, pose: s.pose, serverTick: s.serverTick, receivedAt: s.receivedAt, buffer: [s], animMs: wallMs % 100000, lastSpeedPxS: 0 };
+        cur = { x: s.x, y: s.y, facing: s.facing, pose: s.pose, serverTick: s.serverTick, receivedAt: s.receivedAt, buffer: [s], animMs: wallMs % 100000, lastSpeedPxS: 0, space };
         this.remoteRender.set(uid, cur);
         continue;
       }
+      cur.space = space;
       const tick = r.serverTick ?? 0;
       if (tick > cur.serverTick) {
         // a newer server state arrived: buffer it (bounded) and advance.
@@ -4503,15 +4657,18 @@ export class GameCanvas {
       if (!this.remotes.has(uid)) this.remoteRender.delete(uid);
     }
 
-    // --- survival needs: slow, unobtrusive drain (paused-safe) ---
+    // --- survival needs: slow, unobtrusive drain (paused-safe). Every effect
+    // below is gated on the meter being INTRODUCED (§SURVIVAL): a story chapter
+    // that has not reached hunger yet has no drain, no starvation damage and no
+    // stamina penalty running invisibly in the background. ---
     if (!this.paused && !this.dead) {
       this.needs.drain(dt, this.sneaking, running, swimmingNow);
-      if (this.needs.hunger <= 0) {
+      if (this.needs.hungerActive && this.needs.hunger <= 0) {
         this.needs.health = Math.max(0, this.needs.health - dt * 0.35);
-      } else if (this.needs.hunger > 60 && this.needs.health < 100) {
+      } else if (this.needs.hungerActive && this.needs.hunger > 60 && this.needs.health < 100) {
         this.needs.health = Math.min(100, this.needs.health + dt * 0.4);
       }
-      if (this.needs.energy <= 0) {
+      if (this.needs.energyActive && this.needs.energy <= 0) {
         // exhausted: no running on an empty tank
         this.running = false;
       }
@@ -4606,6 +4763,40 @@ export class GameCanvas {
       }
     }
 
+    // --- §STORY GUIDANCE: the active objective's live direction + distance ---
+    // (never cleared on arrival here: the objective is completed by the story
+    // script, and until then the marker must keep pointing at the destination)
+    if (this.storyWaypoint) {
+      // Indoors the objective lies in the OTHER coordinate system: the useful
+      // instruction is "get out of this den", so guidance points at the room's
+      // own doorway gap (the walk-out the interior already supports).
+      let tp = this.getStoryWaypointPos();
+      if (this.interiorId) {
+        const geo = ROOM_GEO[this.interiorId];
+        tp = { x: ((geo?.w ?? ROOM_W) / 2) * 32, y: ((geo?.h ?? ROOM_H) - 1) * 32 };
+      }
+      if (tp) {
+        const dx = tp.x - this.px;
+        const dy = tp.y - this.py;
+        const dTiles = Math.hypot(dx, dy) / 32;
+        if (this.time - this.lastStoryWpEmit > 0.25) {
+          this.lastStoryWpEmit = this.time;
+          const cw = this.canvas.width / this.dpr;
+          const ch = this.canvas.height / this.dpr;
+          const sx = cw / 2 + (tp.x - this.camX) * this.scale;
+          const sy = ch / 2 + (tp.y - this.camY) * this.scale;
+          const margin = 70;
+          this.cb.onStoryWaypoint?.({
+            meters: Math.round(dTiles * 6),
+            tiles: Math.round(dTiles),
+            arrived: Math.hypot(dx, dy) <= (this.storyWaypoint.radius ?? 120),
+            onScreen: sx > margin && sx < cw - margin && sy > margin && sy < ch - margin,
+            angle: Math.atan2(dy, dx),
+          });
+        }
+      }
+    }
+
     // --- area + nearby detection ---
     const area = areaAt(this.px, this.py);
     const areaName = this.interiorId
@@ -4686,8 +4877,10 @@ export class GameCanvas {
           near = { kind: "prey", label: `Pounce — ${p.kind}`, preyId: p.id };
         }
       }
-      // remote players
+      // remote players OUTSIDE (interior cats live in another coordinate
+      // system — they must never offer a "nearby" prompt at world px)
       for (const [, r] of this.remotes) {
+        if (!this.remoteInMySpace(r)) continue;
         const d = Math.hypot(r.x - this.px, r.y - this.py);
         if (d < bestD) {
           bestD = d;
@@ -4707,6 +4900,16 @@ export class GameCanvas {
             label: prop.label,
             interact: (prop.interact ?? defaultFurnitureAction(prop.style)) as unknown as InteractableKind,
           };
+        }
+      }
+      // other players in the same room (they are right there in the room)
+      for (const [, r] of this.remotes) {
+        if (!this.remoteInMySpace(r)) continue;
+        const rp = this.remoteRender.get(r.userId);
+        const d = Math.hypot((rp?.x ?? r.x) - this.px, (rp?.y ?? r.y) - this.py);
+        if (d < bestD) {
+          bestD = d;
+          near = { kind: "remote", label: r.catName, remoteUserId: r.userId };
         }
       }
       // NPCs inside (same stable in-room positions as the renderer)
@@ -5084,10 +5287,33 @@ export class GameCanvas {
       ctx.fillStyle = "#f4f1e8";
       ctx.fillText(n.def.name, nxp, nyp - 28);
     }
-    // player (lifted mid-hop; the cat sprite itself is unchanged)
-    drawCat(ctx, this.playerSkin(), this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.animClock(), 0, {
-      tailId: "player",
+    // §MULTIPLAYER INTERIORS: other online players who are in THIS room render
+    // at their own room-local coordinates — the same sprite, the same
+    // synchronized animations and the same name plate as outdoors. They are
+    // depth-sorted together with the local cat (smaller y first) so a cat never
+    // draws over the one standing in front of it, and cats in other houses (or
+    // still outside) are simply not part of this room's view. This is the
+    // indoor half of the shared remote renderer — one draw path, two maps.
+    const roomCats: { y: number; draw: () => void }[] = [];
+    for (const [, r] of this.remotes) {
+      if (!this.remoteInMySpace(r)) continue;
+      const rp = this.remoteRender.get(r.userId);
+      const rx = rp?.x ?? r.x;
+      const ry = rp?.y ?? r.y;
+      // room-local bounds: never paint a cat outside this room's own floor
+      if (rx < -48 || ry < -48 || rx > RW * 32 + 48 || ry > RH * 32 + 48) continue;
+      roomCats.push({ y: ry, draw: () => { if (rp) this.drawRemoteCat(r, rp); } });
+    }
+    roomCats.push({
+      y: this.py,
+      draw: () =>
+        // player (lifted mid-hop; the cat sprite itself is unchanged)
+        drawCat(ctx, this.playerSkin(), this.px, this.py - this.hopLiftPx(), this.pxFacing, this.pPose, this.animClock(), 0, {
+          tailId: "player",
+        }),
     });
+    roomCats.sort((a, b) => a.y - b.y);
+    for (const c of roomCats) c.draw();
     // bubbles anchored to the player are drawn indoors too
     for (const b of this.bubbles) {
       if (b.track !== "player" || Date.now() > b.until) continue;
@@ -5120,6 +5346,62 @@ export class GameCanvas {
     glow.addColorStop(1, "rgba(60, 40, 20, 0.16)");
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, cw, ch);
+  }
+
+  /**
+   * §MULTIPLAYER INTERIORS: the ONE remote-cat renderer, shared by the outdoor
+   * world and by interiors. Same 2D cat sprite the local player uses, the
+   * remote's own appearance, its interpolated position in the CURRENT space's
+   * coordinates, its synchronized pose and animation clock, its own tail state
+   * and the same name/clan plate. Indoors the water bob is naturally inert
+   * (`waterAt` is a no-op inside), so no outdoor assumption leaks in.
+   */
+  private drawRemoteCat(r: RemotePlayer, rp: RemoteRenderState) {
+    const { ctx } = this;
+    // synchronized REAL animation from the remote cat (replayed locally
+    // from animation state — never frames)
+    const rem = this.remoteEmotePose(r.userId);
+    const rPose = rem ? (rem.pose as CatPose) : rp.pose;
+    const remFx = {
+      ...(rem
+        ? {
+            yawn: Boolean(rem.fx.yawn),
+            alert: Boolean(rem.fx.alert),
+            tailFlick: Boolean(rem.fx.tailFlick),
+            head: rem.fx.head,
+          }
+        : {}),
+      // §4: remote cats get their own tail state, keyed by account id, so
+      // a re-skin or a pose change never inherits another cat's blend
+      tailId: `p:${r.userId}`,
+    };
+    drawCat(
+      ctx,
+      { ...r.appearance },
+      rp.x,
+      rp.y - (this.waterAt(rp.x, rp.y) ? 4 + Math.sin(this.time * SWIM_BOB_HZ * Math.PI * 2 + (r.userId.charCodeAt(0) % 10)) * 2 : 0),
+      (rp.facing >= 0 ? 1 : -1) as 1 | -1,
+      rPose,
+      rp.animMs / 1000,
+      (r.userId.charCodeAt(0) % 10),
+      remFx,
+    );
+    ctx.font = "600 11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const label = r.catName;
+    const sub = [r.clan, r.rank].filter(Boolean).map((s) => s!.charAt(0).toUpperCase() + s!.slice(1)).join(" · ");
+    const tw = Math.max(ctx.measureText(label).width, sub ? ctx.measureText(sub).width * 1 : 0);
+    ctx.fillStyle = "rgba(24,34,52,0.62)";
+    ctx.beginPath();
+    ctx.roundRect(rp.x - tw / 2 - 7, rp.y - 47, tw + 14, sub ? 29 : 17, 8);
+    ctx.fill();
+    ctx.fillStyle = "#dbe8ff";
+    ctx.fillText(label, rp.x, rp.y - 35);
+    if (sub) {
+      ctx.font = "500 9px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(186, 208, 240, 0.95)";
+      ctx.fillText(sub, rp.x, rp.y - 24);
+    }
   }
 
   private playerSkin(): CatSkin {
@@ -5304,58 +5586,16 @@ export class GameCanvas {
     }
     // remote players (interpolated render state: position + synchronized pose)
     for (const [, r] of this.remotes) {
+      // §MULTIPLAYER INTERIORS: draw only the cats that are in MY space. A
+      // player inside a house lives in room-local coordinates that have nothing
+      // to do with world px, so rendering them here would place them at a spot
+      // they never stood (inside trees, walls or the river). They stay in
+      // state — they simply are not part of this view.
+      if (!this.remoteInMySpace(r)) continue;
       const rp = this.remoteRender.get(r.userId);
       if (!rp) continue;
       if (rp.x < viewL - 60 || rp.x > viewR + 60 || rp.y < viewT - 60 || rp.y > viewB + 60) continue;
-      ents.push({
-        y: rp.y,
-        draw: () => {
-          // synchronized REAL animation from the remote cat (replayed locally
-          // from animation state — never frames)
-          const rem = this.remoteEmotePose(r.userId);
-          const rPose = rem ? (rem.pose as CatPose) : rp.pose;
-          const remFx = {
-            ...(rem
-              ? {
-                  yawn: Boolean(rem.fx.yawn),
-                  alert: Boolean(rem.fx.alert),
-                  tailFlick: Boolean(rem.fx.tailFlick),
-                  head: rem.fx.head,
-                }
-              : {}),
-            // §4: remote cats get their own tail state, keyed by account id, so
-            // a re-skin or a pose change never inherits another cat's blend
-            tailId: `p:${r.userId}`,
-          };
-          drawCat(
-            ctx,
-            { ...r.appearance },
-            rp.x,
-            rp.y - (this.waterAt(rp.x, rp.y) ? 4 + Math.sin(this.time * SWIM_BOB_HZ * Math.PI * 2 + (r.userId.charCodeAt(0) % 10)) * 2 : 0),
-            (rp.facing >= 0 ? 1 : -1) as 1 | -1,
-            rPose,
-            rp.animMs / 1000,
-            (r.userId.charCodeAt(0) % 10),
-            remFx,
-          );
-          ctx.font = "600 11px system-ui, sans-serif";
-          ctx.textAlign = "center";
-          const label = r.catName;
-          const sub = [r.clan, r.rank].filter(Boolean).map((s) => s!.charAt(0).toUpperCase() + s!.slice(1)).join(" · ");
-          const tw = Math.max(ctx.measureText(label).width, sub ? ctx.measureText(sub).width * 1 : 0);
-          ctx.fillStyle = "rgba(24,34,52,0.62)";
-          ctx.beginPath();
-          ctx.roundRect(rp.x - tw / 2 - 7, rp.y - 47, tw + 14, sub ? 29 : 17, 8);
-          ctx.fill();
-          ctx.fillStyle = "#dbe8ff";
-          ctx.fillText(label, rp.x, rp.y - 35);
-          if (sub) {
-            ctx.font = "500 9px system-ui, sans-serif";
-            ctx.fillStyle = "rgba(186, 208, 240, 0.95)";
-            ctx.fillText(sub, rp.x, rp.y - 24);
-          }
-        },
-      });
+      ents.push({ y: rp.y, draw: () => this.drawRemoteCat(r, rp) });
     }
     // player
     ents.push({
@@ -5428,6 +5668,57 @@ export class GameCanvas {
         if (v.x < viewL - 200 || v.x > viewR + 200) continue;
         drawVehicle(ctx, v);
       }
+    }
+
+    // §STORY GUIDANCE: an easy-to-see marker ON the objective itself (bobbing
+    // chevron over a pulsing ring) plus a directional arrow over the cat. Drawn
+    // only in the space the objective lives in — indoors the destination is in
+    // another coordinate system, and the HUD's edge arrow points to the door.
+    const storyTarget = this.storyWaypoint ? this.getStoryWaypointPos() : null;
+    if (storyTarget && this.storyWaypointVisible && !this.interiorId) {
+      const t = this.time;
+      const bob = Math.sin(t * 2.4) * 5;
+      const mx = storyTarget.x;
+      const my = storyTarget.y + bob - 34;
+      const pulse = 0.6 + 0.4 * Math.sin(t * 3);
+      // pulsing ring on the ground at the destination
+      ctx.strokeStyle = `rgba(255, 214, 120, ${0.5 * pulse})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(storyTarget.x, storyTarget.y + 8, 26 + 4 * pulse, 11 + 2 * pulse, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // glow + chevron pointing down at the spot
+      const glow = ctx.createRadialGradient(mx, my, 2, mx, my, 30);
+      glow.addColorStop(0, "rgba(255, 214, 120, 0.4)");
+      glow.addColorStop(1, "rgba(255, 214, 120, 0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(mx, my, 30, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#ffd678";
+      ctx.strokeStyle = "rgba(80, 50, 10, 0.85)";
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(mx, my + 12);
+      ctx.lineTo(mx - 12, my - 8);
+      ctx.lineTo(mx - 4, my - 8);
+      ctx.lineTo(mx - 4, my - 18);
+      ctx.lineTo(mx + 4, my - 18);
+      ctx.lineTo(mx + 4, my - 8);
+      ctx.lineTo(mx + 12, my - 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // the objective's name, so the marker explains itself
+      ctx.font = "700 12px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      const tw = ctx.measureText(this.storyWaypoint!.label).width;
+      ctx.fillStyle = "rgba(28, 22, 8, 0.72)";
+      ctx.beginPath();
+      ctx.roundRect(mx - tw / 2 - 7, my - 38, tw + 14, 18, 8);
+      ctx.fill();
+      ctx.fillStyle = "#ffe9b0";
+      ctx.fillText(this.storyWaypoint!.label, mx, my - 25);
     }
 
     // waypoint beacon + directional arrow (world space, floats over the cat)
@@ -8320,14 +8611,26 @@ class SurvivalNeeds {
   hunger = 80;
   energy = 90;
   health = 100;
+  /**
+   * §SURVIVAL: has the STORY introduced this meter yet? A meter that has not
+   * been introduced is not "hidden but running": nothing is subtracted from it
+   * and it produces no penalty. Story Mode turns these on when the story
+   * reaches each mechanic's introduction; every other mode leaves them on, so
+   * Free Play and Online keep their existing behaviour exactly.
+   */
+  hungerActive = true;
+  energyActive = true;
   drain(dt: number, sneaking: boolean, running: boolean, swimming: boolean) {
     // rates per second — gentle by design: from a full bar, hunger/energy last
     // well over an in-game DAY (600s) of resting (roughly 4-8 days idle), so
     // they matter over a session without ever nagging. Running/swimming drain
     // faster but still leave plenty of room.
-    this.hunger -= dt * (running ? 0.1 : swimming ? 0.08 : sneaking ? 0.02 : 0.028);
-    this.energy -= dt * (running ? 0.22 : swimming ? 0.15 : sneaking ? 0.02 : 0.018);
-    if (this.energy < 15) this.health -= dt * 0.05;
+    if (this.hungerActive) this.hunger -= dt * (running ? 0.1 : swimming ? 0.08 : sneaking ? 0.02 : 0.028);
+    if (this.energyActive) {
+      this.energy -= dt * (running ? 0.22 : swimming ? 0.15 : sneaking ? 0.02 : 0.018);
+      // exhaustion hurts only where stamina is a real mechanic
+      if (this.energy < 15) this.health -= dt * 0.05;
+    }
     this.hunger = Math.max(0, this.hunger);
     this.energy = Math.max(0, this.energy);
     this.health = Math.max(0, this.health);

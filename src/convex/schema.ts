@@ -125,6 +125,11 @@ const schema = defineSchema(
         health: v.number(),
         updatedAt: v.number(),
       })),
+      // §SURVIVAL: survival mechanics the story has already INTRODUCED to this
+      // save ("hunger", "energy"). The unlock itself is derived from storyStep
+      // so a refresh can neither unlock a meter early nor switch one off; this
+      // list exists purely so a completed introduction never replays.
+      survivalSeen: v.optional(v.array(v.string())),
       createdAt: v.number(),
       updatedAt: v.number(),
     }).index("by_user", ["userId"]),
@@ -157,6 +162,11 @@ const schema = defineSchema(
       // synchronized state vocabulary (idle/walk/run/crouch + CatPose)
       movementState: v.optional(v.string()),
       animationState: v.optional(v.string()),
+      // §MULTIPLAYER INTERIORS: the SPACE this player occupies — null = the
+      // outdoor world, otherwise the interior id of the room they are inside
+      // ("house-a", "tc-leader-den", …). Optional so rows written by older
+      // clients (which only ever knew the outdoor world) still load.
+      interior: v.optional(v.union(v.string(), v.null())),
     }).index("by_user", ["userId"])
       .index("by_updated", ["updatedAt"]),
 

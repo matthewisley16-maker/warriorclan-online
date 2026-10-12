@@ -166,6 +166,32 @@ export const completeQuest = mutation({
   },
 });
 
+/**
+ * §SURVIVAL: record that a survival mechanic's one-time introduction has been
+ * shown, so it never replays. Idempotent union — the mechanic's ACTUAL unlock
+ * is derived from story progress, never from this list, which is why replaying
+ * or clearing this entry can never hand the player a meter the story has not
+ * reached.
+ */
+export const markSurvivalSeen = mutation({
+  args: { mechanic: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in");
+    const p = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!p) throw new Error("No player save");
+    const id = args.mechanic.trim();
+    if (!id || id.length > 40) throw new Error("Invalid mechanic");
+    const seen = p.survivalSeen ?? [];
+    if (seen.includes(id)) return false;
+    await ctx.db.patch(p._id, { survivalSeen: [...seen, id], updatedAt: Date.now() });
+    return true;
+  },
+});
+
 export const setStoryStep = mutation({
   args: { step: v.number() },
   handler: async (ctx, args) => {

@@ -6,7 +6,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
   ChevronDown,
+  ChevronRight,
   Clock,
+  Navigation,
   Mail,
   MessageCircle,
   PawPrint,
@@ -51,6 +53,8 @@ import { NPC_SYNC_INTERVAL_MS, NPC_SYNC_WORLD } from "@/game/npcSync";
 // §2/§3/§13: cinematic story layer — beats, choices, per-character meow voices
 import { STORY_INTRO, STORY_BEATS, type StoryBeat } from "@/game/storyCinematics";
 import { beatActorIds, resolveStaging } from "@/game/storyStaging";
+import { resolveStoryWaypoint } from "@/game/storyWaypoint";
+import { pendingIntros, unlockedMeters, type SurvivalUnlock } from "@/game/storyUnlocks";
 import { pickVocal, emotionForLine } from "@/game/vocal";
 import { useAction } from "convex/react";
 import { profileFor } from "@/game/characters";
@@ -160,6 +164,7 @@ export default function Game() {
   const savePosition = useMutation(api.players.savePosition);
   const completeQuest = useMutation(api.players.completeQuest);
   const setStoryStep = useMutation(api.players.setStoryStep);
+  const markSurvivalSeen = useMutation(api.players.markSurvivalSeen);
   const saveNpcMemory = useMutation(api.players.saveNpcMemory);
   const addXp = useMutation(api.players.addXp);
   const updateCat = useMutation(api.players.updateCat);
@@ -391,6 +396,14 @@ export default function Game() {
   const lastSkinSaveRef = useRef<{ at: number; ok: boolean; ver?: number } | null>(null);
   // --- survival stats (hunger/energy/health) ---
   const [stats, setStats] = useState({ hunger: 80, energy: 90, health: 100 });
+  // §SURVIVAL: which meters the CURRENT mode has introduced. Story Mode starts
+  // with none of them (no bar, no drain, no penalty) and turns each on when the
+  // story reaches its introduction; other modes keep every meter live.
+  const [survival, setSurvival] = useState<{ hunger: boolean; energy: boolean }>({ hunger: true, energy: true });
+  /** the one-time explanations still to be read (usually 0 or 1) */
+  const [survivalIntros, setSurvivalIntros] = useState<SurvivalUnlock[]>([]);
+  /** mechanics already introduced to this save (loaded from the player row) */
+  const survivalSeenRef = useRef<string[]>([]);
   const statsRef = useRef(stats);
   statsRef.current = stats;
   /** last stats persistence write (20s throttle) */
@@ -405,6 +418,11 @@ export default function Game() {
   const [waypointLabel, setWaypointLabel] = useState<string | null>(null);
   const [currentWaypointId, setCurrentWaypointId] = useState<string | null>(null);
   const [waypointInfo, setWaypointInfo] = useState<{ meters: number; tiles: number; arrived: boolean } | null>(null);
+  // §STORY GUIDANCE: the ACTIVE objective's destination and its live distance
+  const [storyGuide, setStoryGuide] = useState<{ label: string; instruction: string } | null>(null);
+  const [storyWpInfo, setStoryWpInfo] = useState<
+    { meters: number; tiles: number; arrived: boolean; onScreen: boolean; angle: number } | null
+  >(null);
   const [ping, setPing] = useState<number | null>(null);
   // §5: the latest sample was far above the rolling average (transient spike)
   const [pingSpike, setPingSpike] = useState(false);
@@ -453,6 +471,7 @@ export default function Game() {
     });
     setQuestsDone(player.questsDone ?? []);
     setStoryStepLocal(player.storyStep ?? 0);
+    survivalSeenRef.current = player.survivalSeen ?? [];
     const mem = player.npcMemory;
     if (mem) {
       const learnedIn: Record<string, string[]> = {};
@@ -560,6 +579,45 @@ export default function Game() {
   useEffect(() => {
     if (phase !== "playing" || !pendingMode || !canvasRef.current || gameRef.current) return;
     const spawn = pendingSpawn ?? (player ? { x: player.x, y: player.y } : SPAWN);
+    // §MULTIPLAYER INTERIORS: remember the OUTDOOR spot from the very first
+    // frame, so entering a den (or autosaving inside one) can always restore a
+    // real world position instead of a room-local coordinate.
+    outdoorRef.current = { x: spawn.x, y: spawn.y };
+
+    /**
+     * §MULTIPLAYER INTERIORS: push a presence packet IMMEDIATELY, carrying the
+     * space the player is actually in. Entering or leaving a house changes the
+     * coordinate system, so the server must learn the new space (and the
+     * position that belongs to it) at that moment — waiting up to 5s for the
+     * next heartbeat was what left every other client rendering the entrant at
+     * their old outdoor spot while they were already walking around indoors.
+     */
+    const pushPresence = (space: string | null) => {
+      const g = gameRef.current;
+      const cat = myCatRef.current;
+      if (!g || !cat || pendingMode !== "open") return;
+      const s = g.engineState();
+      const full = fullSkin(cat.appearance);
+      const ver = appearanceVersion(full);
+      const ride = ver !== sentAppearanceVerRef.current;
+      if (ride) sentAppearanceVerRef.current = ver;
+      heartbeat({
+        inputSequence: ++inputSeq.current,
+        x: s.x,
+        y: s.y,
+        facing: s.facing,
+        moving: s.moving,
+        movementState: s.movementState,
+        animationState: s.animationState,
+        interior: space,
+        mode: "open",
+        catName: cat.name,
+        clan: cat.clan,
+        rank: "apprentice",
+        appearanceVersion: ver,
+        ...(ride ? { appearance: full } : {}),
+      }).catch(() => undefined);
+    };
 
     const game = new GameCanvas(canvasRef.current, spawn, {
       onAreaChange: (name, id) => {
@@ -626,6 +684,8 @@ export default function Game() {
       onInteriorChange: (id) => {
         interiorRef.current = id;
         setInterior(id);
+        // tell the server the new space right away (see pushPresence)
+        pushPresence(id);
       },
       onNpcIdle: undefined, // ambient NPC chatter stays NPC↔NPC; never pops at the player
       onEmoteFx: () => {
@@ -649,6 +709,7 @@ export default function Game() {
         setWaypointInfo(info);
         if (info.arrived) setWaypointLabel(null); // arrival clears guidance
       },
+      onStoryWaypoint: (info) => setStoryWpInfo(info),
     });
     gameRef.current = game;
     game.setStoryContext(mode, storyStepRef.current);
@@ -670,8 +731,14 @@ export default function Game() {
       hb = window.setInterval(() => {
         const g = gameRef.current;
         if (!g) return;
-        const p = interiorRef.current ? outdoorRef.current : posRef.current;
-        const m = interiorRef.current ? { facing: 1, moving: false } : movementSample(g);
+        // §MULTIPLAYER INTERIORS: the packet always carries the space the cat
+        // is in AND the coordinates of that space. Inside a den those are
+        // room-local px — exactly what another player in the same room needs to
+        // draw the cat in the right place. (The old code sent the stale OUTDOOR
+        // position indoors, so an entrant kept appearing on the doorstep.)
+        const space = g.space;
+        const p = posRef.current;
+        const m = movementSample(g);
         const cat = myCatRef.current;
         if (!cat) return;
         const full = fullSkin(cat.appearance);
@@ -688,6 +755,7 @@ export default function Game() {
           x: p.x,
           y: p.y,
           ...m,
+          interior: space,
           mode: "open",
           catName: cat.name,
           clan: cat.clan,
@@ -705,7 +773,11 @@ export default function Game() {
     if (mode === "open" && myCat) {
       sync = window.setInterval(() => {
         const g = gameRef.current;
-        if (!g || interiorRef.current) return; // room-local coords are not world positions
+        if (!g) return;
+        // §MULTIPLAYER INTERIORS: movement is synchronized INSIDE interiors too
+        // (in room-local coordinates, tagged with the room id). Skipping it
+        // indoors meant two players in the same den saw each other stand still.
+        const space = g.space;
         const s = g.engineState();
         // meaningful-change gating: identical stationary states are not
         // re-sent at 300ms — the 5s heartbeat below keeps presence alive
@@ -754,6 +826,7 @@ export default function Game() {
           ...(sentAction ? { action: sentAction } : {}),
           ...(sentVocal ? { vocal: sentVocal } : {}),
           ...(s.emote ? { animOneShot: s.emote } : {}),
+          interior: space,
           mode: "open",
           catName: cat.name,
           clan: cat.clan,
@@ -768,7 +841,11 @@ export default function Game() {
     const saveInterval = window.setInterval(() => {
       const g = gameRef.current;
       if (!g) return;
-      savePosition({ x: posRef.current.x, y: posRef.current.y, discovered: discRef.current, clientUpdatedAt: Date.now() }).catch((e) => console.error("[save] position autosave failed:", e));
+      // §MULTIPLAYER INTERIORS: the autosave stores the OUTDOOR position. A
+      // room-local coordinate saved as a world position would put the cat
+      // inside a wall (or outside the map) on the next login.
+      const saved = interiorRef.current ? outdoorRef.current : posRef.current;
+      savePosition({ x: saved.x, y: saved.y, discovered: discRef.current, clientUpdatedAt: Date.now() }).catch((e) => console.error("[save] position autosave failed:", e));
     }, 6000);
 
     // remote-player speech bubbles: create from recent messages, track the
@@ -910,9 +987,19 @@ export default function Game() {
   useEffect(() => {
     const g = gameRef.current;
     if (!g || !remotesRaw) return;
+    // §MULTIPLAYER INTERIORS: route by SPACE, never by name or raw position. A
+    // remote belongs to my view when they occupy the SAME space I do — the
+    // outdoor world (interior = null) or the exact room id I am standing in.
+    // Players in another house — and players still outside while I am indoors —
+    // are not rendered here and offer no prompts, but they remain full members
+    // of the session (still counted online, still chattable). Entering a room
+    // re-runs this effect, so the players ALREADY inside appear immediately;
+    // leaving removes the ones who stayed behind.
+    const mySpace = g.space ?? null;
     const map = g.remotes;
     const seen = new Set<string>();
     for (const r of remotesRaw as RemotePlayer[]) {
+      if ((r.interior ?? null) !== mySpace) continue;
       seen.add(r.userId);
       // §11/§12: the look swaps LIVE (no respawn/teleport/interp reset) and
       // only when its fingerprint actually changed — identical rows keep the
@@ -937,7 +1024,10 @@ export default function Game() {
     // a player joining (or re-joining) is re-buffed by the engine from their
     // fresh authoritative snapshot — no stale interpolation state is reused
     for (const k of [...map.keys()]) if (!seen.has(k)) map.delete(k);
-  }, [remotesRaw]);  // --- ping measurement (§5): the pure RTT probe — a no-arg, no-write
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remotesRaw, interior]);
+
+  // --- ping measurement (§5): the pure RTT probe — a no-arg, no-write
   // mutation — so the number reads NETWORK latency only (the old version used
   // a full heartbeat write, making "ping" include DB time). Rolling EMA for
   // stability + a SPIKE marker when the latest sample far exceeds it.
@@ -1072,6 +1162,40 @@ export default function Game() {
     }, 100);
     return () => window.clearInterval(t);
   }, [phase]);
+
+  // §SURVIVAL: introduce the meters when the STORY does.
+  //
+  // The unlock is derived from story progress, so refreshing the page, loading
+  // another map area or stepping into a house can neither switch a meter on
+  // early nor turn an unlocked one back off; the saved `survivalSeen` list only
+  // stops an already-read introduction from replaying. A meter unlocked for the
+  // first time starts tracking from a healthy value (a frozen, unmaintained 0
+  // must never become an instantly starving cat).
+  const survivalSeenKey = (player?.survivalSeen ?? []).join(",");
+  useEffect(() => {
+    if (phase !== "playing") return;
+    const g = gameRef.current;
+    if (mode !== "story") {
+      // Free Play / Online Multiplayer: exactly as before — all meters live.
+      setSurvival({ hunger: true, energy: true });
+      setSurvivalIntros([]);
+      g?.setSurvivalActive({ hunger: true, energy: true });
+      return;
+    }
+    const meters = unlockedMeters(storyStep);
+    setSurvival({ hunger: meters.hunger, energy: meters.energy });
+    g?.setSurvivalActive({ hunger: meters.hunger, energy: meters.energy });
+    const fresh = pendingIntros(storyStep, survivalSeenRef.current);
+    if (fresh.length === 0) return;
+    survivalSeenRef.current = [...survivalSeenRef.current, ...fresh.map((u) => u.id)];
+    for (const u of fresh) {
+      for (const m of u.meters) if (m === "hunger" || m === "energy") g?.beginSurvivalMeter(m);
+      markSurvivalSeen({ mechanic: u.id }).catch(() => undefined);
+    }
+    setSurvivalIntros(fresh); // contextual, one-time explanation of the meter
+    if (g) setStats({ hunger: g.needs.hunger, energy: g.needs.energy, health: g.needs.health });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, mode, storyStep, survivalSeenKey]);
 
   // --- survival: mirror engine drain into the HUD; persist changes only ---
   useEffect(() => {
@@ -1772,6 +1896,42 @@ export default function Game() {
     else g.setStoryStagingExclusion(null);
   }, [phase, mode, storyStep]);
 
+  // §1/§2: point the objective marker at the ACTIVE step's REAL destination.
+  // The resolver reads the same story + staging data the mission triggers use,
+  // so the arrow can never lead somewhere the objective refuses to accept, and
+  // it is re-resolved every time the story advances (one objective at a time —
+  // never a marker for every future mission).
+  useEffect(() => {
+    const g = gameRef.current;
+    if (!g) return;
+    if (phase !== "playing" || mode !== "story") {
+      // Story guidance never outlives Story Mode (Free Play / Online have their
+      // own waypoint: the player's own map pin).
+      g.setStoryWaypoint(null);
+      setStoryGuide(null);
+      setStoryWpInfo(null);
+      return;
+    }
+    const step = storySteps[storyStep];
+    const wp = resolveStoryWaypoint(step, {
+      npcPos: (id) => g.getNpcWorldPos(id),
+      nearestPrey: (from) => g.nearestPreyPos(from),
+      from: posRef.current,
+    });
+    g.setStoryWaypoint(wp);
+    setStoryGuide(wp ? { label: wp.label, instruction: wp.instruction } : null);
+    setStoryWpInfo(null); // fresh objective: no stale distance from the last one
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, mode, storyStep]);
+
+  // §6: during dialogue and story cutscenes the objective marker steps aside so
+  // it can never cover a conversation, and returns the moment the player can
+  // move again. (A mission, a status or a step change never removes it.)
+  const storyBusy = Boolean(dialogue || cineBeat || npcConvo || death);
+  useEffect(() => {
+    gameRef.current?.setStoryWaypointVisible(!storyBusy);
+  }, [storyBusy, phase]);
+
   // §33: dev-only staging readout — OFF for players; enable with
   // ?storydebug=1 or localStorage wcrpg-story-debug=1
   const [storyDebug, setStoryDebug] = useState(false);
@@ -2122,7 +2282,8 @@ export default function Game() {
         />
       )}
 
-      {/* Story tracker (story mode) */}
+      {/* Story tracker (story mode) — mission, current objective, the short
+          instruction and the live distance to the active objective. */}
       {mode === "story" && currentStep && (
         <div className="pointer-events-none absolute left-3 top-14 z-20 w-64">
           <div className="pointer-events-auto rounded-2xl border border-border/60 bg-card/90 p-3 shadow-lg backdrop-blur-sm">
@@ -2134,10 +2295,40 @@ export default function Game() {
             </div>
             <p className="mt-1 text-[13px] font-semibold tracking-tight">{currentStep.title}</p>
             <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{currentStep.objectiveLabel}</p>
+            {storyGuide && (
+              <div className="mt-1.5 flex items-center gap-1.5 rounded-lg bg-amber-400/10 px-2 py-1">
+                <Navigation className="size-3 shrink-0 text-amber-300" />
+                <span className="text-[11px] font-semibold text-amber-200">{storyGuide.instruction}</span>
+              </div>
+            )}
+            {storyGuide && storyWpInfo && !storyBusy && (
+              <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+                {storyWpInfo.arrived
+                  ? `${storyGuide.label} — you're here`
+                  : `${storyGuide.label} · ${storyWpInfo.meters} m (${storyWpInfo.tiles} tiles)`}
+              </p>
+            )}
             <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
               <div className="h-full rounded-full bg-primary" style={{ width: `${(storyStep / storySteps.length) * 100}%` }} />
             </div>
             <p className="mt-1 text-right text-[10px] text-muted-foreground">{storyStep}/{storySteps.length}</p>
+          </div>
+        </div>
+      )}
+
+      {/* §1: edge-of-screen direction cue — only while the objective is OUTSIDE
+          the camera view, so an off-screen destination is never a mystery. */}
+      {mode === "story" && !storyBusy && storyGuide && storyWpInfo && !storyWpInfo.onScreen && (
+        <div className="pointer-events-none absolute inset-0 z-20">
+          <div
+            className="absolute flex size-9 items-center justify-center rounded-full border border-amber-300/60 bg-[#1a1408]/85 shadow-lg backdrop-blur-sm"
+            style={{
+              left: `${50 + 42 * Math.cos(storyWpInfo.angle)}%`,
+              top: `${50 + 42 * Math.sin(storyWpInfo.angle)}%`,
+              transform: `translate(-50%, -50%) rotate(${(storyWpInfo.angle * 180) / Math.PI}deg)`,
+            }}
+          >
+            <ChevronRight className="size-5 text-amber-300" />
           </div>
         </div>
       )}
@@ -2776,21 +2967,69 @@ export default function Game() {
         )}
       </AnimatePresence>
 
-      {/* Survival HUD: hunger / energy / health (unobtrusive, top-left) */}
-      <div className="pointer-events-none absolute left-3 top-12 z-20 flex flex-col gap-1">
-        {([
-          ["Hunger", stats.hunger, "bg-amber-400"],
-          ["Energy", stats.energy, "bg-sky-400"],
-          ["Health", stats.health, "bg-rose-400"],
-        ] as const).map(([label, v, color]) => (
-          <div key={label} className="flex items-center gap-1.5">
-            <span className="w-12 text-right text-[9px] font-bold uppercase tracking-widest text-white/60">{label}</span>
-            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-black/45 backdrop-blur-sm">
-              <div className={`h-full rounded-full ${color} transition-[width] duration-700`} style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+      {/* Survival HUD: hunger / energy / health (unobtrusive, top-left).
+          §SURVIVAL: only the meters THIS mode has introduced are drawn — in
+          early Story Mode the strip is absent entirely. Health rides with the
+          hunger unlock (it is the consequence of an empty belly). */}
+      {(survival.hunger || survival.energy) && (
+        <div className="pointer-events-none absolute left-3 top-12 z-20 flex flex-col gap-1">
+          {([
+            ["Hunger", stats.hunger, "bg-amber-400", survival.hunger],
+            ["Energy", stats.energy, "bg-sky-400", survival.energy],
+            ["Health", stats.health, "bg-rose-400", survival.hunger],
+          ] as const)
+            .filter(([, , , live]) => live)
+            .map(([label, v, color]) => (
+              <div key={label} className="flex items-center gap-1.5">
+                <span className="w-12 text-right text-[9px] font-bold uppercase tracking-widest text-white/60">{label}</span>
+                <div className="h-1.5 w-24 overflow-hidden rounded-full bg-black/45 backdrop-blur-sm">
+                  <div className={`h-full rounded-full ${color} transition-[width] duration-700`} style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+
+      {/* §SURVIVAL: the one-time, contextual explanation of a mechanic the story
+          just introduced — what the meter means and how to interact with it.
+          Non-modal and dismissible; never shown for an unreached mechanic. */}
+      <AnimatePresence>
+        {survivalIntros.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            className="absolute bottom-24 left-1/2 z-30 w-[min(28rem,92vw)] -translate-x-1/2"
+          >
+            <div className="rounded-2xl border border-amber-400/40 bg-[#1a1408]/95 p-4 shadow-2xl backdrop-blur-sm">
+              <div className="flex items-center gap-2">
+                <PawPrint className="size-4 text-amber-300" />
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-300">
+                  New — {survivalIntros[0].title}
+                </p>
+              </div>
+              <p className="mt-2 text-[12px] leading-relaxed text-white/85">{survivalIntros[0].text}</p>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <span className="text-[10px] text-white/50">
+                  {survivalIntros.length > 1
+                    ? `${survivalIntros.length - 1} more to read`
+                    : "The meter now shows at the top left."}
+                </span>
+                <Button
+                  size="sm"
+                  className="rounded-full"
+                  onClick={() => {
+                    audio().playSfx("ui_confirm");
+                    setSurvivalIntros((q) => q.slice(1));
+                  }}
+                >
+                  Got it
+                </Button>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Car-death overlay: fade to black, then the choice */}
       <AnimatePresence>
