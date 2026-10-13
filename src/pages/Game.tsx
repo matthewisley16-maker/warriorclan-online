@@ -652,9 +652,12 @@ export default function Game() {
       },
       onSfx: (name, opts) => {
         if (name === "mew") audio().playMew("ambient");
-        else if (name === "npcstep") {
+        else if (name === "npcstep" || name === "step") {
+          // terrain is resolved HERE (the React layer owns the map): the player's
+          // own step knows whether they are indoors, NPCs are always outdoors
           const pos = gameRef.current?.engineState();
-          const st = stepKindFor(posAreaIdRef.current, false, groundIndexAt(pos?.x ?? 0, pos?.y ?? 0));
+          const indoor = name === "step" ? !!interiorRef.current : false;
+          const st = stepKindFor(posAreaIdRef.current, indoor, groundIndexAt(pos?.x ?? 0, pos?.y ?? 0));
           audio().playStep(st, opts.volume ?? 0.4);
         }
         else audio().playSfx(name, opts);
@@ -1115,8 +1118,12 @@ export default function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, areaName, interior, weather, clock, mode]);
 
-  // --- footsteps: terrain-aware, paced from the cat's real speed. Also the
-  // hop's landing thump, the crouch purr and rare indoor ambient mews. ---
+  // --- swimming strokes + spatial river ambience.
+  //
+  // Footsteps are NOT timed here any more: the engine fires them on the walk
+  // cycle's real footfall frame (cb.onSfx "step"/"npcstep"), which is what
+  // keeps them synchronized with the gait and silent for standing cats. Only
+  // paddling has no gait contact, so it stays on its own gentle cadence. ---
   useEffect(() => {
     if (phase !== "playing") return;
     const t = window.setInterval(() => {
@@ -1125,25 +1132,9 @@ export default function Game() {
       const s = g.engineState();
       // keep the river ambience spatial (sampled a few times a second)
       riverClosenessRef.current = riverClosenessAt(s.x, s.y);
-      const swimmingNow = s.animationState === "swim";
-      const moving = s.moving && (s.movementState === "walk" || s.movementState === "run" || s.movementState === "crouch");
-      if (swimmingNow) {
-        if (performance.now() - lastStepRef.current >= 420) {
-          lastStepRef.current = performance.now();
-          audio().playSfx("swim", { volume: 0.8, throttleMs: 200 });
-        }
-      } else if (moving) {
-        const px = s.x, py = s.y;
-        const kind = stepKindFor(posAreaIdRef.current, !!interiorRef.current, groundIndexAt(px, py));
-        // cadence + volume follow the gait: run = fast & noticeable,
-        // walk = even, crouch/sneak = slow & quiet (stealth matters for prey)
-        const cadence = s.movementState === "run" ? 230 : s.movementState === "crouch" ? 460 : 340;
-        const mult = s.movementState === "run" ? 1.5 : s.movementState === "crouch" ? 0.45 : 1;
-        const last = lastStepRef.current;
-        if (performance.now() - last >= cadence) {
-          lastStepRef.current = performance.now();
-          audio().playStep(kind, mult);
-        }
+      if (s.animationState === "swim" && performance.now() - lastStepRef.current >= 420) {
+        lastStepRef.current = performance.now();
+        audio().playSfx("swim", { volume: 0.8, throttleMs: 200 });
       }
     }, 120);
     return () => window.clearInterval(t);

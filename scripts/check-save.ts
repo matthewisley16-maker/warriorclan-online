@@ -384,7 +384,23 @@ console.log("\n--- 8. the UI cannot FAKE a save (§14/§15) ---");
     /role="alert"[\s\S]{0,900}>\s*Retry save/.test(editor),
     "a failed save shows an alert with a Retry button (visible at every screen size)",
   );
-  check(/console\.error\("\[customizer\] appearance save failed", err\)/.test(editor), "the real save error is logged, never swallowed");
+  // §6 diagnostics: the caught error must be LOGGED (with its readable reason)
+  // and SURFACED as a failure — never swallowed into a silent success. The log
+  // carries attempt/timing/error-name/reason, so assert the intent on the
+  // bounded-write catch rather than pinning one exact sentence.
+  const persistAt = editor.indexOf("const persist = useCallback(");
+  const persistBody = editor.slice(persistAt, persistAt + 2600);
+  const catchBody = /catch \(err\) \{([\s\S]*?)\n    \}/.exec(persistBody)?.[1] ?? "";
+  check(
+    persistAt !== -1 &&
+      /console\.error\(/.test(catchBody) &&
+      /errorMessage\(err\)/.test(catchBody) &&
+      /\berr\b/.test(catchBody) &&
+      /setSaveError\(/.test(catchBody) &&
+      /return false;/.test(catchBody),
+    "the real save error is logged with its reason and surfaced, never swallowed",
+    catchBody ? "" : "no catch block found in persist()",
+  );
   check(/"Saved successfully"/.test(editor) && /"Saving…"/.test(editor) && /"Loading character…"/.test(editor), "Saving/Saved/Loading statuses are all real states");
   check(/window\.setTimeout\(\(\) => \{\s*lastAutoRef\.current = key;\s*void runSave\(skinToSave\);/.test(editor), "autosave is debounced and written through the same single path");
 

@@ -487,9 +487,17 @@ export function CatCustomizer({
   const skinToSave = useMemo(() => normalizeSkin(skin) as CustomSkin, [skin]);
   const savedNorm = useMemo(() => normalizeSkin(savedSkin) as CustomSkin, [savedSkin]);
   const dirty = JSON.stringify(skinToSave) !== JSON.stringify(savedNorm);
+  // monotonic attempt counter for the diagnostics below (no UI impact)
+  const saveAttemptRef = useRef(0);
   const persist = useCallback(
     async (next: CustomSkin): Promise<boolean> => {
       if (!onPersist) return true; // no persistence hook wired: keep prior behaviour
+      // §6 diagnostics: ONE non-sensitive line per attempt — that the request
+      // started, whether the server answered (a Convex rejection carries its
+      // `[Request ID: …]`), which stage failed and how it ended. Never a token.
+      const attempt = ++saveAttemptRef.current;
+      const startedAt = Date.now();
+      console.info(`[customizer] save #${attempt} started`);
       try {
         // §15: NEVER wait on the backend without a bound. A pending mutation
         // (offline socket, reconnecting client, slow deployment) is a failure
@@ -497,11 +505,17 @@ export function CatCustomizer({
         // silently treated as a success.
         await withTimeout(() => Promise.resolve(onPersist({ skin: next })), SAVE_TIMEOUT_MS, "appearance save");
         setSaveError(null);
+        console.info(`[customizer] save #${attempt} confirmed by the server in ${Date.now() - startedAt}ms`);
         return true;
       } catch (err) {
         // §14/§15: the real error is reported and the editor keeps the changes
-        console.error("[customizer] appearance save failed", err);
-        setSaveError(errorMessage(err));
+        // (a SaveTimeoutError means the server never answered in time).
+        const reason = errorMessage(err);
+        console.error(
+          `[customizer] save #${attempt} FAILED after ${Date.now() - startedAt}ms (${err instanceof Error ? err.name : "error"}): ${reason}`,
+          err,
+        );
+        setSaveError(reason);
         return false;
       }
     },

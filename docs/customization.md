@@ -136,3 +136,31 @@ Dev readout: `?mpdebug=1` (or `localStorage wcrpg-mp-debug=1`) renders the
 local fingerprint, the last broadcast fingerprint, the server row's version,
 the last save result and each remote's applied version — off for players.
 Suite: `bun scripts/check-skin-sync.ts` (20 checks incl. the stranding control).
+
+## Deployment (what the deployed game actually runs)
+The deployed game is the static build committed in `isolate/` (a byte-identical
+mirror of `dist/`, which is gitignored). A source fix that is never built does
+NOT reach the running game — that is exactly how a "Save stuck on Loading…"
+report survived a correct save path: the shipped bundle was built BEFORE the
+save-queue fix, so it still carried `loading: !player` (permanent "Loading…" for
+an account without a row) and the old inline queue that answered a queued save
+with an immediate `true` and never bounded the write.
+
+After changing anything on the save path, rebuild and mirror it:
+
+```sh
+bun run build            # tsc -b && vite build → dist/ (same VITE_CONVEX_URL)
+rm -rf isolate/assets isolate/audio isolate/index.html isolate/logo.svg isolate/manifest.webmanifest
+cp -r dist/. isolate/
+```
+
+Verify the shipped bundle really contains the fix (the minifier preserves string
+literals):
+
+```sh
+grep -c "the server did not confirm the save" isolate/assets/Game-*.js   # 1
+grep -c "previous cat is safe"            isolate/assets/Game-*.js        # 0 (pre-fix build)
+```
+
+Behavioural check of the real button (real DOM, real component):
+`bun scripts/check-save-ui.ts`.
