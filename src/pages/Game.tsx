@@ -56,6 +56,8 @@ import { beatActorIds, resolveStaging } from "@/game/storyStaging";
 import { resolveStoryWaypoint } from "@/game/storyWaypoint";
 import { pendingIntros, unlockedMeters, type SurvivalUnlock } from "@/game/storyUnlocks";
 import { pickVocal, emotionForLine } from "@/game/vocal";
+// §CHAT-FOCUS: the open-world chat panel yields to any active interaction
+import { useInteractionChatFocus } from "@/game/chatFocus";
 import { useAction } from "convex/react";
 import { profileFor } from "@/game/characters";
 import MainMenu, { LoadingScreen, loadSettings, SettingsScreen, type GameMode, type Settings } from "./MainMenu";
@@ -370,7 +372,20 @@ export default function Game() {
   // Panel visibility is derived from the single active layer.
   const codexOpen = activeUI === "codex";
   const mapOpen = activeUI === "map";
-  const chatOpen = activeUI === "chat";
+  // §CHAT-FOCUS: whenever an interaction owns the screen — a narrator/speaker
+  // line, an NPC conversation (Graypaw and every other cat), a story beat, or
+  // an interaction inside a house — the open-world chat panel collapses so the
+  // dialogue is never covered. Chat stays connected in the background and the
+  // panel is restored only if it was open when the interaction began.
+  const { chatVisible: chatOpen, toggleChat } = useInteractionChatFocus<ActiveUi>({
+    dialogueOpen: dialogue !== null,
+    conversationOpen: npcConvo !== null,
+    cinematicOpen: cineBeat !== null,
+    activeUI,
+    setActiveUI,
+    chatLayer: "chat",
+    playLayer: "gameplay",
+  });
   const [chatChannel, setChatChannel] = useState<ChatChannel>("global");
   const [discovered, setDiscovered] = useState<string[]>(["camp"]);
   const [questsDone, setQuestsDone] = useState<string[]>([]);
@@ -1067,7 +1082,12 @@ export default function Game() {
   useEffect(() => {
     // NOTE: NPC conversations intentionally do NOT pause the world — the
     // compact chat overlay lets the forest stay alive around the exchange.
-    gameRef.current?.setPaused(dialogue !== null || activeUI !== "gameplay");
+    const worldPaused = dialogue !== null || activeUI !== "gameplay";
+    // §CHAT-FOCUS: a CHAT-ONLY overlay still stops the world (typing must never
+    // cost a cat its life on the Thunderpath) but must not swallow E — pressing
+    // E near a cat starts the interaction, which collapses chat and lets the
+    // conversation proceed normally. Menus/dialogue never allow it.
+    gameRef.current?.setPaused(worldPaused, worldPaused && dialogue === null && activeUI === "chat");
   }, [dialogue, activeUI]);
 
   // Camera distance from Settings.
@@ -2217,7 +2237,12 @@ export default function Game() {
           <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onPointerDown={(e) => { (e.currentTarget as HTMLElement).style.transform = "scale(0.96)"; }}
             onPointerUp={(e) => { (e.currentTarget as HTMLElement).style.transform = ""; }}
             onPointerLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = ""; }}
-            onClick={() => setActiveUI((u) => (u === "chat" ? "gameplay" : "chat"))}>
+            onClick={() => {
+              audio().playSfx("ui_open", { throttleMs: 200 });
+              // §CHAT-FOCUS: a no-op while an interaction owns the screen, so a
+              // click here can never put a hidden chat layer over the dialogue.
+              toggleChat();
+            }}>
             <MessageCircle className="size-3.5" /> Chat
           </Button>
           <Button variant="outline" size="sm" className="gap-1.5 rounded-full border-border/60 bg-card/90 shadow-lg backdrop-blur-sm" onClick={() => { audio().playSfx("ui_open"); setActiveUI("map"); }}>

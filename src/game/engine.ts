@@ -2102,6 +2102,9 @@ export class GameCanvas {
 
   private keys = new Set<string>();
   private paused = false;
+  /** §CHAT-FOCUS: the chat overlay pauses the world but must still let E start
+   *  an interaction (the interaction then collapses chat). Menus never do. */
+  private interactWhilePaused = false;
 
   // --- story/online context: which mode is the player in, and which step
   // of the Book 1 timeline? Drives NPC availability (Redtail is gone after
@@ -2314,8 +2317,9 @@ export class GameCanvas {
     this.raf = requestAnimationFrame(this.loop);
   }
 
-  setPaused(p: boolean) {
+  setPaused(p: boolean, interactWhilePaused = false) {
     this.paused = p;
+    this.interactWhilePaused = p && interactWhilePaused;
     if (p) {
       this.keys.clear();
       this.touchDx = 0;
@@ -4306,7 +4310,7 @@ export class GameCanvas {
     }
     const k = e.key.toLowerCase();
     if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "e"].includes(k)) e.preventDefault();
-    if ((k === "e" || k === "enter") && !this.paused) {
+    if ((k === "e" || k === "enter") && (!this.paused || this.interactWhilePaused)) {
       const near = this.lastNearby;
       if (near) this.cb.onInteract(near);
       return;
