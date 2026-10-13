@@ -29,6 +29,7 @@ import {
   type NPCDef,
   type PreyKind,
 } from "./world";
+import { CatAnimator, type AnimView, type Gait } from "./anim";
 import type { WorldObject } from "./world";
 import {
   NPC_SYNC_MAX_CROSS_MS,
@@ -247,6 +248,8 @@ interface RemoteRenderState {
   x: number;
   y: number;
   facing: number;
+  /** §ANIM: animation view for this remote cat (its own gait/turn/blink) */
+  animView?: import("./anim").AnimView;
   /** pose to draw right now (state-driven — never a raw animation frame) */
   pose: CatPose;
   /** monotonic stamp of the newest server state folded into the buffer */
@@ -329,6 +332,13 @@ export interface GameCallbacks {
    * the destination is inside the camera view, and the screen-space direction
    * to it (so the HUD can pin an arrow to the screen edge when it is not).
    */
+  onStoryEscort?: (info: {
+    npcId: string;
+    status: "leading" | "waiting" | "arrived";
+    leg: number;
+    legs: number;
+    distance: number;
+  }) => void;
   onStoryWaypoint?: (info: {
     meters: number;
     tiles: number;
@@ -340,7 +350,10 @@ export interface GameCallbacks {
   /** The cat died (currently: hit by a car on the Thunderpath). */
   onDeath?: (cause: string, respawn: { x: number; y: number }) => void;
   /** Engine-originated sound (ambient mews, shakes, splashes, hits). */
-  onSfx?: (name: import("./audio").EngineSfxName, opts: { volume?: number; throttleMs?: number }) => void;
+  onSfx?: (
+    name: import("./audio").EngineSfxName,
+    opts: { volume?: number; throttleMs?: number; at?: { x: number; y: number } },
+  ) => void;
   /** (legacy icon hook — unused since the emoji layer was removed) */
   onEmoteFx?: (icon: string) => void;
   /** A remote cat started a REAL animation emote: replay it locally. */
@@ -1595,6 +1608,8 @@ interface NPCState {
   def: NPCDef;
   x: number;
   y: number;
+  /** §ANIM: this cat's current animation view (one state machine per cat) */
+  animView?: import("./anim").AnimView;
   tx: number;
   ty: number;
   facing: 1 | -1;
@@ -1705,6 +1720,23 @@ export interface NpcErrand {
 }
 
 /** §5: a story staging mark — where the story says this cat must BE. */
+/** §SCENE: a live escort — an NPC leading the player along a real route. */
+export interface StoryEscort {
+  npcId: string;
+  route: { x: number; y: number }[];
+  leg: number;
+  waitPx: number;
+  resumePx: number;
+  legGatePx: number;
+  arrivePx: number;
+  speed: number;
+  waiting: boolean;
+  done: boolean;
+  label: string;
+  lastEmitAt: number;
+  lastStatus: "leading" | "waiting" | "arrived";
+}
+
 export interface StoryAnchor {
   x: number;
   y: number;
@@ -2104,6 +2136,10 @@ export class GameCanvas {
   private cineT = 0;
   private cineFrom: { x: number; y: number } | null = null;
   private cineFromZoom: number | undefined;
+  /** §SCENE: held two-cat framing (midpoint + zoom that keeps both in view) */
+  private frameHold: { x: number; y: number; zoom: number } | null = null;
+  /** §SCENE: the active story escort (an NPC physically leading the player) */
+  private storyEscort: StoryEscort | null = null;
   private cineZoom = 1;
   private controlsEnabled = true;
 
@@ -2171,6 +2207,19 @@ export class GameCanvas {
   private sneaking = false;
   private running = false;
   private pSpeed = 0; // live speed in px/s (drives pose + networking)
+
+  // -------------------------------------------------------------------------
+  // §ANIM: ONE animation state machine for every cat (player, NPCs, remotes).
+  // It is fed once per frame with the cat's REAL travelled distance, so walk
+  // cycles match actual movement, a standstill cat never walks in place, and
+  // no system has to invent its own time-based motion.
+  // -------------------------------------------------------------------------
+  private anim = new CatAnimator();
+  private pAnimView: AnimView = this.anim.peek("player");
+  /** engine time until the player's mouth animates (they are speaking) */
+  private playerTalkUntil = 0;
+  /** gait-contact latch per cat: footsteps fire on the footfall frame */
+  private footfallIdx = new Map<string, number>();
 
   constructor(canvas: HTMLCanvasElement, spawn: { x: number; y: number }, cb: GameCallbacks) {
     this.canvas = canvas;
@@ -3714,8 +3763,384 @@ export class GameCanvas {
    * Engine-side SFX bus. The React layer wires cb.onSfx to the AudioEngine;
    * if it is not connected (offline previews), this is a silent no-op.
    */
-  engineSfx(name: EngineSfxName, opts: { volume?: number; throttleMs?: number } = {}) {
+  engineSfx(name: EngineSfxName, opts: { volume?: number; throttleMs?: number; at?: { x: number; y: number } } = {}) {
     this.cb.onSfx?.(name, opts);
+  }
+
+  // ===========================================================================
+  // §ANIM: the animation state machine, advanced once per frame for every cat
+  // ===========================================================================
+
+  /** Which gait does this pose/speed combination mean? */
+  private gaitFor(pose: CatPose, running: boolean, sneaking: boolean, swimming: boolean): Gait {
+    if (swimming || pose === "swim") return "swim";
+    if (sneaking || pose === "crouch" || pose === "stalk" || pose === "pounce") return "crouch";
+    if (pose === "walk") return running ? "run" : "walk";
+    return "idle";
+  }
+
+  /**
+   * Feed every cat's animation state machine with its REAL travelled distance.
+   * Because the gait phase advances with distance (never with a timer), the
+   * legs move exactly as much as the cat moves — and not at all when it stands.
+   */
+  private tickCatAnim(dt: number) {
+    const now = this.animClock();
+    // --- the player ---
+    const pv = this.anim.update(
+      "player",
+      {
+        x: this.px,
+        y: this.py,
+        speedPx: this.pSpeed,
+        gait: this.gaitFor(this.pPose, this.running, this.sneaking, this.swimming),
+        poseLocked: !(this.pPose === "walk" || this.pPose === "crouch" || this.pPose === "swim"),
+        talking: this.time < this.playerTalkUntil,
+        facing: this.pxFacing,
+        nowSec: now,
+        dtSec: dt,
+      },
+      0,
+    );
+    this.pAnimView = pv;
+    // footsteps follow the gait and the gait follows the ground speed: a
+    // crouching cat is quiet, a running cat is loud and fast, and a sitting
+    // cat makes no sound at all (its gait never advances)
+    if (!this.swimming) {
+      const vol = this.sneaking ? 0.45 : this.running ? 1.25 : 1;
+      this.footfall("player", pv, "step", vol);
+    }
+    // --- NPCs: each one has its OWN entry (never the player's gait) ---
+    for (const n of this.npcStates) {
+      if (n.gone) continue;
+      const nv = this.anim.update(
+        `npc:${n.def.id}`,
+        {
+          x: n.x,
+          y: n.y,
+          gait: this.gaitFor(n.pose, n.ai === "return_home" || n.ai === "go_den", n.ai === "hunt_stalk", false),
+          poseLocked: n.pose !== "walk",
+          talking: n.talkFxUntil > this.time,
+          facing: n.facing,
+          nowSec: now,
+          dtSec: dt,
+        },
+        n.phase,
+      );
+      n.animView = nv;
+      const d = Math.hypot(n.x - this.px, n.y - this.py);
+      if (d < 420) this.footfall(`npc:${n.def.id}`, nv, "npcstep", Math.max(0.15, 0.5 * (1 - d / 380)), { x: n.x, y: n.y });
+    }
+    // --- remote players: their own clock and their own measured speed ---
+    for (const [uid, r] of this.remotes) {
+      const rp = this.remoteRender.get(uid);
+      if (!rp) continue;
+      const speed = rp.lastSpeedPxS ?? 0;
+      const rv = this.anim.update(
+        `p:${uid}`,
+        {
+          x: rp.x,
+          y: rp.y,
+          speedPx: speed,
+          gait: rp.pose === "walk" ? (speed > 190 ? "run" : speed > 55 ? "walk" : "crouch") : "idle",
+          poseLocked: rp.pose !== "walk",
+          talking: false,
+          facing: rp.facing >= 0 ? 1 : -1,
+          nowSec: rp.animMs / 1000,
+          dtSec: dt,
+        },
+        uid.charCodeAt(0) % 10,
+      );
+      rp.animView = rv;
+    }
+  }
+
+  /**
+   * §AUDIO: a footstep fires on the footfall FRAME of the walk cycle (two
+   * contacts per stride) instead of on a fixed timer. That is what keeps the
+   * sound synchronized with the animation and stops idle cats from stepping.
+   */
+  private footfall(
+    id: string,
+    view: AnimView,
+    sfx: "step" | "npcstep",
+    volume: number,
+    at?: { x: number; y: number },
+  ) {
+    const contact = Math.floor(view.phase * 2);
+    const prev = this.footfallIdx.get(id);
+    if (prev !== contact) this.footfallIdx.set(id, contact);
+    if (!view.moving || view.gait === "swim") return; // paddling has its own sound
+    if (prev === undefined || prev === contact) return;
+    this.engineSfx(sfx, { volume, throttleMs: 70, at });
+  }
+
+  /** §STORY: the player is speaking for a moment (mouth animation). */
+  setPlayerTalking(seconds = 1.4) {
+    this.playerTalkUntil = Math.max(this.playerTalkUntil, this.time + seconds);
+  }
+
+  // ===========================================================================
+  // §SCENE: scripted story movement — approach, escort, framing
+  // ===========================================================================
+
+  /** Turn the player toward a world point (a scene, not input). */
+  facePlayerToward(x: number, y: number) {
+    this.pxFacing = x >= this.px ? 1 : -1;
+  }
+
+  /** Hold a two-cat frame so both characters stay visible on screen. */
+  framePair(otherX: number, otherY: number, padPx = 300) {
+    const d = Math.hypot(otherX - this.px, otherY - this.py);
+    this.frameHold = {
+      x: (this.px + otherX) / 2,
+      y: (this.py + otherY) / 2,
+      // closer cats get a gentle close-up; never so tight that a cat is cut off
+      zoom: Math.max(1, Math.min(1.45, padPx / Math.max(150, d))),
+    };
+  }
+
+  clearFrameHold() {
+    this.frameHold = null;
+  }
+
+  get hasFrameHold(): boolean {
+    return this.frameHold !== null;
+  }
+
+  /**
+   * §SCENE: the NPC walks to the player, stops in front of them facing them,
+   * and the player turns to face it. This is how Graypaw meets Rusty — both
+   * cats are physically present, on the ground, moving, never teleported.
+   * Resolves true when the cat is in place (false on timeout, so a scene can
+   * never hang).
+   */
+  async approachPlayer(npcId: string, opts: { stopPx?: number; timeoutMs?: number } = {}): Promise<boolean> {
+    const n = this.npcStates.find((s) => s.def.id === npcId);
+    if (!n || n.gone) return false;
+    const stopPx = opts.stopPx ?? 46;
+    const dx = this.px - n.x;
+    const dy = this.py - n.y;
+    const d = Math.hypot(dx, dy) || 1;
+    // stand just short of the player, on the side the cat is coming from
+    const target = this.nearestFreeNpcSpot(this.px - (dx / d) * stopPx, this.py - (dy / d) * stopPx) ?? {
+      x: this.px - (dx / d) * stopPx,
+      y: this.py - (dy / d) * stopPx,
+    };
+    this.setNpcStoryAnchor(npcId, {
+      x: target.x,
+      y: target.y,
+      face: "player",
+      pose: "sit",
+      run: Math.hypot(target.x - n.x, target.y - n.y) > 280,
+      label: "approaching the player",
+    });
+    await this.waitForStoryArrival([npcId], opts.timeoutMs ?? 6000);
+    // both cats face each other for the conversation
+    const nn = this.npcStates.find((s) => s.def.id === npcId);
+    const arrived = !nn || !nn.storyAnchor || nn.storyAnchor.arrived;
+    if (nn) {
+      nn.facing = this.px >= nn.x ? 1 : -1;
+      if (nn.pose === "walk") nn.pose = "sit";
+      nn.talkFxUntil = Math.max(nn.talkFxUntil, this.time + 1.2);
+    }
+    this.pxFacing = nn && nn.x >= this.px ? 1 : -1;
+    return arrived;
+  }
+
+  /**
+   * §SCENE: make one story cat LEAD the player along a route of real map
+   * waypoints. The cat walks on foot (collision + sidestep), stays ahead of
+   * the player, and WAITS — facing them — whenever they fall behind. Status is
+   * reported through onStoryEscort so the story layer can talk and advance.
+   */
+  setStoryEscort(cfg: {
+    npcId: string;
+    route: { x: number; y: number }[];
+    /** px the player may fall behind before the leader waits */
+    waitPx?: number;
+    /** px the player must come back within before the leader resumes */
+    resumePx?: number;
+    /** px the leader starts the next leg once the player is this close */
+    legGatePx?: number;
+    arrivePx?: number;
+    speed?: number;
+    label?: string;
+  } | null) {
+    if (!cfg) {
+      this.storyEscort = null;
+      return;
+    }
+    const route = cfg.route.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (route.length === 0) {
+      this.storyEscort = null;
+      return;
+    }
+    const n = this.npcStates.find((s) => s.def.id === cfg.npcId);
+    this.storyEscort = {
+      npcId: cfg.npcId,
+      route,
+      leg: 0,
+      waitPx: cfg.waitPx ?? 240,
+      resumePx: cfg.resumePx ?? 150,
+      legGatePx: cfg.legGatePx ?? 260,
+      arrivePx: cfg.arrivePx ?? 34,
+      speed: cfg.speed ?? 52,
+      waiting: false,
+      done: false,
+      label: cfg.label ?? "leading the way",
+      lastEmitAt: -1,
+      lastStatus: "leading",
+    };
+    if (n) {
+      // the escort owns the cat: drop every parallel life it might be in
+      n.storyAnchor = undefined;
+      n.convoActive = false;
+      n.preyId = null;
+      n.errand = undefined;
+      n.stuckSince = null;
+      n.sidestepPt = null;
+      n.sidestepUntil = 0;
+      n.pose = "walk";
+      n.tx = route[0].x;
+      n.ty = route[0].y;
+      n.ai = "wander";
+    }
+  }
+
+  get storyEscortInfo(): {
+    npcId: string;
+    status: "leading" | "waiting" | "arrived";
+    leg: number;
+    legs: number;
+    distance: number;
+  } | null {
+    const e = this.storyEscort;
+    if (!e) return null;
+    const n = this.npcStates.find((s) => s.def.id === e.npcId);
+    return {
+      npcId: e.npcId,
+      status: e.done ? "arrived" : e.waiting ? "waiting" : "leading",
+      leg: e.leg,
+      legs: e.route.length,
+      distance: n ? Math.hypot(n.x - this.px, n.y - this.py) : 0,
+    };
+  }
+
+  get hasStoryEscort(): boolean {
+    return this.storyEscort !== null && !this.storyEscort.done;
+  }
+
+  /** §SCENE: is every waypoint of this route on walkable ground? */
+  escortRouteProblems(route: { x: number; y: number }[]): { x: number; y: number }[] {
+    return route.filter((p) => isSolidPoint(p.x, p.y));
+  }
+
+  private emitEscortStatus(e: StoryEscort, n: NPCState, status: StoryEscort["lastStatus"], dPlayer: number) {
+    const now = this.time;
+    const changed = status !== e.lastStatus;
+    e.lastStatus = status;
+    if (!changed && now - e.lastEmitAt < 0.5) return;
+    e.lastEmitAt = now;
+    this.cb.onStoryEscort?.({
+      npcId: e.npcId,
+      status,
+      leg: e.leg,
+      legs: e.route.length,
+      distance: Math.hypot(n.x - this.px, n.y - this.py),
+    });
+    void dPlayer;
+  }
+
+  /** §SCENE: drive one escorting cat for a frame. */
+  private stepEscort(n: NPCState, dt: number) {
+    const e = this.storyEscort!;
+    const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
+    // hysteresis: wait when the player falls behind, resume when they catch up
+    if (!e.waiting && dPlayer > e.waitPx) e.waiting = true;
+    else if (e.waiting && dPlayer < e.resumePx) e.waiting = false;
+    const wp = e.route[Math.min(e.leg, e.route.length - 1)];
+    const dWp = Math.hypot(wp.x - n.x, wp.y - n.y);
+
+    if (e.waiting) {
+      // stop, turn to the player and WAIT — never walk away from them
+      if (n.pose !== "sit") n.pose = "sit";
+      n.facing = this.px >= n.x ? 1 : -1;
+      this.emitEscortStatus(e, n, "waiting", dPlayer);
+      return;
+    }
+
+    if (dWp <= e.arrivePx) {
+      const last = e.leg >= e.route.length - 1;
+      if (last) {
+        // the route is finished: arrive properly and hold
+        e.done = true;
+        n.pose = "sit";
+        n.facing = this.px >= n.x ? 1 : -1;
+        this.emitEscortStatus(e, n, "arrived", dPlayer);
+        return;
+      }
+      if (dPlayer <= e.legGatePx) e.leg += 1;
+      else {
+        // hold this waypoint until the player is close enough to follow the
+        // next leg — the journey is walked TOGETHER, never raced
+        if (n.pose !== "sit") n.pose = "sit";
+        n.facing = this.px >= n.x ? 1 : -1;
+        this.emitEscortStatus(e, n, "waiting", dPlayer);
+        return;
+      }
+    }
+    const nx = e.route[Math.min(e.leg, e.route.length - 1)];
+    this.npcWalkToward(n, nx.x, nx.y, e.speed, dt);
+    this.emitEscortStatus(e, n, "leading", dPlayer);
+  }
+
+  /**
+   * Walk one cat toward a point using the world's own collision, with the
+   * existing stuck → perpendicular-sidestep recovery. Shared by the escort and
+   * the scheduled AI so a leading cat can never grind a wall for ever.
+   * Returns the remaining distance to the REAL target.
+   */
+  private npcWalkToward(n: NPCState, tx: number, ty: number, sp: number, dt: number): number {
+    const now = this.time;
+    const progress = Math.hypot(n.x - n.lastStuckX, n.y - n.lastStuckY);
+    if (progress > 6) {
+      n.lastStuckX = n.x;
+      n.lastStuckY = n.y;
+      n.stuckSince = now;
+    } else if (n.stuckSince === null) {
+      n.stuckSince = now;
+    } else if (now - n.stuckSince > 1.1 && now > n.sidestepUntil) {
+      // no progress: try a perpendicular detour around whatever is in the way
+      const ang = Math.atan2(ty - n.y, tx - n.x);
+      const side = (n.sidestepCount % 2 === 0 ? 1 : -1) * (Math.PI / 2) * 0.7;
+      n.sidestepPt = { x: n.x + Math.cos(ang + side) * 52, y: n.y + Math.sin(ang + side) * 52 };
+      n.sidestepUntil = now + 1.8;
+      n.sidestepCount += 1;
+      n.stuckSince = now;
+    }
+    let gx = tx;
+    let gy = ty;
+    if (n.sidestepPt && now < n.sidestepUntil) {
+      const sd = Math.hypot(n.sidestepPt.x - n.x, n.sidestepPt.y - n.y);
+      if (sd > 8) {
+        gx = n.sidestepPt.x;
+        gy = n.sidestepPt.y;
+      } else {
+        n.sidestepPt = null;
+      }
+    }
+    const dist = Math.hypot(gx - n.x, gy - n.y);
+    if (dist > 0.5) {
+      const ux = (gx - n.x) / dist;
+      const uy = (gy - n.y) / dist;
+      const step = Math.min(sp * dt, dist);
+      if (!isSolidPoint(n.x + ux * step + Math.sign(ux) * 8, n.y)) n.x += ux * step;
+      if (!isSolidPoint(n.x, n.y + uy * step + Math.sign(uy) * 8)) n.y += uy * step;
+      if (Math.abs(ux) > 0.2) n.facing = ux > 0 ? 1 : -1;
+      if (n.pose !== "walk" && n.pose !== "shake" && n.pose !== "crouch") n.pose = "walk";
+    }
+    return Math.hypot(tx - n.x, ty - n.y);
   }
 
   /** Survival needs (hunger/energy/health) — UI reads, actions mutate. */
@@ -4256,12 +4681,26 @@ export class GameCanvas {
     }
 
     // camera
+    const camLerp = 1 - Math.pow(0.0001, dt);
     if (this.cineActive) {
       this.tickCinematic(dt);
+    } else if (this.frameHold) {
+      // §SCENE: a scripted two-cat frame. The camera eases to a point between
+      // the two cats and zooms only enough to keep BOTH in view — smooth
+      // movement, no cut, no zoom that hides a character mid-conversation.
+      this.camX += (this.frameHold.x - this.camX) * camLerp;
+      this.camY += (this.frameHold.y - this.camY) * camLerp;
+      const dz = Math.abs(this.frameHold.zoom - this.cineZoom);
+      this.cineZoom += (this.frameHold.zoom - this.cineZoom) * Math.min(1, dt * 3.2);
+      if (dz > 0.002) this.resize();
     } else {
-      const lerp = 1 - Math.pow(0.0001, dt);
-      this.camX += (this.px - this.camX) * lerp;
-      this.camY += (this.py - this.camY) * lerp;
+      this.camX += (this.px - this.camX) * camLerp;
+      this.camY += (this.py - this.camY) * camLerp;
+      const back = Math.abs(1 - this.cineZoom);
+      if (back > 0.002) {
+        this.cineZoom += (1 - this.cineZoom) * Math.min(1, dt * 3.2);
+        this.resize();
+      }
     }
 
     // --- NPC life: schedules, personalities, patrols, hunting (throttled
@@ -4468,6 +4907,14 @@ export class GameCanvas {
           if (Math.floor(this.time / 3.2) % 2 === 0) n.talkFxUntil = this.time + 0.4;
           else if (Math.random() < 0.0015) n.tailFxUntil = this.time + 1.8;
         }
+        continue;
+      }
+      // §SCENE: an ESCORT leads the player along a route (waits when they fall
+      // behind, resumes when they catch up) — it replaces the cat's schedule
+      // entirely while it runs, and is driven on foot by the same collision +
+      // sidestep machinery as every other moving cat.
+      if (this.storyEscort && this.storyEscort.npcId === n.def.id && !n.convoActive) {
+        this.stepEscort(n, dt);
         continue;
       }
       // §1/§24: STORY OVERRIDE — a story-staged cat is driven by its anchor
@@ -4796,6 +5243,9 @@ export class GameCanvas {
         }
       }
     }
+
+    // --- §ANIM: advance the animation state machine for every cat ---
+    this.tickCatAnim(dt);
 
     // --- area + nearby detection ---
     const area = areaAt(this.px, this.py);
@@ -5270,7 +5720,8 @@ export class GameCanvas {
       const hy = 2.5 + hash2(npcId.charCodeAt(0) * 3 + 1, npcId.length) * (gh2 - 6);
       const nxp = hx * 32 + 16;
       const nyp = hy * 32 + 16;
-      drawCat(ctx, n.def, nxp, nyp, n.facing, n.pose === "walk" ? "sit" : n.pose, this.animClock(), n.phase, {
+      drawCat(ctx, n.def, nxp, nyp, n.facing, n.pose, this.animClock(), n.phase, {
+        anim: n.animView,
         tailId: `npc:${n.def.id}`,
       });
       if (Math.random() < 0.0015 && performance.now() - this.lastNpcMewAt > 6000) {
@@ -5363,6 +5814,10 @@ export class GameCanvas {
     const rem = this.remoteEmotePose(r.userId);
     const rPose = rem ? (rem.pose as CatPose) : rp.pose;
     const remFx = {
+      // §ANIM: the remote cat's gait is driven by its OWN measured speed, so
+      // a remote that is teleport-corrected or standing still never cycles
+      // its legs, and a distant cat walking slowly takes small steps.
+      anim: rp.animView,
       ...(rem
         ? {
             yawn: Boolean(rem.fx.yawn),
@@ -5553,6 +6008,7 @@ export class GameCanvas {
         y: n.y,
         draw: () => {
           drawCat(ctx, n.def, n.x, n.y, n.facing, n.pose, this.time, n.phase, {
+            anim: n.animView,
             talking: n.talkFxUntil > this.time,
             wet: performance.now() < n.wetnessUntil,
             yawn: n.yawnFxUntil > this.time,
@@ -5643,12 +6099,15 @@ export class GameCanvas {
       0,
       {
         tailId: "player",
+        anim: this.pAnimView,
         yawn: this.playerFx().yawn,
         alert: this.playerFx().alert,
         tailFlick: this.playerFx().tailFlick,
         head: this.playerFx().head ?? undefined,
         carry: this.playerFx().carry,
-        talking: false,
+        // the player animates their mouth only while they are the speaker —
+        // never a permanent talking loop (that was the old "stacked" look)
+        talking: this.time < this.playerTalkUntil,
         hop: this.hopT >= 0 ? Math.min(1, this.hopT / HOP_DURATION) : undefined,
       },
     );
@@ -8052,12 +8511,10 @@ export class GameCanvas {
         if (!isSolidPoint(n.x, n.y + uy * step + Math.sign(uy) * 8)) n.y += uy * step;
         if (Math.abs(ux) > 0.2) n.facing = ux > 0 ? 1 : -1;
         if (n.pose !== "walk" && n.pose !== "shake" && n.pose !== "crouch") n.pose = "walk";
-        // soft pawsteps for nearby NPC movement (cadence follows gait)
-        const nowMs = performance.now();
-        if (dPlayer < 340 && nowMs - n.stepAt > (sp > 100 ? 280 : 430)) {
-          n.stepAt = nowMs;
-          this.engineSfx("npcstep", { volume: Math.max(0.15, 0.5 * (1 - dPlayer / 380)) });
-        }
+        // NOTE: footsteps are NOT timed here any more. They fire from the
+        // gait's own footfall frame (tickCatAnim → footfall), so the sound can
+        // never drift from the animation, and a cat that is not moving makes
+        // no sound at all.
       }
       return dist;
     };
@@ -8605,7 +9062,7 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): st
 
 
 // --- survival needs model (engine-local simulation; React persists it) ------
-export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit" | "npcstep";
+export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit" | "npcstep" | "step";
 
 class SurvivalNeeds {
   hunger = 80;

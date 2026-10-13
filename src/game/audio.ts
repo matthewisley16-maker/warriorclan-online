@@ -81,7 +81,11 @@ export type SfxName =
   | "cat_mew" | "cat_mew2" | "cat_mew3" | "cat_mew4" | "cat_purr"
   | "splash" | "eat" | "herb" | "drink" | "hit" | "shake";
 /** Engine-side sfx names (engine.ts) -> audio slots. */
-export type EngineSfxName = "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit" | "npcstep";
+export type EngineSfxName =
+  | "mew" | "shake" | "splash" | "eat" | "herb" | "drink" | "hit" | "npcstep"
+  /** §AUDIO: the PLAYER's own pawstep (terrain resolved by the React layer,
+   *  fired on the walk cycle's footfall frame — never on a timer) */
+  | "step";
 
 const SFX_FILES: Record<SfxName, string> = {
   ui_click: "sfx/ui_click.wav",

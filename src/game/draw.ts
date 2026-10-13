@@ -9,6 +9,7 @@
 // frozen tail with a 33px snap when a conversation forced the sit pose).
 
 import { tailGeom, tailPoint, tailWidthOf, type TailFamilyHint, type TailGeom } from "./tail";
+import type { AnimView, LegRect } from "./anim";
 
 export interface CatSkin {
   fur: string;
@@ -62,6 +63,29 @@ function isLie(p: CatPose): boolean {
   return LYING_POSES.has(p);
 }
 
+/**
+ * One animated leg (px are local to the cat, facing right, y = paw top).
+ * Swing legs lift off the ground and show the pale paw underside; stance legs
+ * stay planted at the ground line, so a moving cat's paws never float.
+ */
+function drawPawLeg(ctx: CanvasRenderingContext2D, skin: CatSkin, leg: LegRect) {
+  const y = leg.y - leg.lift;
+  ctx.fillStyle = leg.far ? skin.furDark : skin.fur;
+  ctx.strokeStyle = outlineOf(skin);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.rect(leg.x - leg.w / 2, y, leg.w, leg.h);
+  ctx.fill();
+  ctx.stroke();
+  if (leg.swing > 0.05) {
+    // the pad is only visible while the paw is off the ground
+    ctx.fillStyle = "rgba(240, 226, 210, 0.9)";
+    ctx.beginPath();
+    ctx.ellipse(leg.x, y + leg.h - 0.9, leg.w * 0.33, 0.85, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 /** Dark outline derived from the pelt so sprites read crisply on any ground. */
 function outlineOf(skin: CatSkin): string {
   const n = (skin.furDark || skin.fur).replace("#", "");
@@ -89,7 +113,15 @@ export function drawCat(
   /** optional body-level acting overlay: yawn/alert/tail-flick/blink/talk.
    *  `tailId` is the cat's stable identity for the tail controller's smoothing
    *  (pass it wherever one is available: "player", "npc:<id>", "p:<userId>", …) */
-  fx?: { yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean; wet?: boolean; hop?: number; head?: "nod" | "shake" | "look" | "sniff"; carry?: boolean; tailId?: string },
+  fx?: {
+    yawn?: boolean; alert?: boolean; tailFlick?: boolean; talking?: boolean; wet?: boolean; hop?: number;
+    head?: "nod" | "shake" | "look" | "sniff"; carry?: boolean; tailId?: string;
+    /** the cat's animation state (src/game/anim.ts). When present, the drawn
+     *  gait, turn, blink, ears and idle head ALL come from the one state
+     *  machine; without it (previews, thumbnails) the time-based fallbacks
+     *  below keep the old behavior so an editor canvas still animates. */
+    anim?: AnimView;
+  },
 ) {
   // §6/§7 PREVIEW SAFETY: an editor, a thumbnail or a not-yet-loaded account row
   // can hand us a partial/empty skin. Normalizing it here means a missing field
@@ -98,13 +130,22 @@ export function drawCat(
   // render loop and left a permanently blank ("invisible cat") canvas.
   skin = normalizeSkin(skin);
   const size = skin.size ?? 1;
+  // §ANIM: the animation state machine owns gait / turn / idle life when the
+  // engine supplies it. Everything below reads `A` instead of inventing its
+  // own time-based motion, which is what used to make cats "fake" animate.
+  const A = fx?.anim;
   const moving = pose === "walk" || pose === "swim";
+  /** the DRAWN facing: fractional while the cat pivots (see easeFacing) */
+  const drawnFacing = A ? A.facing : facing;
+  const gaitLegs = A && A.legs.length > 0 && (pose === "walk" || pose === "swim") ? A.legs : null;
   const SWIM_BOB_HZ = 1.1;
   const fam = baseFamilyOf(pose);
   // dances: each has its own beat (bounce + body sway below)
   const dancePhase = pose === "dance1" ? time * 4.6 : pose === "dance2" ? time * 6.2 : pose === "dance3" ? time * 7.4 : pose === "dance4" ? time * 3.6 : 0;
   const danceBounce = DANCE_ROT[pose] !== undefined ? Math.abs(Math.sin(dancePhase)) * 3.2 : 0;
-  const bob = moving
+  const bob = A && moving && A.blend > 0.15
+    ? A.bob
+    : moving
     ? Math.abs(Math.sin(time * 9 + phase)) * 1.6
     : pose === "play" || pose === "leap"
       ? Math.abs(Math.sin(time * 3.2 + phase)) * 3.4
@@ -128,8 +169,11 @@ export function drawCat(
 
   ctx.save();
   ctx.translate(x, y);
-  ctx.scale(facing * size, size);
+  // §ANIM TURNING: the scale factor slides through 0 while the cat pivots, so
+  // a direction change reads as a turn instead of an instant mirror flip.
+  ctx.scale(drawnFacing * size, size);
   ctx.translate(0, -bob + swimBob);
+  if (A && A.roll) ctx.rotate(A.roll);
   if (pose === "swim") {
     // lower body: only head/back/tail stay above the surface line
     ctx.translate(0, 2.5);
@@ -154,10 +198,13 @@ export function drawCat(
     ctx.translate(0, 3.5);
   }
 
-  // breathing: gentle body scale while idle (never while moving)
+  // breathing: gentle chest volume while idle (never while moving). The
+  // animator supplies it when present, so every cat breathes on its own clock.
   const breath = pose === "walk" || pose === "swim" || pose === "shake" || pose === "dance3"
     ? 1
-    : 1 + Math.sin(time * 1.8 + phase) * 0.012;
+    : A
+      ? A.breath
+      : 1 + Math.sin(time * 1.8 + phase) * 0.012;
   // hop squash & stretch: compress at takeoff/landing, extend mid-air
   const hopP = fx?.hop ?? -1;
   const squash = hopP >= 0 ? 1 + Math.sin(hopP * Math.PI) * 0.08 : 1;
@@ -277,6 +324,13 @@ export function drawCat(
       ctx.fillStyle = "#f4e9d8";
       ctx.beginPath(); ctx.arc(tx, ty - 0.5, 0.9, 0, Math.PI * 2); ctx.fill();
     }
+  }
+
+  // §ANIM: the far-side legs go down FIRST, behind the body — the body then
+  // passes over them, which is what makes a stride read as walking rather than
+  // as bars sliding up and down under a floating cat.
+  if (gaitLegs) {
+    for (const l of gaitLegs) if (l.far) drawPawLeg(ctx, skin, l);
   }
 
   // body
@@ -439,8 +493,12 @@ export function drawCat(
     ctx.fill();
   }
 
-  // legs
-  if (pose === "swim") {
+  // legs — §ANIM: a real four-leg gait when the animator supplies one (the
+  // far pair is already behind the body); the static stance below remains for
+  // poses that do not walk.
+  if (gaitLegs) {
+    for (const l of gaitLegs) if (!l.far) drawPawLeg(ctx, skin, l);
+  } else if (pose === "swim") {
     // paddling paws just under the surface: quick small strokes
     const paddle = Math.sin(time * SWIM_BOB_HZ * Math.PI * 4 + phase);
     ctx.fillStyle = skin.furDark;
@@ -517,8 +575,11 @@ export function drawCat(
   else if (fx?.head === "shake") headActDx = Math.sin(time * 10) * 2.6;
   else if (fx?.head === "look") headActDx = Math.sin(time * 1.7) * 2.4;
   else if (fx?.head === "sniff") { headActDy = 3.2; headActDx = 1.4; }
-  const headX = baseHeadX + headActDx;
-  const headY = baseHeadY + headActDy;
+  // §ANIM IDLE LIFE: a standing cat looks around a little instead of freezing.
+  const idleDx = A && !moving ? A.headDx : 0;
+  const idleDy = A && !moving ? A.headDy : 0;
+  const headX = baseHeadX + headActDx + idleDx;
+  const headY = baseHeadY + headActDy + idleDy;
   ctx.fillStyle = skin.fur;
   ctx.strokeStyle = outlineOf(skin);
   ctx.lineWidth = 1;
@@ -527,9 +588,19 @@ export function drawCat(
   ctx.fill();
   ctx.stroke();
 
-  // ears (alert pricks both ears upright and forward)
+  // ears (alert pricks both ears upright and forward; a conversation keeps
+  // them forward, and the animator adds occasional real flicks)
   const earH = skin.ears === "tall" ? 12 : skin.ears === "fold" ? 6 : 10;
-  const earDx = (fx?.alert ? -2 : 0) + (fx?.head === "look" ? (Math.sin(time * 1.7) > 0 ? 1 : -1) : 0);
+  const earDx = (fx?.alert || fx?.talking ? -2 : 0) + (fx?.head === "look" ? (Math.sin(time * 1.7) > 0 ? 1 : -1) : 0);
+  const earFlickAmt = A ? Math.max(A.earL, A.earR) : 0;
+  if (earFlickAmt > 0) {
+    // rotate the whole ear set about the head centre: the ears flick, the
+    // head does not move, and nothing detaches from the skull
+    ctx.save();
+    ctx.translate(headX, headY - 4);
+    ctx.rotate(earFlickAmt * 0.22);
+    ctx.translate(-headX, -(headY - 4));
+  }
   ctx.beginPath();
   ctx.moveTo(headX - 5.5 + earDx, headY - 3.5);
   ctx.lineTo(headX - 3 + earDx, headY - earH);
@@ -569,6 +640,7 @@ export function drawCat(
   ctx.lineTo(headX + 4.8, headY - 5.2);
   ctx.closePath();
   ctx.fill();
+  if (earFlickAmt > 0) ctx.restore(); // end of the ear-flick rotation
 
   // scars: legacy single scar + the multi-scar customization set
   const scars = new Set(skin.scars ?? []);
@@ -684,9 +756,12 @@ export function drawCat(
     ctx.fill();
   }
 
-  // eyes — closed while sleeping, blinking otherwise; both visible (3/4 view)
-  const blink =
-    isLie(pose) ? 0.08 : Math.sin(time * 0.9 + phase * 3) > 0.985 ? 0.15 : 1;
+  // eyes — closed while sleeping, blinking otherwise; both visible (3/4 view).
+  // The animator's blink schedule is irregular (and faster while talking);
+  // without it the old rare-blink formula still applies.
+  const blink = A
+    ? (isLie(pose) ? Math.min(0.08, A.blink) : A.blink)
+    : isLie(pose) ? 0.08 : Math.sin(time * 0.9 + phase * 3) > 0.985 ? 0.15 : 1;
   const eyeColors = skin.eye2 ? [skin.eye2, skin.eye] : [skin.eye, skin.eye];
   ctx.fillStyle = eyeColors[1]; // far eye
   ctx.beginPath();
