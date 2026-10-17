@@ -164,3 +164,35 @@ grep -c "previous cat is safe"            isolate/assets/Game-*.js        # 0 (p
 
 Behavioural check of the real button (real DOM, real component):
 `bun scripts/check-save-ui.ts`.
+
+## Stale-chunk recovery (why the game can die after a deploy)
+A tab keeps the shell it booted from. When a new build replaces
+`assets/Game-<hash>.js`, that tab's next client-side navigation asks for a file
+that no longer exists. The host's SPA fallback answers with `index.html`, and a
+module script with a `text/html` MIME type is rejected by the browser:
+
+```
+TypeError: Failed to fetch dynamically imported module:
+  https://<app>/assets/Game-<oldhash>.js
+```
+
+Nothing in the app used to handle that, so the route stayed dead until the
+player hard-refreshed. `src/lib/chunkRecovery.ts` now wraps every lazy route
+(`recoverableImport`) and listens for `vite:preloadError`: the failure starts
+ONE cache-busted shell reload (`?__v=<ts>`, marker stripped once the fresh shell
+boots). A 20s session guard means a genuinely broken deploy cannot loop the tab;
+then the error boundary shows “The game was updated → Reload”. Dev builds are
+excluded, so a code error still surfaces instead of reloading the preview.
+
+Suite: `bun scripts/check-chunk-recovery.ts` (34 checks: both error wordings,
+pending-during-recovery, single reload, loop guard, marker strip, wiring).
+
+When a deploy looks broken, check that the published snapshot is internally
+consistent — every `/assets/*` the served `index.html` names must return its
+real content type, not the 894-byte HTML fallback:
+
+```sh
+curl -sI https://<app>/assets/index-<hash>.js | grep -i content-type
+# application/javascript  → good
+# text/html               → the snapshot is missing that file
+```
