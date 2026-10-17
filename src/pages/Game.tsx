@@ -58,7 +58,14 @@ import {
   lineReadMs,
   type StoryBeat,
 } from "@/game/storyCinematics";
-import { beatActorIds, resolveStaging } from "@/game/storyStaging";
+import {
+  beatActorIds,
+  resolveStaging,
+  escortForStep,
+  stepScenePoint,
+  canStartBeat,
+  STORY_TRAVEL,
+} from "@/game/storyStaging";
 import { resolveStoryWaypoint } from "@/game/storyWaypoint";
 import { pendingIntros, unlockedMeters, type SurvivalUnlock } from "@/game/storyUnlocks";
 import { pickVocal, emotionForLine } from "@/game/vocal";
@@ -1993,30 +2000,48 @@ export default function Game() {
     return () => window.clearTimeout(t);
   }, [phase, mode]);
 
-  // §2/§9: each story step opens with its SHORT voiced beat (cutscene →
-  // gameplay alternation) — once per step per session, never replayed.
-  // §12/§22: dialogue starts only after the beat's cast has ARRIVED at its
-  // staging marks (bounded wait — a stuck cat can never stall the story).
+  // §STORY-PLACE: each step's cutscene plays WHERE THE EVENT HAPPENS — once the
+  // player has actually walked there. The gate is the step's real staged scene
+  // point (a genuine map landmark) plus a readable camera margin, so a camp
+  // scene can no longer start while the player is still at the forest edge and
+  // drag the camera across the world to reach it. A step with no scene of its
+  // own (the travel steps) plays where the player is. A live box always
+  // finishes first, the step's escort must have arrived, and the scene's cast
+  // must be standing on its marks before the camera turns to them.
   useEffect(() => {
     if (phase !== "playing" || mode !== "story") return;
     const step = storySteps[storyStep];
     if (!step || beatPlayedRef.current.has(step.id)) return;
-    beatPlayedRef.current.add(step.id);
     const beat = STORY_BEATS[step.id];
     if (!beat) return;
+    if (cineBeat) return; // one box at a time — retry when this one closes
+    const escort = escortForStep(step.id);
+    const actors = beatActorIds(beat);
     let cancelled = false;
-    const t = window.setTimeout(() => {
-      gameRef.current
-        ?.waitForStoryArrival(beatActorIds(beat), 4500)
-        .then(() => {
-          if (!cancelled) setCineBeat(beat);
-        });
-    }, 600);
+    const tryStart = (): boolean => {
+      if (cancelled || beatPlayedRef.current.has(step.id)) return true;
+      const g = gameRef.current;
+      const ready = canStartBeat({
+        stepId: step.id,
+        player: posRef.current,
+        escortStatus: escort ? (g?.storyEscortInfo?.status ?? null) : null,
+        actorIds: actors,
+        actorArrived: (id) => g?.getNpcStoryInfo(id)?.arrived ?? true,
+      });
+      if (!ready) return false;
+      beatPlayedRef.current.add(step.id);
+      setCineBeat(beat);
+      return true;
+    };
+    if (tryStart()) return;
+    const iv = window.setInterval(() => {
+      if (tryStart()) window.clearInterval(iv);
+    }, 350);
     return () => {
       cancelled = true;
-      window.clearTimeout(t);
+      window.clearInterval(iv);
     };
-  }, [phase, mode, storyStep]);
+  }, [phase, mode, storyStep, cineBeat]);
 
   // §1/§19/§20: apply the step's character staging — every important
   // character physically WALKS to (or, for scene init/loading, is placed at)
@@ -2025,11 +2050,18 @@ export default function Game() {
   useEffect(() => {
     const g = gameRef.current;
     if (!g || phase !== "playing" || mode !== "story") return;
+    // §STORY-PLACE: never reposition a cast member out from under a live
+    // scene — a step that advances mid-conversation stages its cast when the
+    // shared box closes, not while the cat is still talking to the player.
+    if (cineBeat) return;
     const step = storySteps[storyStep];
     if (!step) return;
     const plan = resolveStaging(step.id);
+    const escort = escortForStep(step.id);
+    const travel = STORY_TRAVEL[step.id] ?? [];
     const keep = new Set<string>();
     for (const role of plan?.npcs ?? []) {
+      if (escort?.npcId === role.npcId) continue; // the escort owns this cat
       const pos = g.getNpcWorldPos(role.npcId);
       if (!pos) continue; // not spawned in this timeline window (§19)
       keep.add(role.npcId);
@@ -2038,6 +2070,7 @@ export default function Game() {
         // §32 allowed case: scene initialization / loading a story state
         g.placeNpcForStory(role.npcId, role.x, role.y, role.face, role.pose);
       } else {
+        const route = travel.find((t) => t.npcId === role.npcId);
         g.setNpcStoryAnchor(role.npcId, {
           x: role.x,
           y: role.y,
@@ -2045,13 +2078,45 @@ export default function Game() {
           pose: role.pose,
           run: dist > 260,
           label: role.label,
+          // §STORY-PLACE: walk the authored map route (trail / tunnel), never
+          // a straight line through trees
+          route: route?.route,
+          speed: route?.speed,
         });
       }
     }
     g.clearOtherStoryAnchors(keep); // released cats resume life in place
     if (plan?.scene) g.setStoryStagingExclusion({ x: plan.scene.x, y: plan.scene.y, r: plan.scene.r });
     else g.setStoryStagingExclusion(null);
-  }, [phase, mode, storyStep]);
+  }, [phase, mode, storyStep, cineBeat]);
+
+  // §SCENE: the guide physically leads the player. Graypaw's walk from the pine
+  // trail, through the gorse tunnel and into the camp begins once the shared
+  // box that ends the encounter has closed — and the camp cutscene waits for
+  // him to arrive, so it plays in the camp they actually walked into.
+  const escortStepRef = useRef<string | null>(null);
+  useEffect(() => {
+    const g = gameRef.current;
+    if (!g) return;
+    const step = phase === "playing" && mode === "story" ? storySteps[storyStep] : undefined;
+    const plan = step ? escortForStep(step.id) : null;
+    if (!plan) {
+      if (escortStepRef.current) {
+        g.setStoryEscort(null);
+        escortStepRef.current = null;
+      }
+      return;
+    }
+    if (cineBeat) return; // the conversation ends first
+    if (escortStepRef.current === step?.id) return;
+    escortStepRef.current = step?.id ?? null;
+    // a save loaded with the player already at the destination needs no guide
+    // walk (and must not wait on one) — the scene is already where they are
+    const end = plan.route[plan.route.length - 1];
+    const p = posRef.current;
+    if (Math.hypot(p.x - end.x, p.y - end.y) <= (plan.legGatePx ?? 300)) return;
+    g.setStoryEscort(plan);
+  }, [phase, mode, storyStep, cineBeat]);
 
   // §1/§2: point the objective marker at the ACTIVE step's REAL destination.
   // The resolver reads the same story + staging data the mission triggers use,
@@ -2167,15 +2232,33 @@ export default function Game() {
   }, [areaName, storyStep, mode, phase]);
 
   // story: camp objective
+  const campDoneRef = useRef<string | null>(null);
+  // a NEW story run (or a reloaded save) must be able to complete the camp
+  // step again — the once-only guard belongs to one step, not the session
+  useEffect(() => {
+    campDoneRef.current = null;
+  }, [storyStep]);
+  // §STORY-PLACE: the arrival scene plays BEFORE the step completes. Without
+  // this the camp objective could finish on the same tick the player crossed
+  // the radius, advancing the story past its own cutscene. Polled (not tied to
+  // the 5Hz position snapshot) so an escort arriving while the player stands
+  // still still completes it.
   useEffect(() => {
     if (mode !== "story" || phase !== "playing") return;
-    const step = storySteps[storyStep];
-    if (!step || step.objective.kind !== "camp") return;
-    const dx = pos.x - 89 * 32;
-    const dy = pos.y - 86 * 32;
-    if (Math.hypot(dx, dy) < step.objective.radius) advanceStory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pos, storyStep, mode, phase]);
+    const iv = window.setInterval(() => {
+      const step = storySteps[storyStepRef.current];
+      if (!step || step.objective.kind !== "camp") return;
+      if (STORY_BEATS[step.id] && !beatPlayedRef.current.has(step.id)) return;
+      // advance exactly once, even if a render is slow
+      if (campDoneRef.current === step.id) return;
+      const p = posRef.current;
+      if (Math.hypot(p.x - 89 * 32, p.y - 86 * 32) < step.objective.radius) {
+        campDoneRef.current = step.id;
+        advanceStory();
+      }
+    }, 500);
+    return () => window.clearInterval(iv);
+  }, [mode, phase, advanceStory]);
 
   // §4/§16: entering the ONLINE world is FREE ROAM — no mission prompt, ever.
   // A single welcome line tells the player the forest is theirs to explore;
@@ -2270,6 +2353,11 @@ export default function Game() {
   );
 
   const currentStep = storySteps[storyStep];
+  /** §STORY-PLACE: for a step's own scene beat, frame the REAL location. */
+  const cineFrame =
+    mode === "story" && cineBeat && currentStep && STORY_BEATS[currentStep.id]?.id === cineBeat.id
+      ? stepScenePoint(currentStep.id)
+      : null;
   const clanLabel = CLANS.find((c) => c.id === myCat?.clan)?.name;
   const rankXp = player?.xp ?? 0;
   const rankLabel = rankXp >= 300 ? "Warrior" : rankXp >= 100 ? "Apprentice" : (player?.rank ?? "apprentice") === "kittypet" ? "Kittypet" : "Kit";
@@ -2440,6 +2528,7 @@ export default function Game() {
         <StoryCutscenePlayer
           beat={cineBeat}
           game={gameRef.current}
+          frameAt={cineFrame}
           onDone={() => {
             releaseStoryTalk();
             finishCineBeat();

@@ -35,8 +35,25 @@ export const STRIDE_PX: Record<Gait, number> = {
 const LIFT_PX: Record<Gait, number> = { idle: 0.6, walk: 2.1, run: 3.4, crouch: 1.2, swim: 1.8 };
 /** Body bob amplitude for two footfalls per cycle. */
 const BOB_PX: Record<Gait, number> = { idle: 0.4, walk: 1.15, run: 1.9, crouch: 0.7, swim: 0.6 };
-/** Stride amplitude (how far a paw travels fore/aft), in px. */
-const REACH_PX: Record<Gait, number> = { idle: 4, walk: 7, run: 10.5, crouch: 5.5, swim: 8 };
+/**
+ * Fore/aft travel of a paw over one stance, in px.
+ *
+ * A stance paw must stay planted on the ground: over a half cycle the BODY
+ * advances STRIDE_PX/2, so the paw has to slide back by exactly that much in
+ * local space. Using a smaller reach was what made the feet skate forward
+ * under a walking cat (the legs moved, but not at the speed of the ground).
+ */
+const REACH_PX: Record<Gait, number> = {
+  idle: STRIDE_PX.idle / 2,
+  walk: STRIDE_PX.walk / 2,
+  run: STRIDE_PX.run / 2,
+  crouch: STRIDE_PX.crouch / 2,
+  swim: STRIDE_PX.swim / 2,
+};
+
+/** Local y of a paw's top edge when it rests on the ground line (y = 0). */
+const PAW_H = 7;
+const PAW_TOP = -PAW_H;
 
 export interface GaitState {
   /** 0..1 through the current four-leg cycle */
@@ -64,7 +81,9 @@ export function advanceGait(state: GaitState, distPx: number, gait: Gait): GaitS
   const rate = moved > 0 ? moved / 22 : 1 / 8;
   const blend = Math.max(0, Math.min(1, state.blend + (target - state.blend) * Math.min(1, rate)));
   const phase = moved > 0 ? (state.phase + moved / stride) % 1 : state.phase;
-  return { phase, travelled: state.travelled + moved, gait, blend };
+  // keep the last MOVING gait recorded while the cat idles, so the settling
+  // stride is drawn with the geometry it actually used
+  return { phase, travelled: state.travelled + moved, gait: gait === "idle" ? state.gait : gait, blend };
 }
 
 export interface LegRect {
@@ -80,6 +99,9 @@ export interface LegRect {
   far: boolean;
   /** 0..1 how much of the stride this leg currently expresses (1 = fully) */
   swing: number;
+  /** true while the paw is carrying weight: the renderer pins it to the
+   *  ground line while the body bobs, so planted feet never hop off the floor */
+  planted: boolean;
 }
 
 /**
@@ -93,30 +115,32 @@ export interface LegRect {
 export function gaitLegs(phase: number, gait: Gait, blend = 1): LegRect[] {
   const reach = REACH_PX[gait] * blend;
   const lift = LIFT_PX[gait] * blend;
-  // near legs sit a touch lower and darker; far legs a touch higher
-  const legs: { off: number; far: boolean; x: number; y: number }[] = [
-    { off: 0.5, far: true, x: 4.5, y: -4.5 }, // far front
-    { off: 0, far: true, x: -7.5, y: -4.5 }, // far back
-    { off: 0, far: false, x: 5.5, y: -4 }, // near front
-    { off: 0.5, far: false, x: -9, y: -4 }, // near back
+  // Paw tops sit ON the ground line (y = 0) minus the paw's own height, so a
+  // planted paw touches the floor and a swinging one visibly clears it.
+  const legs: { off: number; far: boolean; x: number }[] = [
+    { off: 0.5, far: true, x: 4.5 }, // far front
+    { off: 0, far: true, x: -7.5 }, // far back
+    { off: 0, far: false, x: 5.5 }, // near front
+    { off: 0.5, far: false, x: -9 }, // near back
   ];
-  return legs.map(({ off, far, x, y }) => {
+  return legs.map(({ off, far, x }) => {
     const p = (phase + off) % 1;
     if (p < 0.5) {
       // stance: planted, sliding backward as the body passes over it
       const t = p / 0.5;
-      return { x: x + reach * (0.5 - t), y, w: 4, h: 7, lift: 0, far, swing: 0 };
+      return { x: x + reach * (0.5 - t), y: PAW_TOP, w: 4, h: PAW_H, lift: 0, far, swing: 0, planted: true };
     }
     // swing: lifted and reaching forward
     const q = (p - 0.5) / 0.5;
     return {
       x: x - reach * 0.5 + reach * q,
-      y,
+      y: PAW_TOP,
       w: 4,
-      h: 7,
+      h: PAW_H,
       lift: Math.sin(q * Math.PI) * lift,
       far,
       swing: Math.sin(q * Math.PI),
+      planted: false,
     };
   });
 }
@@ -308,6 +332,10 @@ export class CatAnimator {
     const travelled = e.seen ? Math.hypot(input.x - e.x, input.y - e.y) : 0;
     e.seen = true;
     const gait: Gait = input.poseLocked ? "idle" : (input.gait ?? (input.speedPx && input.speedPx > 0 ? "walk" : "idle"));
+    // the gait used to EXPRESS the last stride while the blend settles down
+    // ("idle" has no stride of its own), so a stopping cat finishes its step
+    // with the legs it was actually using instead of snapping them away
+    const expressGait: Gait = gait === "idle" ? (e.state.gait === "idle" ? "walk" : e.state.gait) : gait;
     e.state = advanceGait(e.state, travelled, gait);
     e.x = input.x;
     e.y = input.y;
@@ -315,14 +343,19 @@ export class CatAnimator {
     e.facing = easeFacing(e.facing, input.facing ?? (e.facing >= 0 ? 1 : -1), input.dtSec);
     const moving = e.state.blend > 0.15 && gait !== "idle";
     const idle = moving || e.talking ? { dx: 0, dy: 0 } : idleHead(input.nowSec, e.seed);
+    // LEGS ARE ALWAYS SUPPLIED for a walking cat (even at blend 0: four neutral,
+    // planted paws). This is what stops the renderer's old time-based fallback
+    // from cycling the legs of a cat that is standing perfectly still, and it
+    // lets the cycle settle smoothly to rest instead of popping off.
+    const legs = gaitLegs(e.state.phase, expressGait, e.state.blend);
     const view: AnimView = {
       gait,
       phase: e.state.phase,
       blend: e.state.blend,
       moving,
-      bob: moving ? gaitBob(e.state.phase, gait, e.state.blend) : 0,
-      roll: moving ? gaitRoll(e.state.phase, gait, e.state.blend) : 0,
-      legs: moving ? gaitLegs(e.state.phase, gait, e.state.blend) : [],
+      bob: e.state.blend > 0.01 ? gaitBob(e.state.phase, expressGait, e.state.blend) : 0,
+      roll: moving ? gaitRoll(e.state.phase, expressGait, e.state.blend) : 0,
+      legs,
       facing: e.facing,
       blink: blinkAmount(input.nowSec, e.seed, e.talking),
       earL: earFlick(input.nowSec, e.seed, 0),

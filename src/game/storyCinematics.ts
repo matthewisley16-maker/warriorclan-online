@@ -333,10 +333,22 @@ export function composeStoryTalk(opts: {
   return { id: `talk:${opts.npc.id}`, lines };
 }
 
-/** §3: camera choreography derived from a beat's lines (pan → focus → zoom). */
-export function beatCameraSteps(beat: StoryBeat, npcPos: (id: string) => { x: number; y: number } | null, playerPos: { x: number; y: number }): CineStep[] {
+/**
+ * §3: camera choreography derived from a beat's lines (pan → focus → zoom).
+ *
+ * `sceneAt` is the step's REAL staged location (src/game/storyStaging.ts): the
+ * opening shot settles on the place the scene happens (the camp clearing, the
+ * pine trail, the Tallrock) instead of wherever the player happened to stand.
+ * Purely authored `openOn` still wins when a beat names its own framing.
+ */
+export function beatCameraSteps(
+  beat: StoryBeat,
+  npcPos: (id: string) => { x: number; y: number } | null,
+  playerPos: { x: number; y: number },
+  sceneAt?: { x: number; y: number } | null,
+): CineStep[] {
   const steps: CineStep[] = [];
-  const start = beat.openOn ?? playerPos;
+  const start = beat.openOn ?? sceneAt ?? playerPos;
   steps.push({ kind: "pan", target: start, durMs: 900, ease: "inout" });
   let lastTarget: { x: number; y: number } = start;
   for (const line of beat.lines) {

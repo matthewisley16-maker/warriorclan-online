@@ -70,7 +70,7 @@ console.log("--- engine: physical travel, no teleport staging (§10/§11/§32) -
 check(engine.includes("export interface StoryAnchor"), "engine exposes the StoryAnchor contract");
 check(engine.includes("setNpcStoryAnchor(") && engine.includes("placeNpcForStory(") && engine.includes("clearNpcStoryAnchor("), "anchor set / init-placement / release APIs exist");
 check(engine.includes("clearOtherStoryAnchors(") && engine.includes("setStoryStagingExclusion(") && engine.includes("getNpcStoryInfo(") && engine.includes("waitForStoryArrival("), "step-change release + exclusion zone + debug info + arrival gate exist");
-check(engine.includes("private stepNpcStoryAnchor(n: NPCState, dt: number)") && engine.includes("const speed = a.run ? 96 : 60"), "anchored cats TRAVEL per-frame at believable speeds (walk / run)");
+check(engine.includes("private stepNpcStoryAnchor(n: NPCState, dt: number)") && engine.includes("const speed = a.speed ?? (a.run ? 96 : 60)"), "anchored cats TRAVEL per-frame at believable speeds (walk / run / authored)");
 check(engine.includes("if (!isSolidPoint(nx, n.y)) n.x = nx;") && engine.includes("if (!isSolidPoint(n.x, ny)) n.y = ny;"), "anchor movement is collision-checked per axis (never through walls)");
 check(engine.includes("this.time - a.travelSince > 2.5") && engine.includes("a.sidestepAt = this.time;"), "stuck detection: a stalled traveler tries a sidestep waypoint (throttled)");
 check(engine.includes("if (this.time - a.travelSince > 9) {"), "last-resort recovery fires after 9s WITHOUT progress (not reset by sidesteps)");
@@ -84,14 +84,31 @@ check(engine.includes("n.storyAvoidUntil = this.time + 3;") && engine.includes('
 check(engine.includes("clearNpcStoryAnchor(npcId: string) {\n    const n = this.npcStates.find((s) => s.def.id === npcId);\n    if (!n || !n.storyAnchor) return;\n    n.storyAnchor = undefined;\n    n.ai = \"idle\";\n    n.tx = n.x;\n    n.ty = n.y;"), "released cats resume normal life FROM WHERE THEY ARE (no reset home, §30)");
 
 console.log("--- game wiring: staging on boot/step change, arrival-gated dialogue ---");
-check(game.includes("import { beatActorIds, resolveStaging } from \"@/game/storyStaging\";"), "Game imports the staging system");
+check(
+  ["beatActorIds", "resolveStaging", "escortForStep", "stepScenePoint", "STORY_TRAVEL"].every((n) =>
+    game.includes(n),
+  ) && game.includes('from "@/game/storyStaging"'),
+  "Game imports the staging system (staging, scene gate, travel routes, escorts)",
+);
 check(game.includes("const plan = resolveStaging(step.id);") && game.includes("g.clearOtherStoryAnchors(keep);"), "each step applies its staging and releases cats the story no longer stages (§20)");
 check(game.includes("dist > 1400") && game.includes("g.placeNpcForStory(role.npcId"), "far placement is a controlled scene-init reposition (>1400px only, §32); closer cats WALK");
 check(game.includes("run: dist > 260"), "long walks get urgency (run); short ones stay natural");
 check(game.includes('g.setStoryStagingExclusion({ x: plan.scene.x, y: plan.scene.y, r: plan.scene.r })') && game.includes("g.setStoryStagingExclusion(null);"), "the scene exclusion is applied per step and cleared when none");
-check(game.split("waitForStoryArrival(").length >= 3, "BOTH the opening and every step beat wait for cast arrival (§12/§22)");
-check(game.includes("waitForStoryArrival(beatActorIds(beat), 4500)") && game.includes("waitForStoryArrival([\"smudge\"], 5000)"), "arrival waits are bounded — a stuck cat can never stall the story");
-check(game.includes("if (!cancelled) setCineBeat(beat);"), "the beat only starts after arrival resolved");
+check(
+  game.includes("canStartBeat({") &&
+    game.includes("actorIds: actors") &&
+    game.includes("actorArrived: (id) => g?.getNpcStoryInfo(id)?.arrived ?? true"),
+  "every step beat waits for its cast to be ON its marks (§12/§22)",
+);
+check(game.includes("waitForStoryArrival([\"smudge\"], 5000)"), "the opening still waits for Smudge (bounded) before it plays");
+check(
+  game.includes("const ready = canStartBeat({") && game.includes("stepId: step.id") && game.includes("if (cineBeat) return; // one box at a time"),
+  "the beat starts only at its real scene point, and never over a live box (§STORY-PLACE)",
+);
+check(
+  game.includes("beatPlayedRef.current.add(step.id);") && game.includes("setCineBeat(beat);"),
+  "the beat starts (once) only after the gate and all arrival checks pass",
+);
 check(game.includes("?storydebug") && game.includes("wcrpg-story-debug") && game.includes("Story staging (dev)"), "§33 debug overlay exists but is flag-gated (never visible to players)");
 check(game.includes("if (!g || phase !== \"playing\" || mode !== \"story\") return;") && game.includes("const plan = resolveStaging(storySteps[storyStep]?.id);"), "debug polling is story-mode only");
 

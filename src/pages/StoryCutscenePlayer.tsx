@@ -25,6 +25,8 @@ interface Props {
   game: GameCanvas | null;
   /** fired after the last line (or after choices resolve) — control returns */
   onDone: () => void;
+  /** §STORY-PLACE: the step's real map location — the opening shot frames it */
+  frameAt?: { x: number; y: number } | null;
 }
 
 type Phase =
@@ -33,7 +35,7 @@ type Phase =
   | { kind: "choices" }
   | { kind: "chosen"; line: CineLine; then: CineLine | null };
 
-export function StoryCutscenePlayer({ beat, game, onDone }: Props) {
+export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [caption, setCaption] = useState<CineLine | null>(null);
   const timers = useRef<number[]>([]);
@@ -99,6 +101,7 @@ export function StoryCutscenePlayer({ beat, game, onDone }: Props) {
       beat,
       (id) => game.getNpcWorldPos(id),
       { x: s.x, y: s.y },
+      frameAt ?? null,
     );
     game.playCinematic(steps);
 

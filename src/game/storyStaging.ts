@@ -44,7 +44,11 @@ export interface StoryLocation {
 export const STORY_LOCATIONS: Record<string, StoryLocation> = {
   "twoleg-garden": { ...pt(78, 146), label: "Rusty's garden street", territory: "twolegplace" },
   "twoleg-street": { ...pt(74.5, 144.1), label: "Smudge's garden", territory: "twolegplace" },
-  "forest-edge": { ...tc(26, 70), label: "The forest edge by Tallpines", territory: "tallpines" },
+  // §STORY-PLACE: the Graypaw encounter happens DEEP in Tallpines, on the
+  // pine trail Rusty follows north — not on the camp's doorstep. The old mark
+  // sat just outside the camp wall, so the "forest" ambush played within sight
+  // of ThunderClan's gorse tunnel.
+  "forest-edge": { ...pt(90, 116), label: "The pine trail in Tallpines", territory: "tallpines" },
   "tc-entrance": { ...cc(-0.5, 23.2), label: "Gorse tunnel", territory: "thunderclan" },
   "tc-clearing": { ...cc(0, 1.5), label: "Camp clearing", territory: "thunderclan" },
   "tc-tallrock": { ...cc(1.4, -5.4), label: "Beneath the Tallrock", territory: "thunderclan" },
@@ -115,8 +119,11 @@ export const STAGED_STEPS: Record<string, StepStaging> = {
     ],
   ),
   // Into the forest — a travel step: the kittypets stay HOME (never wander
-  // into ThunderClan territory), no scene is staged.
+  // into ThunderClan territory), no scene is staged. Graypaw is already on his
+  // way down the real pine trail, so the ambush is waiting when Rusty reaches
+  // it instead of materialising behind the camp wall (§STORY-PLACE).
   "s2-into-forest": S(null, [
+    N("graypaw", "forest-edge", -10, 14, "right", "background", "slipping down the pine trail"),
     N("smudge", "twoleg-street", 0, 0, "down", "background", "home"),
     N("rusty", "twoleg-garden", 46, -6, "down", "background", "home"),
     N("henry", "twoleg-street", 10, 26, "down", "background", "home"),
@@ -308,6 +315,124 @@ export const STAGED_STEPS: Record<string, StepStaging> = {
 export function resolveStaging(stepId: string | undefined): StepStaging | null {
   if (!stepId) return null;
   return STAGED_STEPS[stepId] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// §STORY-PLACE: travel along REAL routes (never a straight-line teleport)
+// ---------------------------------------------------------------------------
+
+/** A cat that must WALK to its staged mark along authored map waypoints. */
+export interface StoryTravel {
+  npcId: string;
+  /** waypoints in world px, in order (the staged mark is the destination) */
+  route: { x: number; y: number }[];
+  /** px/s while travelling (default: the anchor's walk/run speed) */
+  speed?: number;
+}
+
+/**
+ * Real map routes for story cats. Graypaw comes DOWN the pine trail from camp
+ * to the ambush mark; the gorse-tunnel corridor and the authored trail are the
+ * same ground a player walks, so the journey is genuinely visible.
+ */
+const GRAYPAW_TO_TRAIL = [
+  // out around the dens, down through the gorse tunnel, onto the trail
+  pt(99, 86.5), pt(99.5, 89), pt(99.5, 91.5), pt(99.5, 94), pt(99.5, 96.5),
+  pt(99.5, 99), pt(99.5, 101.5), pt(98, 103.5), pt(96.5, 105.5), pt(95, 107.5),
+  pt(93.5, 109.5), pt(92.5, 112), pt(91.5, 114.5),
+];
+
+export const STORY_TRAVEL: Record<string, StoryTravel[]> = {
+  "s2-into-forest": [{ npcId: "graypaw", route: GRAYPAW_TO_TRAIL, speed: 98 }],
+  // the same route while the ambush step is active, so a re-anchor mid-walk
+  // continues along the trail instead of cutting a straight line through trees
+  "s3-graypaw": [{ npcId: "graypaw", route: GRAYPAW_TO_TRAIL, speed: 98 }],
+};
+
+/** §SCENE: a cat leading the PLAYER along a real route (the engine escort). */
+export interface StoryEscortPlan {
+  npcId: string;
+  route: { x: number; y: number }[];
+  /** px the player may fall behind before the guide waits */
+  waitPx?: number;
+  /** px the player must return within before the guide resumes */
+  resumePx?: number;
+  /** px the player must be from the next waypoint before the guide moves on */
+  legGatePx?: number;
+  speed?: number;
+  label?: string;
+}
+
+/**
+ * §SCENE: Graypaw physically leads Rusty from the pine trail, through the
+ * gorse tunnel and into the camp clearing. The camp cutscene does not start
+ * until this walk is finished, so it plays inside the camp that they actually
+ * walked into.
+ */
+export const STORY_ESCORTS: Record<string, StoryEscortPlan> = {
+  "s4-the-camp": {
+    npcId: "graypaw",
+    // ends INSIDE the gorse tunnel / camp edge, just outside the camp
+    // objective's radius — so the arrival cutscene plays before the objective
+    // completes and the player can never skip the scene by running ahead
+    route: [pt(89.5, 114), pt(89, 111), pt(88.5, 107), pt(89, 103), pt(89, 100)],
+    waitPx: 330,
+    resumePx: 170,
+    legGatePx: 300,
+    speed: 150,
+    label: "leading you through the gorse tunnel",
+  },
+};
+
+export function escortForStep(stepId: string | undefined): StoryEscortPlan | null {
+  if (!stepId) return null;
+  return STORY_ESCORTS[stepId] ?? null;
+}
+
+/**
+ * §STORY-PLACE: where a step's cutscene physically happens.
+ *
+ * The scene's own staging point is the authority (a real map coordinate). A
+ * step with no scene of its own (the travel steps) has no location gate and
+ * plays where the player is; every scene beat waits until the player has
+ * actually reached that place, instead of panning the camera across the world
+ * from wherever they were standing when the step advanced.
+ */
+export function stepScenePoint(stepId: string | undefined): { x: number; y: number; r: number } | null {
+  const plan = resolveStaging(stepId);
+  if (!plan) return null;
+  if (plan.scene) return { x: plan.scene.x, y: plan.scene.y, r: plan.scene.r };
+  const lead = plan.npcs.find((n) => n.priority === "main");
+  return lead ? { x: lead.x, y: lead.y, r: 140 } : null;
+}
+
+/**
+ * §STORY-PLACE: may this step's cutscene start right now?
+ *
+ * All three conditions are about the WORLD, not about time: the player must be
+ * standing at the scene (with a readable camera margin), any escort for the
+ * step must have arrived, and every beat actor must be on its mark. The story
+ * layer calls this from its beat effect; the suite drives it directly, so the
+ * "cutscene at the wrong place" rule is tested as behaviour, not as a string.
+ */
+export function canStartBeat(opts: {
+  stepId: string;
+  player: { x: number; y: number };
+  /** null/undefined = this step has no escort, so there is nothing to wait for */
+  escortStatus?: "leading" | "waiting" | "arrived" | null;
+  actorIds: readonly string[];
+  /** false only when the actor is spawned and still walking to its mark */
+  actorArrived: (npcId: string) => boolean;
+  /** extra framing margin around the scene radius (camera readability) */
+  sceneMargin?: number;
+}): boolean {
+  const gate = stepScenePoint(opts.stepId);
+  if (gate) {
+    const d = Math.hypot(opts.player.x - gate.x, opts.player.y - gate.y);
+    if (d > gate.r + (opts.sceneMargin ?? 260)) return false;
+  }
+  if (escortForStep(opts.stepId) && opts.escortStatus && opts.escortStatus !== "arrived") return false;
+  return opts.actorIds.every((id) => opts.actorArrived(id));
 }
 
 /** Which npc ids a beat will direct (its acting + camera targets, §22). */

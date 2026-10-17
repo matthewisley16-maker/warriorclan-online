@@ -68,13 +68,17 @@ function isLie(p: CatPose): boolean {
  * Swing legs lift off the ground and show the pale paw underside; stance legs
  * stay planted at the ground line, so a moving cat's paws never float.
  */
-function drawPawLeg(ctx: CanvasRenderingContext2D, skin: CatSkin, leg: LegRect) {
-  const y = leg.y - leg.lift;
+function drawPawLeg(ctx: CanvasRenderingContext2D, skin: CatSkin, leg: LegRect, bodyBob = 0) {
+  // §LEGS: the whole cat is translated by -bodyBob, so a paw that is carrying
+  // weight adds that bob back — a planted paw stays welded to the ground line
+  // instead of hopping with the shoulders. A swinging paw rides the body.
+  const y = leg.y - leg.lift + (leg.planted ? bodyBob : 0);
   ctx.fillStyle = leg.far ? skin.furDark : skin.fur;
   ctx.strokeStyle = outlineOf(skin);
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.rect(leg.x - leg.w / 2, y, leg.w, leg.h);
+  // rounded limb: the top joins the body silhouette and the paw reads soft
+  ctx.roundRect(leg.x - leg.w / 2, y, leg.w, leg.h, [1.6, 1.6, 1.9, 1.9]);
   ctx.fill();
   ctx.stroke();
   if (leg.swing > 0.05) {
@@ -137,7 +141,7 @@ export function drawCat(
   const moving = pose === "walk" || pose === "swim";
   /** the DRAWN facing: fractional while the cat pivots (see easeFacing) */
   const drawnFacing = A ? A.facing : facing;
-  const gaitLegs = A && A.legs.length > 0 && (pose === "walk" || pose === "swim") ? A.legs : null;
+  const gaitLegs = A && A.legs.length > 0 && (pose === "walk" || (pose === "swim" && A.moving)) ? A.legs : null;
   const SWIM_BOB_HZ = 1.1;
   const fam = baseFamilyOf(pose);
   // dances: each has its own beat (bounce + body sway below)
@@ -330,7 +334,7 @@ export function drawCat(
   // passes over them, which is what makes a stride read as walking rather than
   // as bars sliding up and down under a floating cat.
   if (gaitLegs) {
-    for (const l of gaitLegs) if (l.far) drawPawLeg(ctx, skin, l);
+    for (const l of gaitLegs) if (l.far) drawPawLeg(ctx, skin, l, bob);
   }
 
   // body
@@ -497,7 +501,7 @@ export function drawCat(
   // far pair is already behind the body); the static stance below remains for
   // poses that do not walk.
   if (gaitLegs) {
-    for (const l of gaitLegs) if (!l.far) drawPawLeg(ctx, skin, l);
+    for (const l of gaitLegs) if (!l.far) drawPawLeg(ctx, skin, l, bob);
   } else if (pose === "swim") {
     // paddling paws just under the surface: quick small strokes
     const paddle = Math.sin(time * SWIM_BOB_HZ * Math.PI * 4 + phase);

@@ -1752,6 +1752,12 @@ export interface StoryAnchor {
   travelSince: number;
   /** engine time of the last sidestep attempt (throttle) */
   sidestepAt: number;
+  /** §STORY-PLACE: authored map waypoints walked BEFORE the mark (never a
+   *  straight line through the forest) */
+  route?: { x: number; y: number }[];
+  routeIdx?: number;
+  /** px/s override while walking the route/mark */
+  speed?: number;
 }
 
 /** Stable rest seats inside a den: tucked into the WALKABLE mouth corridor
@@ -2430,7 +2436,7 @@ export class GameCanvas {
    *  own collision + sidestep machinery applies on the way. */
   setNpcStoryAnchor(
     npcId: string,
-    opts: { x: number; y: number; face?: StoryAnchor["face"]; pose?: CatPose; run?: boolean; arriveR?: number; label?: string; arrived?: boolean },
+    opts: { x: number; y: number; face?: StoryAnchor["face"]; pose?: CatPose; run?: boolean; arriveR?: number; label?: string; arrived?: boolean; route?: { x: number; y: number }[]; speed?: number },
   ) {
     const n = this.npcStates.find((s) => s.def.id === npcId);
     if (!n || n.gone) return;
@@ -2455,6 +2461,9 @@ export class GameCanvas {
       lastY: n.y,
       travelSince: this.time,
       sidestepAt: 0,
+      route: opts.route && opts.route.length > 0 ? opts.route.slice() : undefined,
+      routeIdx: 0,
+      speed: opts.speed,
     };
     n.ai = arrived ? "idle" : "wander";
     n.tx = opts.x;
@@ -2563,12 +2572,32 @@ export class GameCanvas {
   private stepNpcStoryAnchor(n: NPCState, dt: number) {
     const a = n.storyAnchor!;
     if (n.convoActive) return; // conversation direction wins while it lasts
-    const dx = a.x - n.x;
-    const dy = a.y - n.y;
+    // §STORY-PLACE: walk the authored route first. Waypoints are real trail /
+    // gorse-tunnel points, so the cat travels the same ground the player does.
+    let targetX = a.x;
+    let targetY = a.y;
+    if (a.route && a.route.length > 0) {
+      let idx = a.routeIdx ?? 0;
+      while (
+        idx < a.route.length &&
+        Math.hypot(a.route[idx].x - n.x, a.route[idx].y - n.y) <= a.arriveR
+      ) {
+        idx += 1;
+      }
+      a.routeIdx = idx;
+      if (idx < a.route.length) {
+        targetX = a.route[idx].x;
+        targetY = a.route[idx].y;
+      }
+    }
+    const dx = targetX - n.x;
+    const dy = targetY - n.y;
     const dist = Math.hypot(dx, dy);
+    /** the final mark, not a route waypoint */
+    const finalLeg = targetX === a.x && targetY === a.y;
 
     if (!a.arrived) {
-      if (dist <= a.arriveR) {
+      if (finalLeg && dist <= a.arriveR) {
         // ARRIVED: slow down, stop, face correctly, settle into the pose
         a.arrived = true;
         n.ai = "idle";
@@ -2581,7 +2610,7 @@ export class GameCanvas {
         return;
       }
       // TRAVELING on foot — collision-checked per axis, believable speed
-      const speed = a.run ? 96 : 60;
+      const speed = a.speed ?? (a.run ? 96 : 60);
       const step = Math.min(dist, speed * dt);
       const nx = n.x + (dx / dist) * step;
       const ny = n.y + (dy / dist) * step;
@@ -4060,11 +4089,15 @@ export class GameCanvas {
   private stepEscort(n: NPCState, dt: number) {
     const e = this.storyEscort!;
     const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
-    // hysteresis: wait when the player falls behind, resume when they catch up
-    if (!e.waiting && dPlayer > e.waitPx) e.waiting = true;
-    else if (e.waiting && dPlayer < e.resumePx) e.waiting = false;
     const wp = e.route[Math.min(e.leg, e.route.length - 1)];
     const dWp = Math.hypot(wp.x - n.x, wp.y - n.y);
+    // §SCENE: a player who is further along the route is NOT "falling behind" —
+    // the guide must keep walking (and hurry) for them instead of stopping and
+    // forcing them to backtrack.
+    const playerAhead = Math.hypot(wp.x - this.px, wp.y - this.py) < dWp - 40;
+    // hysteresis: wait when the player falls behind, resume when they catch up
+    if (!e.waiting && dPlayer > e.waitPx && !playerAhead) e.waiting = true;
+    else if (e.waiting && dPlayer < e.resumePx) e.waiting = false;
 
     if (e.waiting) {
       // stop, turn to the player and WAIT — never walk away from them
@@ -4084,7 +4117,7 @@ export class GameCanvas {
         this.emitEscortStatus(e, n, "arrived", dPlayer);
         return;
       }
-      if (dPlayer <= e.legGatePx) e.leg += 1;
+      if (dPlayer <= e.legGatePx || playerAhead) e.leg += 1;
       else {
         // hold this waypoint until the player is close enough to follow the
         // next leg — the journey is walked TOGETHER, never raced
@@ -4095,7 +4128,9 @@ export class GameCanvas {
       }
     }
     const nx = e.route[Math.min(e.leg, e.route.length - 1)];
-    this.npcWalkToward(n, nx.x, nx.y, e.speed, dt);
+    // hurry when the player has pulled ahead, so the guide is never left behind
+    const sp = dPlayer > e.waitPx ? e.speed * 1.5 : e.speed;
+    this.npcWalkToward(n, nx.x, nx.y, sp, dt);
     this.emitEscortStatus(e, n, "leading", dPlayer);
   }
 
@@ -4325,8 +4360,13 @@ export class GameCanvas {
 
   private resize = () => {
     const rect = this.canvas.getBoundingClientRect();
-    this.canvas.width = Math.max(1, Math.floor(rect.width * this.dpr));
-    this.canvas.height = Math.max(1, Math.floor(rect.height * this.dpr));
+    // §PERF: assigning canvas.width/height reallocates the backing store and
+    // clears the surface. resize() is called on every cinematic zoom frame, so
+    // doing it unconditionally reallocated a full-screen canvas ~60x per zoom.
+    const w = Math.max(1, Math.floor(rect.width * this.dpr));
+    const h = Math.max(1, Math.floor(rect.height * this.dpr));
+    if (this.canvas.width !== w) this.canvas.width = w;
+    if (this.canvas.height !== h) this.canvas.height = h;
     this.scale = this.userScale * (rect.width < 700 ? 0.85 : rect.width < 1100 ? 1.0 : 1.2) * this.cineZoom;
   };
 
@@ -6273,15 +6313,100 @@ export class GameCanvas {
     ctx.restore();
   }
 
+  // §PERF-GROUND: the terrain is STATIC (8px cells, thunderpath dashes, camp
+  // ring), so it is baked once per chunk into an offscreen canvas and blitted.
+  // Painting ~22,000 cells every frame was the single biggest draw cost in the
+  // game — and nothing in those cells changes except water.
+  private groundChunks = new Map<string, HTMLCanvasElement>();
+  private static readonly GROUND_CHUNK = 320; // world px per baked chunk
+  private static readonly GROUND_BAKE = 2; // baked px per world px (crispness)
+
   private drawGround(viewL: number, viewT: number, viewR: number, viewB: number) {
-    const { ctx } = this;
+    const c0 = Math.max(0, Math.floor(viewL / GROUND_CELL));
+    const r0 = Math.max(0, Math.floor(viewT / GROUND_CELL));
+    const c1 = Math.min(GROUND_COLS - 1, Math.ceil(viewR / GROUND_CELL));
+    const r1 = Math.min(GROUND_ROWS - 1, Math.ceil(viewB / GROUND_CELL));
+
+    if (!this.drawBakedGround(viewL, viewT, viewR, viewB)) {
+      // no offscreen canvas available (headless): paint live, as before
+      this.paintGround(this.ctx, viewL, viewT, viewR, viewB, true);
+    } else {
+      // only the moving water is painted on top of the baked terrain
+      this.drawWaterAnimation(c0, r0, c1, r1);
+    }
+    this.drawWetGround(viewL, viewT, viewR, viewB, c0, r0, c1, r1);
+  }
+
+  /** Blit the cached terrain chunks covering the view (LRU, bounded memory). */
+  private drawBakedGround(viewL: number, viewT: number, viewR: number, viewB: number): boolean {
+    if (typeof document === "undefined" || typeof document.createElement !== "function") return false;
+    const S = GameCanvas.GROUND_CHUNK;
+    const ctx = this.ctx;
+    const cx0 = Math.max(0, Math.floor(viewL / S));
+    const cy0 = Math.max(0, Math.floor(viewT / S));
+    const cx1 = Math.floor(viewR / S);
+    const cy1 = Math.floor(viewB / S);
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const px = cx * S;
+        const py = cy * S;
+        if (px >= WORLD_W || py >= WORLD_H) continue;
+        const key = `${cx},${cy}`;
+        let chunk = this.groundChunks.get(key);
+        if (chunk) {
+          // refresh LRU order
+          this.groundChunks.delete(key);
+          this.groundChunks.set(key, chunk);
+        } else {
+          const made = this.bakeGroundChunk(px, py);
+          if (!made) return false;
+          chunk = made;
+          this.groundChunks.set(key, chunk);
+          if (this.groundChunks.size > 24) {
+            const oldest = this.groundChunks.keys().next().value;
+            if (oldest !== undefined) this.groundChunks.delete(oldest);
+          }
+        }
+        ctx.drawImage(chunk, px, py, S, S);
+      }
+    }
+    return true;
+  }
+
+  /** Bake one static terrain chunk at GROUND_BAKE resolution. */
+  private bakeGroundChunk(x0: number, y0: number): HTMLCanvasElement | null {
+    const S = GameCanvas.GROUND_CHUNK;
+    const B = GameCanvas.GROUND_BAKE;
+    try {
+      const cv = document.createElement("canvas");
+      cv.width = S * B;
+      cv.height = S * B;
+      const g = cv.getContext("2d");
+      if (!g) return null;
+      g.setTransform(B, 0, 0, B, 0, 0);
+      g.translate(-x0, -y0);
+      this.paintGround(g, x0, y0, x0 + S, y0 + S, false);
+      return cv;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Static terrain: cells, thunderpath dashes, camp ring. */
+  private paintGround(
+    ctx: CanvasRenderingContext2D,
+    viewL: number,
+    viewT: number,
+    viewR: number,
+    viewB: number,
+    animateWater: boolean,
+  ) {
     const c0 = Math.max(0, Math.floor(viewL / GROUND_CELL));
     const r0 = Math.max(0, Math.floor(viewT / GROUND_CELL));
     const c1 = Math.min(GROUND_COLS - 1, Math.ceil(viewR / GROUND_CELL));
     const r1 = Math.min(GROUND_ROWS - 1, Math.ceil(viewB / GROUND_CELL));
 
     const waterWave = Math.sin(this.time * 1.6) * 0.06;
-    const shimmer = Math.sin(this.time * 2.1) * 0.04;
 
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
@@ -6295,14 +6420,17 @@ export class GameCanvas {
           const depth = hash2(c * 7, r * 3);
           ctx.fillStyle = depth > 0.6 ? "rgba(20, 60, 96, 0.35)" : "rgba(40, 90, 130, 0.22)";
           ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL, GROUND_CELL + 0.5, GROUND_CELL + 0.5);
-          const bandY = r * GROUND_CELL + ((Math.sin(this.time * 1.3 + c * 0.9 + r * 0.4) * 0.5 + 0.5) * GROUND_CELL);
-          ctx.fillStyle = `rgba(190, 225, 245, ${0.14 + shimmer})`;
-          ctx.fillRect(c * GROUND_CELL, bandY, GROUND_CELL + 0.5, 2);
-          // flow streaks: highlights drift consistently downstream (west->east)
-          const flow = ((this.time * 14 + c * GROUND_CELL) % 96) / 96;
-          ctx.fillStyle = "rgba(210, 236, 250, 0.13)";
-          ctx.fillRect(c * GROUND_CELL + flow * GROUND_CELL, r * GROUND_CELL + 3, 5, 1.4);
-          ctx.fillRect(c * GROUND_CELL + ((flow + 0.45) % 1) * GROUND_CELL, r * GROUND_CELL + GROUND_CELL - 5, 4, 1.2);
+          if (animateWater) {
+            // moving highlight ribbon
+            const bandY = r * GROUND_CELL + ((Math.sin(this.time * 1.3 + c * 0.9 + r * 0.4) * 0.5 + 0.5) * GROUND_CELL);
+            ctx.fillStyle = `rgba(190, 225, 245, ${0.14 + Math.sin(this.time * 2.1) * 0.04})`;
+            ctx.fillRect(c * GROUND_CELL, bandY, GROUND_CELL + 0.5, 2);
+            // flow streaks: highlights drift consistently downstream (west->east)
+            const flow = ((this.time * 14 + c * GROUND_CELL) % 96) / 96;
+            ctx.fillStyle = "rgba(210, 236, 250, 0.13)";
+            ctx.fillRect(c * GROUND_CELL + flow * GROUND_CELL, r * GROUND_CELL + 3, 5, 1.4);
+            ctx.fillRect(c * GROUND_CELL + ((flow + 0.45) % 1) * GROUND_CELL, r * GROUND_CELL + GROUND_CELL - 5, 4, 1.2);
+          }
           // shoreline: soft sand lip + shallow rim where water meets land
           const above = groundMap[(r - 1) * GROUND_COLS + c] !== undefined ? groundMap[(r - 1) * GROUND_COLS + c] : 0;
           const below = groundMap[(r + 1) * GROUND_COLS + c] !== undefined ? groundMap[(r + 1) * GROUND_COLS + c] : 0;
@@ -6318,10 +6446,11 @@ export class GameCanvas {
             ctx.fillStyle = "rgba(226, 240, 248, 0.3)";
             ctx.fillRect(c * GROUND_CELL, r * GROUND_CELL + GROUND_CELL - 3.6, GROUND_CELL + 0.5, 1.2);
           }
-          // sparkle
-          if (h > 0.93) {
+          // sparkle (live only — a baked chunk would freeze the twinkle)
+          if (animateWater && h > 0.93) {
+            const sparkY = r * GROUND_CELL + ((Math.sin(this.time * 1.3 + c * 0.9 + r * 0.4) * 0.5 + 0.5) * GROUND_CELL);
             ctx.fillStyle = "rgba(235, 248, 255, 0.5)";
-            ctx.fillRect(c * GROUND_CELL + 10, bandY - 6, 3, 1.5);
+            ctx.fillRect(c * GROUND_CELL + 10, sparkY - 6, 3, 1.5);
           }
         }
       }
@@ -6343,7 +6472,41 @@ export class GameCanvas {
     ctx.arc(CAMP_CENTER.x, CAMP_CENTER.y, CAMP_RADIUS - 6, 0, Math.PI * 2);
     ctx.stroke();
 
-    // --- wet ground after/during rain: darker tint + puddles on flat kinds ---
+  }
+
+  /** Live animated water ribbons, painted over the baked terrain. */
+  private drawWaterAnimation(c0: number, r0: number, c1: number, r1: number) {
+    const ctx = this.ctx;
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        if (groundMap[r * GROUND_COLS + c] !== 2) continue;
+        const bandY = r * GROUND_CELL + ((Math.sin(this.time * 1.3 + c * 0.9 + r * 0.4) * 0.5 + 0.5) * GROUND_CELL);
+        ctx.fillStyle = `rgba(190, 225, 245, ${0.14 + Math.sin(this.time * 2.1) * 0.04})`;
+        ctx.fillRect(c * GROUND_CELL, bandY, GROUND_CELL + 0.5, 2);
+        const flow = ((this.time * 14 + c * GROUND_CELL) % 96) / 96;
+        ctx.fillStyle = "rgba(210, 236, 250, 0.13)";
+        ctx.fillRect(c * GROUND_CELL + flow * GROUND_CELL, r * GROUND_CELL + 3, 5, 1.4);
+        ctx.fillRect(c * GROUND_CELL + ((flow + 0.45) % 1) * GROUND_CELL, r * GROUND_CELL + GROUND_CELL - 5, 4, 1.2);
+        if (hash2(c, r) > 0.93) {
+          ctx.fillStyle = "rgba(235, 248, 255, 0.5)";
+          ctx.fillRect(c * GROUND_CELL + 10, bandY - 6, 3, 1.5);
+        }
+      }
+    }
+  }
+
+  /** --- wet ground after/during rain: darker tint + puddles on flat kinds --- */
+  private drawWetGround(
+    viewL: number,
+    viewT: number,
+    viewR: number,
+    viewB: number,
+    c0: number,
+    r0: number,
+    c1: number,
+    r1: number,
+  ) {
+    const ctx = this.ctx;
     if (this.env.rain > 0.05 || this.env.fog > 0.6) {
       const wet = Math.min(1, this.env.rain * 1.3);
       for (let r = r0; r <= r1; r++) {

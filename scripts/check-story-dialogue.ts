@@ -412,8 +412,12 @@ check(
   "the generic dialogue panel cannot stack over the story box",
 );
 check(
-  game.includes("if (!cancelled) setCineBeat(beat);"),
+  game.includes("canStartBeat({") && game.includes("actorArrived: (id) => g?.getNpcStoryInfo(id)?.arrived ?? true"),
   "step beats still start only after their cast arrives",
+);
+check(
+  game.includes("const ready = canStartBeat({") && game.includes("player: posRef.current"),
+  "step beats start only where the scene really happens",
 );
 check(
   player.includes("StoryDialogueBox") && (player.match(/<StoryDialogueBox/g) ?? []).length === 1,

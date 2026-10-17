@@ -196,9 +196,73 @@ Mechanics that keep it to one box:
 5. Choices render inside the same box; closing restores control, the camera and
    the normal Story Mode HUD.
 
-Suite: `bun scripts/check-story-dialogue.ts` (40 checks: the composed script,
+Suite: `bun scripts/check-story-dialogue.ts` (43 checks: the composed script,
 the real box updating in place, the real story player never exceeding one box,
 E advancing, choices inside the box, close-on-end, and the wiring gates).
+
+## Story Mode scenes play where the story happens
+
+`src/game/storyStaging.ts` is the single source of truth for WHERE a story
+scene takes place. `stepScenePoint(stepId)` returns the step's real staged
+scene (a map landmark + radius); a beat is only allowed to start once the
+player is inside that radius + a 260px camera margin. A travel montage with no
+scene of its own (`s2-into-forest`) plays wherever the player stands.
+
+Consequences (all verified):
+
+1. The camp arrival scene cannot start while the player is still at the forest
+   edge. Before this gate the beat fired on step change, so the camera panned
+   across the whole map from the pine trail to the Tallrock.
+2. The Graypaw ambush is staged on the real pine trail in Tallpines
+   (`STORY_LOCATIONS["forest-edge"]`, 5+ tiles outside the camp wall) — not on
+   the gorse-tunnel doorstep. He walks there from camp along an authored route
+   (`STORY_TRAVEL["s2-into-forest"]`) around the dens and down the tunnel, so
+   he is already waiting when Rusty arrives.
+3. Graypaw then **leads** Rusty to camp through the engine's escort system
+   (`setStoryEscort`, `STORY_ESCORTS["s4-the-camp"]`): he walks the authored
+   tunnel route, waits if the player falls behind, hurries if the player is
+   ahead, and holds at the camp edge. The camp objective will not complete
+   until the escort has arrived, so the arrival cutscene always plays with him
+   present, inside the camp they actually walked into.
+4. The opening shot of a scene beat frames the scene point (`frameAt`), not the
+   player's exact spot; authored `openOn` still wins when a beat names its own
+   framing.
+5. Staging is deferred while a dialogue box owns the screen: a step that
+   advances mid-conversation stages its cast (and starts its escort) when the
+   box closes, never yanking a cat away from the player mid-line.
+
+Suite: `bun scripts/check-story-place.ts` (93 checks: the encounter's real
+location, every beat's gate point, walkable/continuous routes, end-to-end
+reachability of every scene, live engine walks without teleports, the escort
+arriving inside camp, planted-paw physics, and the ground-cache/minimap perf
+guards).
+
+## Leg rendering (the gait contract)
+
+`gaitLegs` produces a true four-leg cycle whose stance paws are **planted in
+world space**: fore/aft reach is `STRIDE_PX / 2`, exactly the body's advance
+over one stance, so a foot does not skate. Paw tops sit on the ground line
+(`y = -PAW_H`), a swinging paw lifts visibly, and `drawCat` adds the body bob
+back to planted paws (the whole cat is translated by `-bob`) so feet stay
+welded to the floor while the shoulders rise and fall.
+
+`CatAnimator` always supplies four legs for a walking cat — even at blend 0 —
+so the renderer's old time-based fallback can no longer cycle the legs of a
+cat standing still, and stopping blends the stride out over ~0.3s instead of
+snapping the legs away.
+
+## Frame cost
+
+- **Terrain is baked.** `drawGround` blits 320px chunks (2x baked) and only
+  paints animated water live. Painting ~22,000 8px cells per frame was the
+  single biggest draw cost in the game.
+- **The minimap no longer re-renders the game from inside render.**
+  `WorldMapCanvas` used to schedule `setLensX/setLensY` in a `queueMicrotask`
+  whenever the lens had not converged, which re-rendered the entire Game tree
+  dozens of times per movement tick.
+- `resize()` only reassigns `canvas.width/height` when the size actually
+  changed (assigning them reallocates and clears the backing store, and zoom
+  calls resize every frame).
 
 ## Stale-chunk recovery (why the game can die after a deploy)
 A tab keeps the shell it booted from. When a new build replaces

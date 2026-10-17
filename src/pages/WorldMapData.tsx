@@ -128,24 +128,17 @@ export function WorldMapCanvas({
   lens?: boolean;
   className?: string;
 }) {
-  const [lensX, setLensX] = useState(px / 32);
-  const [lensY, setLensY] = useState(py / 32);
-  // ease the lens toward the player each render — frame-rate independent
-  // (caller re-renders at ~10Hz while moving; the ease is stable either way)
+  // §PERF: the lens follows the player's ALREADY-SMILED position; there is no
+  // second easing loop in React state. That loop used to schedule a microtask
+  // state update from inside render, which re-rendered the whole game tree at
+  // microtask speed — dozens of full-map rebuilds per movement tick and the
+  // main cause of the game feeling "super laggy". The caller re-renders at
+  // ~5Hz while moving, and one tile is only ~0.5 minimap px, so the arrow and
+  // the lens stay visually continuous without it.
   const targetX = px / 32;
   const targetY = py / 32;
-  const k = 0.22;
-  const nextX = lensX + (targetX - lensX) * k;
-  const nextY = lensY + (targetY - lensY) * k;
-  if (Math.abs(nextX - lensX) > 0.01 || Math.abs(nextY - lensY) > 0.01) {
-    // schedule, don't render-loop
-    queueMicrotask(() => {
-      setLensX(nextX);
-      setLensY(nextY);
-    });
-  }
-  const lx = Math.max(0, Math.min(240, nextX));
-  const ly = Math.max(0, Math.min(220, nextY));
+  const lx = Math.max(0, Math.min(240, targetX));
+  const ly = Math.max(0, Math.min(220, targetY));
 
   // All coordinates are tiles of the real 240x220 world.
   const tx = (v: number) => (v / 240) * size;
