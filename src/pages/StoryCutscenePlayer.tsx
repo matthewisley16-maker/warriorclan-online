@@ -18,8 +18,7 @@ import { beatCameraSteps, type StoryBeat, type CineLine, type CineChoice } from 
 import type { VocalEmotion } from "@/game/vocal";
 import { pickVocal, emotionForLine } from "@/game/vocal";
 import { audio } from "@/game/audio";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { StoryDialogueBox } from "./StoryDialogueBox";
 
 interface Props {
   beat: StoryBeat | null;
@@ -132,6 +131,9 @@ export function StoryCutscenePlayer({ beat, game, onDone }: Props) {
     const hold = line.holdMs ?? 2800;
     const t = window.setTimeout(() => setPhase({ kind: "lines", idx: phase.idx + 1 }), hold);
     timers.current.push(t);
+    // §36: a manual advance (E / click) cancels this line's read timer, so the
+    // stale timer can never fire later and swallow the NEXT line.
+    return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, beat?.id]);
 
@@ -169,11 +171,28 @@ export function StoryCutscenePlayer({ beat, game, onDone }: Props) {
     [actLine, finish, voiceLine],
   );
 
-  // Skim protection: clicking the caption advances long lines early (§36 —
-  // never traps the player in a cutscene).
+  // Skim protection: clicking the box (or pressing E) advances a long line
+  // early (§36 — never traps the player in a cutscene). Choices must be
+  // answered, so the box ignores advance input while they are pending.
   const advance = useCallback(() => {
     if (phase.kind === "lines") setPhase({ kind: "lines", idx: phase.idx + 1 });
   }, [phase]);
+
+  // §6/§7: E is the game's dialogue key everywhere else — it must advance this
+  // SAME box here, not open a second dialogue interface underneath the beat.
+  useEffect(() => {
+    if (!beat) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      if (event.key === "e" || event.key === "E" || event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        advance();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [advance, beat]);
 
   useEffect(() => () => audio().setDucked(false), []);
 
@@ -204,43 +223,22 @@ export function StoryCutscenePlayer({ beat, game, onDone }: Props) {
           className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 to-black/40"
         />
 
-        {/* caption + speaker (§13: written dialogue is the primary channel) */}
-        <AnimatePresence mode="wait">
-          {caption && (
-            <motion.div
-              key={`${caption.speakerId}:${caption.text.slice(0, 24)}:${phase.kind === "lines" ? phase.idx : "x"}`}
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.35 }}
-              className="pointer-events-auto absolute inset-x-4 bottom-14 z-20 mx-auto max-w-2xl"
-              onClick={advance}
-            >
-              <div className="rounded-2xl border border-amber-200/20 bg-[#0d160d]/90 p-4 shadow-2xl shadow-black/50 backdrop-blur-md">
-                <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-300">{caption.speaker}</p>
-                <p className="mt-1.5 text-sm leading-relaxed text-white/95">{caption.text}</p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* §7: dialogue choices */}
-        {phase.kind === "choices" && beat.choices && (
-          <div className="pointer-events-auto absolute inset-x-4 bottom-14 z-30 mx-auto max-w-xl space-y-2">
-            <p className="text-center text-[10px] font-bold uppercase tracking-[0.3em] text-white/60">How do you answer?</p>
-            {beat.choices.map((c) => (
-              <Button
-                key={c.label}
-                variant="outline"
-                size="sm"
-                className="w-full rounded-xl border-amber-200/25 bg-[#0d160d]/90 text-left text-xs text-white hover:bg-white/10"
-                onClick={() => choose(c)}
-              >
-                {c.label}
-              </Button>
-            ))}
-          </div>
-        )}
+        {/* §13: written dialogue is the primary channel — ONE shared box for
+            every speaker in the beat, and the answer buttons live inside it
+            so the choice UI can never stack on top of the line. */}
+        <StoryDialogueBox
+          line={caption}
+          lineKey={`${caption?.speakerId ?? ""}:${caption?.text.slice(0, 24) ?? ""}:${
+            phase.kind === "lines" ? phase.idx : "x"
+          }`}
+          onAdvance={advance}
+          hint={phase.kind === "lines" ? "E / click to continue" : undefined}
+          choices={
+            phase.kind === "choices" && beat.choices
+              ? beat.choices.map((c) => ({ label: c.label, onPick: () => choose(c) }))
+              : undefined
+          }
+        />
       </motion.div>
     </AnimatePresence>
   );

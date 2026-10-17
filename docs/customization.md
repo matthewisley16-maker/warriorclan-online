@@ -165,6 +165,41 @@ grep -c "previous cat is safe"            isolate/assets/Game-*.js        # 0 (p
 Behavioural check of the real button (real DOM, real component):
 `bun scripts/check-save-ui.ts`.
 
+## Story Mode has exactly one dialogue box
+`src/pages/StoryDialogueBox.tsx` is the single surface for Story Mode speech.
+The box is ONE persistent node: a new speaker turn re-animates only its keyed
+content, and a closed line unmounts it immediately (no exit animation can pin a
+panel over the world).
+
+Invariant — in Story Mode, only one of these may be on screen, and the shared
+box is the only one that is:
+
+| Source | Renders where |
+|---|---|
+| Cinematic beat lines (`STORY_BEATS`, `STORY_INTRO`) | shared box (`StoryCutscenePlayer`) |
+| E-talk with a cat (narrator → cat → step resolution) | shared box (`composeStoryTalk`) |
+| Step completion narration (`advanceStory` in story mode) | shared box (queued beat) |
+| Generic `dialogue` panel (rooms, hunting, respawn) | hidden while a beat owns the screen |
+| Online `npcConvo` panel | never in Story Mode (`mode !== "story"` gate) |
+
+Mechanics that keep it to one box:
+
+1. `setCineBeat` plays one beat at a time — a beat requested while another owns
+   the screen waits its turn (`pendingBeatRef`) instead of cutting it off.
+2. E is ignored by `handleInteract` while `cineBeatRef` is set; it advances the
+   box instead. The story player also binds E/Enter/Space.
+3. A manual advance cancels the current line's read timer, so a stale timer can
+   never rewind or skip a turn.
+4. `composeStoryTalk` authors the exchange as data: narrator (scene brief) →
+   the cat's opening line → the step's `onComplete` lines. Talking to a
+   bystander omits the mission narration.
+5. Choices render inside the same box; closing restores control, the camera and
+   the normal Story Mode HUD.
+
+Suite: `bun scripts/check-story-dialogue.ts` (40 checks: the composed script,
+the real box updating in place, the real story player never exceeding one box,
+E advancing, choices inside the box, close-on-end, and the wiring gates).
+
 ## Stale-chunk recovery (why the game can die after a deploy)
 A tab keeps the shell it booted from. When a new build replaces
 `assets/Game-<hash>.js`, that tab's next client-side navigation asks for a file

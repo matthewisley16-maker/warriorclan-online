@@ -51,7 +51,13 @@ import {
 } from "@/game/npcChat";
 import { NPC_SYNC_INTERVAL_MS, NPC_SYNC_WORLD } from "@/game/npcSync";
 // §2/§3/§13: cinematic story layer — beats, choices, per-character meow voices
-import { STORY_INTRO, STORY_BEATS, type StoryBeat } from "@/game/storyCinematics";
+import {
+  STORY_INTRO,
+  STORY_BEATS,
+  composeStoryTalk,
+  lineReadMs,
+  type StoryBeat,
+} from "@/game/storyCinematics";
 import { beatActorIds, resolveStaging } from "@/game/storyStaging";
 import { resolveStoryWaypoint } from "@/game/storyWaypoint";
 import { pendingIntros, unlockedMeters, type SurvivalUnlock } from "@/game/storyUnlocks";
@@ -217,7 +223,14 @@ export default function Game() {
   // --- dedicated player↔NPC conversation state (separate from chatter) ---
   const [npcConvo, setNpcConvo] = useState<NpcConvo | null>(null);
   // §3/§5: active cutscene beat (letterboxed cinematic over the living world)
-  const [cineBeat, setCineBeat] = useState<StoryBeat | null>(null);
+  const [cineBeat, setCineBeatState] = useState<StoryBeat | null>(null);
+  /** §STORY-ONE-BOX: the one beat the shared dialogue box is showing right now. */
+  const cineBeatRef = useRef<StoryBeat | null>(null);
+  /** a beat requested while another owns the screen — played when it closes */
+  const pendingBeatRef = useRef<StoryBeat | null>(null);
+  /** id source so a repeated talk still counts as a new beat */
+  const beatSeqRef = useRef(0);
+  cineBeatRef.current = cineBeat;
   /** story steps whose intro beat already played this session (no replays) */
   const beatPlayedRef = useRef<Set<string>>(new Set());
   /** sub-view of the compact interaction panel: root choices / ask menu / chat */
@@ -1398,6 +1411,9 @@ export default function Game() {
    * already talking with that cat). Assigned after voiceNpcLine is defined.
    */
   const startNpcConvoRef = useRef<(npcId: string) => void>(() => undefined);
+  /** §STORY-ONE-BOX: Story Mode's talk opener (shared dialogue box, not the
+   *  online conversation panel). Assigned once the story helpers exist. */
+  const startStoryTalkRef = useRef<(npcId: string) => void>(() => undefined);
 
   const handleInteract = useCallback(
     (target: NearbyTarget) => {
@@ -1407,6 +1423,15 @@ export default function Game() {
       // NPC conversations: E opens a real conversation — the NPC pauses its
       // AI, faces the player, and stays put until the conversation ends.
       if (target.kind === "npc") {
+        // §STORY-ONE-BOX: while the shared story box is on screen, E belongs to
+        // it (the cutscene player advances the current line). Opening a second
+        // dialogue here is exactly what stacked the narrator/cat panels.
+        if (cineBeatRef.current) return;
+        // §STORY-ONE-BOX: Story Mode speaks through the ONE shared box.
+        if (mode === "story") {
+          if (target.npcId) startStoryTalkRef.current(target.npcId);
+          return;
+        }
         const npc = npcs.find((n) => n.id === target.npcId);
         if (!npc) return;
         if (npcConvoRef.current && npcConvoRef.current.npcId === npc.id) {
@@ -1811,21 +1836,142 @@ export default function Game() {
   /** last known OUTDOOR world position — what presence broadcasts */
   const outdoorRef = useRef({ x: 0, y: 0 });
 
-  const advanceStory = useCallback(() => {
-    const step = storySteps[storyStepRef.current];
-    if (!step) return;
-    audio().playSfx("quest_done", { throttleMs: 1000 }); // milestone cue
-    if (step.onComplete?.length) {
-      const line = step.onComplete[0];
-      setDialogue({ name: line.speaker, text: line.text });
+  /** §STORY-ONE-BOX: what a finished step says, and who says it, as data —
+   *  so the SAME lines can be handed to the shared box, alone or as the tail of
+   *  a conversation, instead of being pushed into a second panel. */
+  /**
+   * §STORY-ONE-BOX: one beat at a time. A beat requested while another is on
+   * screen waits its turn instead of replacing (and cutting off) the live
+   * conversation — the shared box never shows two scenes or vanishes early.
+   */
+  const setCineBeat = useCallback((beat: StoryBeat | null) => {
+    if (beat) {
+      const current = cineBeatRef.current;
+      if (current) {
+        if (current.id !== beat.id) pendingBeatRef.current = beat;
+        return;
+      }
+      beatSeqRef.current += 1;
+      cineBeatRef.current = beat;
+      setCineBeatState(beat);
+      return;
     }
+    cineBeatRef.current = null;
+    setCineBeatState(null);
+  }, []);
+
+  /** Close the live beat; the shared box then plays whatever was queued. */
+  const finishCineBeat = useCallback(() => {
+    const next = pendingBeatRef.current;
+    pendingBeatRef.current = null;
+    cineBeatRef.current = next;
+    setCineBeatState(next);
+  }, []);
+
+  const completeStoryStep = useCallback((): { speaker: string; text: string }[] => {
+    const step = storySteps[storyStepRef.current];
+    if (!step) return [];
+    audio().playSfx("quest_done", { throttleMs: 1000 }); // milestone cue
+    const lines = (step.onComplete ?? []).map((l) => ({ speaker: l.speaker, text: l.text }));
     setStoryStepLocal((s) => {
       const next = s + 1;
       setStoryStep({ step: next }).catch(() => undefined);
       addXp({ amount: 20 }).catch(() => undefined);
       return next;
     });
+    return lines;
   }, [setStoryStep, addXp]);
+
+  /** voice profile id for an authored speaker name ("Narrator", "Graypaw", …) */
+  const speakerIdFor = useCallback((speaker: string): string => {
+    if (speaker === "Narrator") return "narrator";
+    if (speaker === "You") return "player";
+    return npcs.find((n) => n.name === speaker)?.id ?? "narrator";
+  }, []);
+
+  /** read-time pacing for a line: long enough to read, never a trap (§36) */
+  const readMs = lineReadMs;
+
+  const advanceStory = useCallback(() => {
+    const lines = completeStoryStep();
+    if (!lines.length) return;
+    if (mode === "story") {
+      // §STORY-ONE-BOX: Story Mode narration plays in the shared dialogue box
+      // (the same component the NPC conversation uses), never the generic
+      // dialogue panel — a completion line can no longer linger over the world
+      // and stack with the next conversation.
+      beatSeqRef.current += 1;
+      setCineBeat({
+        id: `complete:${storyStepRef.current}:${beatSeqRef.current}`,
+        lines: lines.map((l) => ({
+          speaker: l.speaker,
+          speakerId: speakerIdFor(l.speaker),
+          text: l.text,
+          holdMs: readMs(l.text),
+        })),
+      });
+      return;
+    }
+    setDialogue({ name: lines[0].speaker, text: lines[0].text });
+  }, [completeStoryStep, mode, speakerIdFor, readMs]);
+
+  /** §STORY-ONE-BOX: the cat whose conversation the shared box is holding
+   *  (kept facing the player, AI held, until the box closes). */
+  const storyTalkNpcRef = useRef<string | null>(null);
+  const releaseStoryTalk = useCallback(() => {
+    const id = storyTalkNpcRef.current;
+    if (!id) return;
+    storyTalkNpcRef.current = null;
+    gameRef.current?.setNpcConversation(id, false);
+  }, []);
+
+  /**
+   * §STORY-ONE-BOX: Story Mode's E-interaction.
+   *
+   * Narrator + cat take turns in the ONE shared box: the scene's narration
+   * opens the exchange, the cat answers in their own voice, and the step's
+   * resolution (the cat or the narrator) closes it. No conversation panel, no
+   * generic dialogue panel, no second copy of the line. Story only — Online
+   * World keeps the full conversation panel below.
+   */
+  startStoryTalkRef.current = (npcId: string) => {
+    const npc = npcs.find((n) => n.id === npcId);
+    if (!npc) return;
+    if (storyTalkNpcRef.current) releaseStoryTalk();
+
+    const step = storySteps[storyStepRef.current];
+    const opening = buildDialogue(npcId, dialogueCtx()).opening;
+    const isObjective = Boolean(
+      step && step.objective.kind === "talk" && step.objective.targetNpc === npcId,
+    );
+    // advance the timeline ONCE, and keep its lines for this same box
+    const completion = isObjective ? completeStoryStep() : [];
+
+    // the cat faces the player and holds while the box is open
+    gameRef.current?.setNpcConversation(npc.id, true);
+    storyTalkNpcRef.current = npc.id;
+    audio().playMew("talk");
+    const nextTalked = { ...talkedRef.current, [npc.id]: (talkedRef.current[npc.id] ?? 0) + 1 };
+    talkedRef.current = nextTalked;
+    setTalked(nextTalked);
+    persistNpcMemory(npc.id);
+    reportDailyRef.current("social"); // chatting with Clanmates counts (§8)
+
+    // ONE script: narrator (scene) → cat (their voice) → resolution. The scene's
+    // narration opens the OBJECTIVE conversation; talking to a bystander must
+    // not replay another cat's mission text.
+    const talk = composeStoryTalk({
+      npc: { id: npc.id, name: npc.name },
+      opening,
+      brief: isObjective ? step?.brief : undefined,
+      completion,
+      speakerIdFor,
+      readMs,
+    });
+
+    beatSeqRef.current += 1;
+    setCineBeat({ ...talk, id: `${talk.id}:${storyStepRef.current}:${beatSeqRef.current}` });
+  };
 
   // story timeline moved: the engine despawns/respawns cats whose windows changed
   useEffect(() => {
@@ -2294,7 +2440,10 @@ export default function Game() {
         <StoryCutscenePlayer
           beat={cineBeat}
           game={gameRef.current}
-          onDone={() => setCineBeat(null)}
+          onDone={() => {
+            releaseStoryTalk();
+            finishCineBeat();
+          }}
         />
       )}
 
@@ -2524,7 +2673,7 @@ export default function Game() {
 
       {/* Nearby prompt */}
       <AnimatePresence>
-        {nearby && !dialogue && !npcConvo && (
+        {nearby && !dialogue && !npcConvo && !cineBeat && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -2544,9 +2693,10 @@ export default function Game() {
         )}
       </AnimatePresence>
 
-      {/* Dialogue */}
+      {/* Generic dialogue. §STORY-ONE-BOX: never while the shared story box
+          owns the screen — Story Mode speaks through that box only. */}
       <AnimatePresence>
-        {dialogue && (
+        {dialogue && !(mode === "story" && cineBeat) && (
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
@@ -2578,8 +2728,11 @@ export default function Game() {
       {/* Conversation — player↔NPC: compact, E-advances, choices matter.
           Clearly different from the generic dialogue panel and from NPC↔NPC
           world bubbles. Clicking the panel advances when no choices pend. */}
+      {/* §STORY-ONE-BOX: the online conversation panel is never used in Story
+          Mode — a story talk runs through the shared box instead, so the two
+          can never be on screen together. */}
       <AnimatePresence>
-        {npcConvo && (
+        {npcConvo && mode !== "story" && (
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}

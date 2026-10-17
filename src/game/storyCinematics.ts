@@ -275,6 +275,64 @@ export const STORY_BEATS: Record<string, StoryBeat> = {
   },
 };
 
+/** §STORY-ONE-BOX: read-time pacing for a line — long enough to read, short
+ *  enough that the player is never trapped (§36). */
+export function lineReadMs(text: string): number {
+  return Math.min(9000, Math.max(2200, 1900 + text.length * 45));
+}
+
+/**
+ * §STORY-ONE-BOX: the script for an E-interaction in Story Mode.
+ *
+ * A story talk is ONE authored exchange, played by ONE dialogue box: the
+ * scene's narration opens it, the cat answers in their own voice, and the
+ * step's resolution (the cat or the narrator) closes it. Building the lines as
+ * data keeps the narrator turn and the character turn in the same sequence —
+ * there is no second panel and nothing to stack.
+ */
+export function composeStoryTalk(opts: {
+  npc: { id: string; name: string };
+  /** in-character opening from the dialogue engine */
+  opening: string;
+  /** scene narration; omitted when the player talks to a bystander */
+  brief?: string;
+  /** the step's onComplete lines (already resolved) */
+  completion?: { speaker: string; text: string }[];
+  /** name → vocal profile id (defaults are enough for tests/narrator) */
+  speakerIdFor?: (speaker: string) => string;
+  readMs?: (text: string) => number;
+}): StoryBeat {
+  const speakerIdFor =
+    opts.speakerIdFor ??
+    ((speaker: string) =>
+      speaker === "Narrator" ? "narrator" : speaker === "You" ? "player" : speaker.toLowerCase());
+  const readMs = opts.readMs ?? lineReadMs;
+
+  const lines: CineLine[] = [];
+  const lead = opts.brief?.trim();
+  if (lead) {
+    lines.push({ speaker: "Narrator", speakerId: "narrator", text: lead, holdMs: readMs(lead) });
+  }
+  lines.push({
+    speaker: opts.npc.name,
+    speakerId: opts.npc.id,
+    text: opts.opening,
+    holdMs: readMs(opts.opening),
+    act: { npcId: opts.npc.id, lookAt: "player" },
+    cam: { npcId: opts.npc.id },
+    zoom: 1.15,
+  });
+  for (const l of opts.completion ?? []) {
+    lines.push({
+      speaker: l.speaker,
+      speakerId: speakerIdFor(l.speaker),
+      text: l.text,
+      holdMs: readMs(l.text),
+    });
+  }
+  return { id: `talk:${opts.npc.id}`, lines };
+}
+
 /** §3: camera choreography derived from a beat's lines (pan → focus → zoom). */
 export function beatCameraSteps(beat: StoryBeat, npcPos: (id: string) => { x: number; y: number } | null, playerPos: { x: number; y: number }): CineStep[] {
   const steps: CineStep[] = [];
