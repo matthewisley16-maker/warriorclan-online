@@ -6579,7 +6579,6 @@ export class GameCanvas {
 
   }
 
-  /** Live animated water ribbons, painted over the baked terrain. */
   /**
    * §PERF-WATER: the moving water surface.
    *
@@ -6692,10 +6691,15 @@ export class GameCanvas {
       bg.clearRect(0, 0, B.width, B.height);
       bg.fillStyle = "rgba(210, 236, 250, 0.13)";
       const shift = (this.time * 14) % (FLOW_COLS * CS);
+      const W = FLOW_COLS * CS;
       for (let c = 0; c < FLOW_COLS; c++) {
-        const x = (c * CS + shift) % (FLOW_COLS * CS);
+        const x = (c * CS + shift) % W;
+        // drawn twice so a dash straddling the tile seam is not cut in half
         bg.fillRect(x, 3, 5, 1.4);
-        bg.fillRect((x + 3.6) % (FLOW_COLS * CS), 3, 4, 1.2);
+        bg.fillRect(x - W, 3, 5, 1.4);
+        const x2 = (x + 3.6) % W;
+        bg.fillRect(x2, 3, 4, 1.2);
+        bg.fillRect(x2 - W, 3, 4, 1.2);
       }
       const band = this.ctx.createPattern(A, "repeat");
       const flow = this.ctx.createPattern(B, "repeat");
@@ -6969,8 +6973,8 @@ export class GameCanvas {
       switch (f.kind) {
         case "tuft": push(light); break; // 0..1
         case "fern": push(2 + light); break; // 2..3
-        case "flower": push(4 + (f.tint > 0.5 ? 2 : f.tint > 0.25 ? 1 : 0)); break; // 4 stem + 5..7 heads
-        case "mushroom": push(8 + light); break; // 8 stem + 9..10 caps
+        case "flower": push(4 + (f.tint > 0.5 ? 2 : f.tint > 0.25 ? 1 : 0)); break; // one bucket per bloom colour (stem + head)
+        case "mushroom": push(8 + light); break; // 8..9 (stem + cap, by tint)
         case "leaves": push(11 + light); break; // 11..12
         case "stones": push(13); break; // 13 base (+14 highlight, +15 moss below)
         default: lush.push({ kind: f.kind, x: f.x, y: f.y, tint: f.tint, s }); break; // roots / log
@@ -7033,14 +7037,13 @@ export class GameCanvas {
       ctx.beginPath();
       if (bucketPath(4 + k, (x, y, _tint, _s, sway) => ctx.arc(x + sway, y - 10, 2.4, 0, Math.PI * 2))) ctx.fill();
     }
-    // --- mushrooms: stem + cap ---
+    // --- mushrooms: stem (every mushroom) + cap (by colour) ---
     ctx.fillStyle = "#e8e0d0";
     ctx.beginPath();
-    for (const b of [8, 9, 10]) {
-      bucketPath(b, (x, y, _tint, s) => ctx.rect(x - 1 * s, y - 4 * s, 2 * s, 4 * s));
-    }
-    ctx.fill();
-    for (const [b, style] of [[9, "#c98a5a"], [10, "#b5654a"]] as [number, string][]) {
+    const stemA = bucketPath(8, (x, y, _tint, s) => ctx.rect(x - 1 * s, y - 4 * s, 2 * s, 4 * s));
+    const stemB = bucketPath(9, (x, y, _tint, s) => ctx.rect(x - 1 * s, y - 4 * s, 2 * s, 4 * s));
+    if (stemA || stemB) ctx.fill();
+    for (const [b, style] of [[8, "#c98a5a"], [9, "#b5654a"]] as [number, string][]) {
       ctx.fillStyle = style;
       ctx.beginPath();
       if (bucketPath(b, (x, y, _tint, s) => ctx.ellipse(x, y - 4.5 * s, 2.6 * s, 1.7 * s, 0, Math.PI, 0))) ctx.fill();

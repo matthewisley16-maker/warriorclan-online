@@ -251,18 +251,74 @@ so the renderer's old time-based fallback can no longer cycle the legs of a
 cat standing still, and stopping blends the stride out over ~0.3s instead of
 snapping the legs away.
 
+Rules the animator now enforces (each one is a bug that was visible in play):
+
+- **A movement gait only expresses while the cat really travels**
+  (`travelled > 0.01px`). Holding a walk/crouch pose while blocked or idle
+  settles the stride instead of holding a frozen mid-step forever.
+- **The crouch/stalk slide animates.** `drawCat` uses the gait legs for
+  `crouch`/`stalk` while the cat is travelling (it used to fall through to the
+  static two-paw stance and ground-skate), and falls back to the original
+  crouch stance art once the stride has settled.
+- **The settle is time-based** (`SETTLE_SECONDS`), not per-frame: 30fps and
+  144fps finish a stop at the same speed. Stride *phase* is always driven by
+  travelled distance, never by a timer.
+- **A teleport is not travel** (`TELEPORT_PX`): interior transitions, story
+  placement and network corrections are not fed to the gait, so legs cannot
+  sprint through a stride.
+- **Turns never snap.** `easeFacing` always moves *toward* the target, so
+  reversing mid-turn no longer pops the sprite from a lean to full side-on.
+- **Tail smoothing survives a clock reset** (forward or backward) by
+  re-seeding its shape instead of interpolating across the discontinuity.
+
 ## Frame cost
+
+Measured with a recording 2D context (draw calls per frame, 1600×900 CSS at
+DPR 2 — the stub context can count calls but not time the browser rasterizer):
+
+| view | before | after |
+| --- | --- | --- |
+| river | 19,838 ops (11,873 `fillRect`) | 6,337 ops (494 `fillRect`) |
+| deep forest | 11,590 | 6,500 |
+| camp | 6,820 | 5,662 |
+| moor | 6,249 | 4,426 |
+| twolegplace | 5,741 | 4,454 |
 
 - **Terrain is baked.** `drawGround` blits 320px chunks (2x baked) and only
   paints animated water live. Painting ~22,000 8px cells per frame was the
-  single biggest draw cost in the game.
-- **The minimap no longer re-renders the game from inside render.**
-  `WorldMapCanvas` used to schedule `setLensX/setLensY` in a `queueMicrotask`
-  whenever the lens had not converged, which re-rendered the entire Game tree
-  dozens of times per movement tick.
+  first big draw cost to go.
+- **Water is tiled, not per-cell.** The moving surface was painted per 8px
+  water cell (3-4 calls each ≈ 12,000 in one frame at the river). It is now
+  generated into two tiny reused tiles (a 7-cell × 16-row wave tile and a
+  12-cell flow tile, both exact multiples of the wave's own periods) and
+  tiled once per contiguous water run, with the per-cell path kept as the
+  fallback when no offscreen canvas exists.
+- **One lighting pass.** The background clear, up to four uniform full-screen
+  tints (weather dark, golden hour, night blue, moonlight) and a vignette
+  gradient rasterized every frame are now: no clear (the terrain covers the
+  canvas; `renderWorld` paints only the world-edge bands), ONE composed tint
+  (flat source-over layers compose exactly), and a baked vignette blitted.
+- **Static detail is batched.** Ground detail (9,000 specks) and forest flora
+  are filled as one path per style, tree canopies/boughs merge their
+  same-colour clusters and rim lights, and redundant
+  `save/translate/rotate/restore` around rotation-aware `ellipse` calls are
+  gone. Same pixels, a fraction of the calls.
+- **The render path never simulates.** Thunderpath traffic advances in the
+  update step (still only while the road is near the camera); `renderWorld`
+  draws it. A renderer must not mutate the world, and a simulated step must
+  happen exactly once per frame.
+- **The minimap no longer re-renders the game from inside render**, and it is
+  now memoized: `WorldMapCanvas` used to schedule `setLensX/setLensY` in a
+  `queueMicrotask` (re-rendering the entire Game tree dozens of times per
+  movement tick), then re-scanned 5,700 world items on every HUD render. It
+  caches its world scan per lens tile and skips unrelated state changes.
 - `resize()` only reassigns `canvas.width/height` when the size actually
   changed (assigning them reallocates and clears the backing store, and zoom
   calls resize every frame).
+
+Suite: `bun scripts/check-perf.ts` — water cost bounded (not per cell), full-
+screen budget, baked vignette, one frame loop per frame (and none after
+`destroy`), no simulation in the render path, plus the animation rules above.
 
 ## Stale-chunk recovery (why the game can die after a deploy)
 A tab keeps the shell it booted from. When a new build replaces

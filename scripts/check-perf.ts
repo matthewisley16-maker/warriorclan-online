@@ -30,12 +30,15 @@ interface OpLog {
   counts: Record<string, number>;
   fullScreenFills: number;
   radialGradients: number;
+  /** the fill colour in force for each full-screen fill */
+  fullScreenStyles: string[];
 }
 
 function makeCtx(log?: OpLog) {
   const target: Record<string, unknown> = {};
   return new Proxy(target, {
-    get(_t, prop) {
+    get(t, prop) {
+      if (log && prop === "fillStyle") return (t as Record<string, unknown>).fillStyle;
       if (prop === "measureText") return () => ({ width: 12 });
       if (prop === "createRadialGradient") {
         if (log) log.radialGradients++;
@@ -50,13 +53,17 @@ function makeCtx(log?: OpLog) {
           if (key === "fillRect" && args[0] === 0 && args[1] === 0) {
             const w = Number(args[2]);
             const h = Number(args[3]);
-            if (w >= 1200 && h >= 700) log.fullScreenFills++;
+            if (w >= 1200 && h >= 700) {
+              log.fullScreenFills++;
+              log.fullScreenStyles.push(String((target as Record<string, unknown>).fillStyle ?? ""));
+            }
           }
         }
         return undefined;
       };
     },
-    set() {
+    set(t, prop, value) {
+      if (prop === "fillStyle" || prop === "strokeStyle") (t as Record<string, unknown>)[String(prop)] = value;
       return true;
     },
   });
@@ -64,7 +71,7 @@ function makeCtx(log?: OpLog) {
 
 const CANVAS_W = 1600;
 const CANVAS_H = 900;
-const opLog: OpLog = { counts: {}, fullScreenFills: 0, radialGradients: 0 };
+const opLog: OpLog = { counts: {}, fullScreenFills: 0, radialGradients: 0, fullScreenStyles: [] };
 const ctx = makeCtx(opLog);
 const canvas = {
   getContext: () => ctx,
@@ -153,6 +160,7 @@ function measure(x: number, y: number) {
   opLog.counts = {};
   opLog.fullScreenFills = 0;
   opLog.radialGradients = 0;
+  opLog.fullScreenStyles = [];
   newCanvases = 0;
   const t0 = Date.now();
   for (let i = 0; i < 20; i++) stepFrame();
@@ -162,6 +170,7 @@ function measure(x: number, y: number) {
     total,
     fillRect: (opLog.counts.fillRect ?? 0) / frames,
     fullScreenFills: opLog.fullScreenFills / frames,
+    fullScreenStyles: [...opLog.fullScreenStyles],
     radialGradients: opLog.radialGradients / frames,
     newCanvases,
     ms: (Date.now() - t0) / frames,
@@ -192,6 +201,81 @@ console.log("— full-screen passes —");
   check(day.fullScreenFills <= 2, "a day frame paints at most two full-screen overlays", `${day.fullScreenFills} (clear + 4 tints + gradient before)`);
   check(day.radialGradients === 0, "the vignette is baked, not re-rasterized per frame", `${day.radialGradients} radial gradients/frame`);
   check(day.newCanvases === 0, "no offscreen canvas is created per frame (caches are reused)");
+
+  // the composed night tint must still be a real, single, moonlit overlay
+  const gAny = g as unknown as { dayTime: number; time: number };
+  const dayTime = gAny.dayTime;
+  gAny.dayTime = 0; // engine day clock: midnight
+  const night = measure(89 * TILE, 86 * TILE);
+  const tint = night.fullScreenStyles.find((s) => s.startsWith("rgba(")) ?? "";
+  const m = /rgba\((\d+), (\d+), (\d+), ([\d.]+)\)/.exec(tint);
+  const [r, gg, b, a] = m ? [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])] : [0, 0, 0, 0];
+  check(night.fullScreenFills <= 2, "a night frame is one composed tint (plus stars)", `${night.fullScreenFills}`);
+  check(!!m && a > 0.3, "the night tint is still applied", tint || "no full-screen tint found");
+  check(b >= r, "the night tint is still moonlight blue", `r=${r} g=${gg} b=${b}`);
+  gAny.dayTime = dayTime;
+}
+
+// ---------------------------------------------------------------------------
+// 2b) THE REACT HUD IS DECOUPLED FROM THE FRAME-RATE
+// ---------------------------------------------------------------------------
+console.log("— HUD re-render cost —");
+{
+  // The minimap rebuilds hundreds of SVG nodes from the world's 2,300 trees and
+  // 3,400 plants. It must be memoized and must not re-scan the world on every
+  // render (the game tree re-renders several times a second while walking).
+  const mapSrc = readFileSync(new URL("../src/pages/WorldMapData.tsx", import.meta.url), "utf8");
+  check(mapSrc.includes("memo(function WorldMapCanvas"), "the minimap is memoized against unrelated HUD re-renders");
+  check(/useMemo\(\(\) => \{[\s\S]{0,400}LOCAL_TREES\.filter/.test(mapSrc), "its world scan is cached instead of recalculated per render");
+  check(mapSrc.includes("[lensTileX, lensTileY, lensR]"), "the cache key is the lens tile (sub-tile motion reuses it)");
+}
+
+// ---------------------------------------------------------------------------
+// 2c) MEMORY: a long session must not grow without bound
+// ---------------------------------------------------------------------------
+console.log("— memory —");
+{
+  // RETAINED memory, not "allocated since start": a tight synchronous loop
+  // leaves uncollected garbage behind, which says nothing about growth. With a
+  // forced collection available we assert on what the session actually keeps.
+  const bunGc = (globalThis as { Bun?: { gc?: (force: boolean) => void } }).Bun?.gc;
+  const heap = () => {
+    bunGc?.(true);
+    return process.memoryUsage().heapUsed;
+  };
+  const MB = 1024 * 1024;
+  const before = heap();
+  let halfway = before;
+  const samples: number[] = [];
+  for (let i = 0; i < 1500; i++) {
+    // churn the camera so chunk/tile/scan caches are exercised the way a real
+    // player walking the map does
+    if (i % 250 === 0) g.teleport((40 + (i % 5) * 30) * TILE, (60 + (i % 7) * 20) * TILE);
+    stepFrame();
+    if (i % 500 === 0) {
+      const now = heap();
+      samples.push((now - before) / MB);
+      if (i === 1000) halfway = now;
+    }
+  }
+  const retained = ((heap() - before) / MB).toFixed(1);
+  const tail = ((heap() - halfway) / MB).toFixed(1);
+  if (process.env.PERF_DEBUG) console.log(`     [dbg] retained MB per 500 frames: ${samples.map((s) => s.toFixed(1)).join(" -> ")}`);
+  // A leak grows forever; a session that fills its bounded caches and then
+  // plateaus is healthy. So the assertion is on the growth of the SECOND half,
+  // with a forced collection at every sample (Bun's heapUsed is also a
+  // high-water mark, so one late sample can overstate what is really
+  // retained — measured both ways while diagnosing this).
+  check(
+    Number(tail) < 5,
+    `the session plateaus instead of growing (last 500 frames +${tail} MB, whole run +${retained} MB${bunGc ? ", forced GC" : ", GC unavailable"})`,
+  );
+
+  const anim = new CatAnimator();
+  for (let i = 0; i < 1200; i++) {
+    anim.update(`id-${i}`, { x: i, y: 0, gait: "walk", nowSec: i / 60, dtSec: 1 / 60 }, i % 7);
+  }
+  check(anim.size <= 240, "the animator's per-cat state stays bounded", `${anim.size} entries`);
 }
 
 // ---------------------------------------------------------------------------

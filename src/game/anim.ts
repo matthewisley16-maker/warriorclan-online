@@ -366,7 +366,10 @@ export class CatAnimator {
     e.y = input.y;
     e.talking = Boolean(input.talking);
     e.facing = easeFacing(e.facing, input.facing ?? (e.facing >= 0 ? 1 : -1), input.dtSec);
-    const moving = e.state.blend > 0.15 && gait !== "idle";
+    // `moving` means "a stride is being expressed right now" — including the
+    // few frames a stopping cat spends settling its last step (blend), so the
+    // renderer can blend the paws away instead of swapping them out instantly.
+    const moving = e.state.blend > 0.15;
     const idle = moving || e.talking ? { dx: 0, dy: 0 } : idleHead(input.nowSec, e.seed);
     // LEGS ARE ALWAYS SUPPLIED for a walking cat (even at blend 0: four neutral,
     // planted paws). This is what stops the renderer's old time-based fallback
