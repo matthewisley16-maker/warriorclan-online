@@ -260,9 +260,15 @@ export function tailGeom(i: TailInput): TailGeom {
     return target;
   }
   const dt = i.time - prev.t;
-  if (!Number.isFinite(dt) || dt <= 0) return prev.g; // same frame: no drift
-  if (dt > 0.5) {
-    states.set(key, { g: target, t: i.time }); // clock reset: start clean
+  if (!Number.isFinite(dt)) return prev.g;
+  if (dt === 0) return prev.g; // same frame: no drift
+  // clock reset — FORWARD (a new scene, a re-join) or BACKWARD (a remote's own
+  // animation clock restarts when its snapshot is rebuilt). A backward jump
+  // used to be ignored forever: the tail stayed frozen until the clock climbed
+  // back past the old value (~100s of animMs). Any discontinuity re-seeds the
+  // shape instead of interpolating across a clock domain change.
+  if (dt < 0 || dt > 0.5) {
+    states.set(key, { g: target, t: i.time });
     return target;
   }
   const a = 1 - Math.exp(-dt / TAU_S);

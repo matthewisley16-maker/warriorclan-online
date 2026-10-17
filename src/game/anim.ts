@@ -73,13 +73,18 @@ export function newGaitState(): GaitState {
  * Advance the gait with REAL travelled distance. Zero distance never advances
  * the cycle (a standing cat cannot walk in place) but does relax the blend.
  */
-export function advanceGait(state: GaitState, distPx: number, gait: Gait): GaitState {
+export function advanceGait(state: GaitState, distPx: number, gait: Gait, dtSec = 1 / 60): GaitState {
   const moved = Math.abs(distPx);
   const stride = STRIDE_PX[gait];
   const target = gait === "idle" ? 0 : 1;
-  // blend moves toward the target gait over ~0.18s of travel/second of idling
-  const rate = moved > 0 ? moved / 22 : 1 / 8;
-  const blend = Math.max(0, Math.min(1, state.blend + (target - state.blend) * Math.min(1, rate)));
+  // The blend follows REAL distance while the cat travels (so a stride always
+  // expresses exactly as much as was walked) and REAL TIME while it settles.
+  // The old settle used a fixed per-FRAME rate, so the same stop finished the
+  // stride 2.4x faster at 144Hz than at 60Hz — the same animation running at
+  // different speeds on different machines.
+  const settle = Math.min(1, Math.max(0, dtSec) / SETTLE_SECONDS);
+  const rate = moved > 0 ? Math.min(1, moved / 22) : settle;
+  const blend = Math.max(0, Math.min(1, state.blend + (target - state.blend) * rate));
   const phase = moved > 0 ? (state.phase + moved / stride) % 1 : state.phase;
   // keep the last MOVING gait recorded while the cat idles, so the settling
   // stride is drawn with the geometry it actually used
@@ -165,6 +170,14 @@ export function gaitRoll(phase: number, gait: Gait, blend = 1): number {
 
 /** Seconds a full about-face takes when drawn. */
 export const TURN_SECONDS = 0.17;
+/** Seconds a stopped cat takes to blend its last stride away (frame-rate free). */
+export const SETTLE_SECONDS = 0.22;
+/**
+ * A single-frame jump longer than this is a TELEPORT (interior transition,
+ * story placement, network correction), not travel: feeding it to the gait
+ * would spin the legs through a whole stride in one frame.
+ */
+export const TELEPORT_PX = 220;
 
 /**
  * Ease the DRAWN facing toward the target. The value passes through 0, which
@@ -173,9 +186,13 @@ export const TURN_SECONDS = 0.17;
  */
 export function easeFacing(current: number, target: 1 | -1, dtSec: number): number {
   if (current === 0) return target * Math.min(1, dtSec / TURN_SECONDS);
-  const step = (dtSec / TURN_SECONDS) * 2; // crosses zero at the same rate
-  if (current > 0) return Math.max(target, current - step);
-  return Math.min(target, current + step);
+  const step = Math.max(0, Math.min(1, (dtSec / TURN_SECONDS) * 2)); // crosses zero at the same rate
+  // Always move TOWARD the target. The old version clamped to the target from
+  // whichever side the value happened to be on, so flipping back to face the
+  // way you already leaned snapped from e.g. 0.35 straight to 1.0 in one frame
+  // (a visible pop instead of the turning squash).
+  if (target === 1) return Math.min(1, current + step);
+  return Math.max(-1, current - step);
 }
 
 /** 0 = flat side-on (mid-turn), 1 = fully side-on as usual (for lean/scale). */
@@ -329,14 +346,22 @@ export class CatAnimator {
   update(id: string, input: AnimInput, seed = 0): AnimView {
     const e = this.entry(id, seed);
     // first frame for this cat: no travel to account for (no phantom stride)
-    const travelled = e.seen ? Math.hypot(input.x - e.x, input.y - e.y) : 0;
+    const jump = e.seen ? Math.hypot(input.x - e.x, input.y - e.y) : 0;
+    // a teleport is not a step (see TELEPORT_PX): the phase must not be fed a
+    // stride the cat never walked
+    const travelled = jump > TELEPORT_PX ? 0 : jump;
     e.seen = true;
-    const gait: Gait = input.poseLocked ? "idle" : (input.gait ?? (input.speedPx && input.speedPx > 0 ? "walk" : "idle"));
+    const requested: Gait = input.poseLocked ? "idle" : (input.gait ?? (input.speedPx && input.speedPx > 0 ? "walk" : "idle"));
+    // §STABILITY: a movement gait only EXPRESSES while the cat really travels.
+    // A cat holding a walk/crouch pose while standing still (blocked, or simply
+    // not pressing anything) settles its stride through the normal blend
+    // instead of holding a frozen mid-stride and never settling.
+    const gait: Gait = requested !== "idle" && requested !== "swim" && travelled <= 0.01 ? "idle" : requested;
     // the gait used to EXPRESS the last stride while the blend settles down
     // ("idle" has no stride of its own), so a stopping cat finishes its step
     // with the legs it was actually using instead of snapping them away
     const expressGait: Gait = gait === "idle" ? (e.state.gait === "idle" ? "walk" : e.state.gait) : gait;
-    e.state = advanceGait(e.state, travelled, gait);
+    e.state = advanceGait(e.state, travelled, gait, input.dtSec);
     e.x = input.x;
     e.y = input.y;
     e.talking = Boolean(input.talking);

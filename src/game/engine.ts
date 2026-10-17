@@ -45,8 +45,15 @@ import {
 import { TP_Y, clearTraffic, drawTunnelPortal, drawVehicle, respawnBothDirections, trafficList, updateTraffic, vehicleLaneY } from "./traffic";
 import { isAvailable, pickNpcChatLines } from "./dialogue";
 import { profileFor } from "./characters";
-/** Render-path traffic timestep fallback (wired from the update loop below). */
-let dt = 0.016;
+// §PERF-WATER: the surface wave is a sum of sines in cell/row space. Baking it
+// into a repeating tile requires the tile to be an EXACT number of wave periods
+// wide and tall, so the per-axis phase steps are 2π/period (0.8976 / 0.3927) —
+// within 0.3% of the original 0.9 / 0.4, i.e. the same wave, now tileable.
+const BAND_COLS = 7; // wave tile: 7 cells wide (one full column period)
+const BAND_ROWS = 16; // …and 16 rows tall (one full row period)
+const FLOW_COLS = 12; // flow tile: the 96px dash period
+const WATER_WAVE_X = (Math.PI * 2) / BAND_COLS;
+const WATER_WAVE_Y = (Math.PI * 2) / BAND_ROWS;
 import {
   drawBarn,
   drawCat,
@@ -3852,7 +3859,9 @@ export class GameCanvas {
           x: n.x,
           y: n.y,
           gait: this.gaitFor(n.pose, n.ai === "return_home" || n.ai === "go_den", n.ai === "hunt_stalk", false),
-          poseLocked: n.pose !== "walk",
+          // a crouch/stalk pose is a MOVEMENT pose: it must keep its gait (the
+          // renderer only draws those legs while the cat is travelling)
+          poseLocked: n.pose !== "walk" && n.pose !== "crouch" && n.pose !== "stalk",
           talking: n.talkFxUntil > this.time,
           facing: n.facing,
           nowSec: now,
@@ -3875,8 +3884,15 @@ export class GameCanvas {
           x: rp.x,
           y: rp.y,
           speedPx: speed,
-          gait: rp.pose === "walk" ? (speed > 190 ? "run" : speed > 55 ? "walk" : "crouch") : "idle",
-          poseLocked: rp.pose !== "walk",
+          gait:
+            rp.pose === "walk" || rp.pose === "crouch"
+              ? speed > 190
+                ? "run"
+                : speed > 55
+                  ? "walk"
+                  : "crouch"
+              : "idle",
+          poseLocked: rp.pose !== "walk" && rp.pose !== "crouch",
           talking: false,
           facing: rp.facing >= 0 ? 1 : -1,
           nowSec: rp.animMs / 1000,
@@ -5173,6 +5189,18 @@ export class GameCanvas {
     // --- prey AI ---
     if (!this.paused && this.prey.length < PREY_MAX && Math.random() < 0.02) this.respawnPreyTick();
 
+    // §PERF: Thunderpath traffic advances in the SIMULATION step, never from
+    // inside the render path (a renderer must not mutate the world — and the
+    // simulated step is exactly one per frame). Vehicles are still simulated
+    // only while the road can be anywhere near the camera, so distant traffic
+    // costs nothing at all.
+    if (this.time >= this.trafficPausedUntil) {
+      const halfScrH = this.canvas.height / this.dpr / 2 / this.scale;
+      const top = this.camY - halfScrH - 80;
+      const bottom = this.camY + halfScrH + 80;
+      if (top < TP_Y + 200 && bottom > TP_Y - 320) updateTraffic(dt, this.time);
+    }
+
     // --- Thunderpath danger: cars HURT (road is lethal, as in the books) ---
     if (!this.paused && !this.dead && !this.interiorId && Math.abs(this.py - TP_Y) < 46 && this.pSpeed > 6) {
       const hit = trafficList().some((v) => {
@@ -5471,39 +5499,33 @@ export class GameCanvas {
     const ch = canvas.height / this.dpr;
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = this.interiorId ? "#1d1812" : "#2c4a30";
-    ctx.fillRect(0, 0, cw, ch);
-
     if (this.interiorId) {
+      // interiors draw a room smaller than the canvas: the surround is painted
+      ctx.fillStyle = "#1d1812";
+      ctx.fillRect(0, 0, cw, ch);
       this.renderInterior(cw, ch);
     } else {
+      // §PERF: outdoors the baked terrain covers the canvas (renderWorld fills
+      // the world-edge bands itself), so the old full-screen background clear
+      // here was ~5.7M blended device pixels per frame drawn over solid ground.
       this.renderWorld(cw, ch);
     }
 
     // --- cinematic lighting stack (outdoors only — interiors are sheltered) ---
     const na = this.nightAlpha();
-    const gold = this.goldenHour();
-    const dark = this.env.dark;
     if (!this.interiorId) {
-      // wet/rain darkening
-      if (dark > 0.01) {
-        ctx.fillStyle = `rgba(28, 36, 54, ${dark})`;
+      // §PERF: every UNIFORM full-screen tint (weather dark, golden hour,
+      // night blue, moonlight) is composed into ONE alpha-blended fill. Flat
+      // source-over layers compose exactly, so the picture is identical — but
+      // it costs one pass over the canvas instead of up to four (at 2x DPR
+      // that was ~5.7M device pixels per tint, per frame).
+      const tint = this.lightingTints();
+      if (tint.a > 0.002) {
+        ctx.fillStyle = `rgba(${tint.r}, ${tint.g}, ${tint.b}, ${tint.a})`;
         ctx.fillRect(0, 0, cw, ch);
       }
-      // golden hour wash (sunrise 5–7, sunset 18.5–20)
-      if (gold > 0.02 && na < 0.5) {
-        ctx.fillStyle = `rgba(255, 166, 66, ${0.16 * gold * (1 - na)})`;
-        ctx.fillRect(0, 0, cw, ch);
-      }
-    // night: moonlight blue (never a flat black screen)
-    if (na > 0) {
-      const moon = this.moonPhase();
-      ctx.fillStyle = `rgba(16, 22, 48, ${0.52 * na})`;
-      ctx.fillRect(0, 0, cw, ch);
-      if (moon > 0.55) {
-        // bright moon: soft blue highlights + faint moon in the corner sky
-        ctx.fillStyle = `rgba(150, 175, 235, ${0.1 * moon * na})`;
-        ctx.fillRect(0, 0, cw, ch);
+      // night extras that are NOT uniform (they stay their own pass)
+      if (na > 0 && this.moonPhase() > 0.55) {
         const mg = ctx.createRadialGradient(cw * 0.85, ch * 0.12, 2, cw * 0.85, ch * 0.12, 46);
         mg.addColorStop(0, `rgba(235,240,255,${0.8 * na})`);
         mg.addColorStop(1, "rgba(235,240,255,0)");
@@ -5524,20 +5546,90 @@ export class GameCanvas {
         }
         ctx.globalAlpha = 1;
       }
-    }
-    }
-    // weather overlays (rain, fog, cloud cover) + ambient particles — outside only
-    if (!this.interiorId) {
+      // weather overlays (rain, fog, cloud cover) + ambient particles
       this.renderWeather(cw, ch);
       this.drawMotes(cw, ch);
     }
 
-    // vignette
+    // vignette — §PERF: rasterized once per canvas size and then blitted (it
+    // used to evaluate a full-screen radial gradient every single frame)
+    this.drawVignette(cw, ch);
+  }
+
+  /**
+   * Compose the uniform full-screen tints into ONE overlay.
+   *
+   * Sequential `source-over` fills of FLAT colours compose exactly:
+   *   out = Σ Cᵢ·aᵢ·Π(1-aⱼ, j drawn after i) + src·Π(1-aᵢ)
+   * so the colour/alpha pair below reproduces the old stack pixel for pixel
+   * while touching the canvas once.
+   */
+  private lightingTints(): { r: number; g: number; b: number; a: number } {
+    const na = this.nightAlpha();
+    const gold = this.goldenHour();
+    const dark = this.env.dark;
+    const layers: [number, number, number, number][] = [];
+    if (dark > 0.01) layers.push([28, 36, 54, dark]);
+    if (gold > 0.02 && na < 0.5) layers.push([255, 166, 66, 0.16 * gold * (1 - na)]);
+    if (na > 0) {
+      layers.push([16, 22, 48, 0.52 * na]);
+      const moon = this.moonPhase();
+      if (moon > 0.55) layers.push([150, 175, 235, 0.1 * moon * na]);
+    }
+    let trans = 1;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const [cr, cg, cb, ca] = layers[i];
+      r += cr * ca * trans;
+      g += cg * ca * trans;
+      b += cb * ca * trans;
+      trans *= 1 - ca;
+    }
+    const a = 1 - trans;
+    if (a <= 0.002) return { r: 0, g: 0, b: 0, a: 0 };
+    return { r: Math.round(r / a), g: Math.round(g / a), b: Math.round(b / a), a };
+  }
+
+  /** Baked corner vignette (one canvas per canvas size, reused every frame). */
+  private vignette: { w: number; h: number; canvas: HTMLCanvasElement } | null = null;
+  private drawVignette(cw: number, ch: number) {
+    const ctx = this.ctx;
+    const key = `${Math.round(cw)}x${Math.round(ch)}`;
+    if (this.vignetteKey !== key) {
+      this.vignetteKey = key;
+      this.vignette = this.bakeVignette(cw, ch);
+    }
+    if (this.vignette) {
+      ctx.drawImage(this.vignette.canvas, 0, 0, cw, ch);
+      return;
+    }
+    // no offscreen canvas available (headless probes): paint the gradient
     const grad = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.42, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
     grad.addColorStop(0, "rgba(0,0,0,0)");
     grad.addColorStop(1, "rgba(10,16,10,0.34)");
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, cw, ch);
+  }
+  private vignetteKey = "";
+  private bakeVignette(cw: number, ch: number): { w: number; h: number; canvas: HTMLCanvasElement } | null {
+    try {
+      if (typeof document === "undefined" || typeof document.createElement !== "function") return null;
+      const cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(cw));
+      cv.height = Math.max(1, Math.round(ch));
+      const g = cv.getContext("2d");
+      if (!g) return null;
+      const grad = g.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.42, cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
+      grad.addColorStop(0, "rgba(0,0,0,0)");
+      grad.addColorStop(1, "rgba(10,16,10,0.34)");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, cw, ch);
+      return { w: cw, h: ch, canvas: cv };
+    } catch {
+      return null;
+    }
   }
 
   private renderInterior(cw: number, ch: number) {
@@ -5927,6 +6019,20 @@ export class GameCanvas {
     const viewT = this.camY - halfH - 40;
     const viewB = this.camY + halfH + 80;
 
+    // §PERF: the baked terrain covers the whole canvas except where the VIEW
+    // reaches past the world's edge. Only those bands are painted, so the
+    // per-frame full-screen clear in render() is no longer needed indoors or
+    // out (it was a full-screen blend drawn over solid ground every frame).
+    if (viewL < 0 || viewT < 0 || viewR > WORLD_W || viewB > WORLD_H) {
+      ctx.fillStyle = "#2c4a30";
+      const x0 = Math.max(0, viewL);
+      const x1 = Math.min(WORLD_W, viewR);
+      if (viewL < 0) ctx.fillRect(viewL, viewT, -viewL, viewB - viewT);
+      if (viewR > WORLD_W) ctx.fillRect(WORLD_W, viewT, viewR - WORLD_W, viewB - viewT);
+      if (viewT < 0) ctx.fillRect(x0, viewT, x1 - x0, -viewT);
+      if (viewB > WORLD_H) ctx.fillRect(x0, WORLD_H, x1 - x0, viewB - WORLD_H);
+    }
+
     this.drawGround(viewL, viewT, viewR, viewB);
     this.drawGroundDeco(viewL, viewT, viewR, viewB);
     this.drawFlora(viewL, viewT, viewR, viewB);
@@ -6164,7 +6270,6 @@ export class GameCanvas {
     // Thunderpath traffic + tunnel portals (vehicles exist ONLY on the road;
     // they spawn inside a tunnel and vanish into the tunnel on the other side)
     if (this.time >= this.trafficPausedUntil && viewT < TP_Y + 200 && viewB > TP_Y - 320) {
-      updateTraffic(dt, this.time);
       drawTunnelPortal(ctx, 6, -1);
       drawTunnelPortal(ctx, WORLD_W - 6, 1);
       for (const v of trafficList()) {
@@ -6475,12 +6580,140 @@ export class GameCanvas {
   }
 
   /** Live animated water ribbons, painted over the baked terrain. */
+  /**
+   * §PERF-WATER: the moving water surface.
+   *
+   * The old version painted EVERY water cell individually — at the river that
+   * was ~4,000 cells × 3-4 fillRects ≈ 12,000 canvas ops in a single frame
+   * (measured), which is what made the game crawl whenever the camera showed
+   * water.
+   *
+   * The highlight pattern is periodic, so it is generated once per frame into
+   * two tiny tiles (a 7-cell × 16-row wave tile and a 12-cell flow tile) and
+   * then tiled over each CONTIGUOUS RUN of water in a row: two fills per run
+   * instead of four per cell. The picture is the same wave, bobbing and
+   * drifting with time, at ~1/40 of the draw calls.
+   */
+  private waterTileA: HTMLCanvasElement | null = null;
+  private waterTileB: HTMLCanvasElement | null = null;
+  private waterTilesUnavailable = false;
+
   private drawWaterAnimation(c0: number, r0: number, c1: number, r1: number) {
+    const ctx = this.ctx;
+    const CS = GROUND_CELL;
+    const tiles = this.waterTiles();
+    if (!tiles) {
+      this.drawWaterPerCell(c0, r0, c1, r1);
+      return;
+    }
+    const { band, flow } = tiles;
+    const bandAlpha = 0.14 + Math.sin(this.time * 2.1) * 0.04;
+    ctx.save();
+    // --- the wave bands: one tiled fill per contiguous water run ---
+    ctx.globalAlpha = bandAlpha;
+    ctx.fillStyle = band;
+    for (let r = r0; r <= r1; r++) {
+      const row = r * GROUND_COLS;
+      let c = c0;
+      while (c <= c1) {
+        if (groundMap[row + c] !== 2) {
+          c++;
+          continue;
+        }
+        const start = c;
+        while (c <= c1 && groundMap[row + c] === 2) c++;
+        ctx.fillRect(start * CS, r * CS, (c - start) * CS, CS);
+      }
+    }
+    // --- the drifting flow dashes (their alpha is baked into the tile) ---
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = flow;
+    for (let r = r0; r <= r1; r++) {
+      const row = r * GROUND_COLS;
+      let c = c0;
+      while (c <= c1) {
+        if (groundMap[row + c] !== 2) {
+          c++;
+          continue;
+        }
+        const start = c;
+        while (c <= c1 && groundMap[row + c] === 2) c++;
+        ctx.fillRect(start * CS, r * CS, (c - start) * CS, CS);
+      }
+      // occasional glints (rare by construction: ~7% of water cells)
+      for (let c = c0; c <= c1; c++) {
+        if (groundMap[row + c] !== 2 || hash2(c, r) <= 0.93) continue;
+        const bandY = r * CS + ((Math.sin(this.time * 1.3 + c * WATER_WAVE_X + r * WATER_WAVE_Y) * 0.5 + 0.5) * CS);
+        ctx.fillStyle = "rgba(235, 248, 255, 0.5)";
+        ctx.fillRect(c * CS + 10, bandY - 6, 3, 1.5);
+        ctx.fillStyle = flow;
+      }
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Build (once per frame, in two small reused canvases) the water tiles.
+   * Returns null when the platform gives us no offscreen canvas — the caller
+   * then paints the old per-cell path, so headless probes and any exotic
+   * environment still render water.
+   */
+  private waterTiles(): { band: CanvasPattern; flow: CanvasPattern } | null {
+    if (this.waterTilesUnavailable) return null;
+    const CS = GROUND_CELL;
+    try {
+      if (typeof document === "undefined" || typeof document.createElement !== "function") throw new Error("no-offscreen");
+      if (!this.waterTileA || !this.waterTileB) {
+        const a = document.createElement("canvas");
+        a.width = BAND_COLS * CS;
+        a.height = BAND_ROWS * CS;
+        const b = document.createElement("canvas");
+        b.width = FLOW_COLS * CS;
+        b.height = CS;
+        this.waterTileA = a;
+        this.waterTileB = b;
+      }
+      const A = this.waterTileA;
+      const B = this.waterTileB;
+      const ag = A.getContext("2d");
+      const bg = B.getContext("2d");
+      if (!ag || !bg) throw new Error("no-ctx");
+      // --- wave tile: the SAME sine the per-cell path uses, wrapped to a tile
+      // whose width/height are exact multiples of the wave's own periods ---
+      ag.clearRect(0, 0, A.width, A.height);
+      ag.fillStyle = "rgb(190, 225, 245)";
+      for (let r = 0; r < BAND_ROWS; r++) {
+        for (let c = 0; c < BAND_COLS; c++) {
+          const y = (Math.sin(this.time * 1.3 + c * WATER_WAVE_X + r * WATER_WAVE_Y) * 0.5 + 0.5) * CS;
+          ag.fillRect(c * CS, r * CS + y, CS + 0.5, 2);
+        }
+      }
+      // --- flow tile: the drifting dashes, offset by the frame's flow phase ---
+      bg.clearRect(0, 0, B.width, B.height);
+      bg.fillStyle = "rgba(210, 236, 250, 0.13)";
+      const shift = (this.time * 14) % (FLOW_COLS * CS);
+      for (let c = 0; c < FLOW_COLS; c++) {
+        const x = (c * CS + shift) % (FLOW_COLS * CS);
+        bg.fillRect(x, 3, 5, 1.4);
+        bg.fillRect((x + 3.6) % (FLOW_COLS * CS), 3, 4, 1.2);
+      }
+      const band = this.ctx.createPattern(A, "repeat");
+      const flow = this.ctx.createPattern(B, "repeat");
+      if (!band || !flow) throw new Error("no-pattern");
+      return { band, flow };
+    } catch {
+      this.waterTilesUnavailable = true;
+      return null;
+    }
+  }
+
+  /** The original per-cell water surface (fallback when tiling is unavailable). */
+  private drawWaterPerCell(c0: number, r0: number, c1: number, r1: number) {
     const ctx = this.ctx;
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
         if (groundMap[r * GROUND_COLS + c] !== 2) continue;
-        const bandY = r * GROUND_CELL + ((Math.sin(this.time * 1.3 + c * 0.9 + r * 0.4) * 0.5 + 0.5) * GROUND_CELL);
+        const bandY = r * GROUND_CELL + ((Math.sin(this.time * 1.3 + c * WATER_WAVE_X + r * WATER_WAVE_Y) * 0.5 + 0.5) * GROUND_CELL);
         ctx.fillStyle = `rgba(190, 225, 245, ${0.14 + Math.sin(this.time * 2.1) * 0.04})`;
         ctx.fillRect(c * GROUND_CELL, bandY, GROUND_CELL + 0.5, 2);
         const flow = ((this.time * 14 + c * GROUND_CELL) % 96) / 96;
@@ -6533,55 +6766,71 @@ export class GameCanvas {
 
   /** Soft cloud shadows drifting across the world (world-space). */
   /** Forest-floor litter: leaves, stones, soil patches, tiny flowers. */
+  // §PERF: the forest floor is ~9,000 static specks. They used to be drawn one
+  // path (and one save/rotate/restore) at a time — ~1,000 canvas calls in a
+  // single frame near a camp. The specks are now collected into per-style
+  // batches and filled as ONE path each: identical pixels, a fraction of the
+  // calls. The buckets are reused between frames (no per-frame allocation).
+  private decoBuckets: number[][] = [];
+  private decoBucketCount: number[] = [];
+
   private drawGroundDeco(viewL: number, viewT: number, viewR: number, viewB: number) {
     const ctx = this.ctx;
+    // 0 litterA 1 litterB 2 litterC | 3 stone | 4 stoneHi | 5 soil | 6 soilGrain
+    // | 7..9 petals | 10 flower core
+    const BUCKETS = 11;
+    for (let i = 0; i < BUCKETS; i++) {
+      if (!this.decoBuckets[i]) this.decoBuckets[i] = [];
+      this.decoBuckets[i].length = 0;
+    }
     for (const d of groundDeco) {
       if (d.x < viewL - 12 || d.x > viewR + 12 || d.y < viewT - 12 || d.y > viewB + 12) continue;
-      const kind = d.kind;
       const a = d.a;
-      if (kind === "litter") {
-        const tints = ["rgba(122, 96, 46, 0.55)", "rgba(150, 116, 58, 0.5)", "rgba(96, 118, 52, 0.45)"];
-        ctx.fillStyle = tints[Math.floor(a * 3) % 3];
-        ctx.save();
-        ctx.translate(d.x, d.y);
-        ctx.rotate(a);
-        ctx.beginPath();
-        ctx.ellipse(0, 0, 3.2 * d.s, 1.7 * d.s, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      } else if (kind === "stone") {
-        ctx.fillStyle = "rgba(128, 128, 124, 0.6)";
-        ctx.beginPath();
-        ctx.ellipse(d.x, d.y, 2.6 * d.s, 1.9 * d.s, a, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "rgba(255,255,255,0.18)";
-        ctx.beginPath();
-        ctx.ellipse(d.x - d.s * 0.7, d.y - d.s * 0.5, d.s * 0.9, d.s * 0.5, a, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (kind === "soil") {
-        ctx.fillStyle = "rgba(92, 72, 46, 0.22)";
-        ctx.beginPath();
-        ctx.ellipse(d.x, d.y, 9 * d.s, 5.5 * d.s, a, 0, Math.PI * 2);
-        ctx.fill();
-        if (d.s > 1.05) {
-          ctx.fillStyle = "rgba(70, 54, 34, 0.3)";
-          for (let i = 0; i < 3; i++) {
-            ctx.fillRect(d.x + (i - 1) * 3.5 * d.s, d.y + (i % 2 ? 2 : -2) * d.s, 1.4, 1.4);
-          }
-        }
-      } else {
-        const petals = ["#e8dd8f", "#d8a2c8", "#eef2f4"][Math.floor(a * 3) % 3];
-        ctx.fillStyle = petals;
+      const si = Math.floor(a * 3) % 3;
+      let bucket: number;
+      if (d.kind === "litter") bucket = si;
+      else if (d.kind === "stone") bucket = 3;
+      else if (d.kind === "soil") bucket = 5;
+      else bucket = 7 + si;
+      this.decoBuckets[bucket].push(d.x, d.y, a, d.s);
+      if (d.kind === "stone") this.decoBuckets[4].push(d.x, d.y, a, d.s);
+      else if (d.kind === "soil" && d.s > 1.05) this.decoBuckets[6].push(d.x, d.y, a, d.s);
+      else if (d.kind !== "litter" && d.kind !== "soil") this.decoBuckets[10].push(d.x, d.y, a, d.s);
+    }
+    const fillEllipses = (bucket: number, style: string, place: (x: number, y: number, a: number, s: number) => void) => {
+      const b = this.decoBuckets[bucket];
+      if (b.length === 0) return;
+      ctx.fillStyle = style;
+      ctx.beginPath();
+      for (let i = 0; i < b.length; i += 4) place(b[i], b[i + 1], b[i + 2], b[i + 3]);
+      ctx.fill();
+    };
+    const litterStyles = ["rgba(122, 96, 46, 0.55)", "rgba(150, 116, 58, 0.5)", "rgba(96, 118, 52, 0.45)"];
+    for (let k = 0; k < 3; k++) {
+      fillEllipses(k, litterStyles[k], (x, y, a, s) => ctx.ellipse(x, y, 3.2 * s, 1.7 * s, a, 0, Math.PI * 2));
+    }
+    fillEllipses(3, "rgba(128, 128, 124, 0.6)", (x, y, a, s) => ctx.ellipse(x, y, 2.6 * s, 1.9 * s, a, 0, Math.PI * 2));
+    fillEllipses(4, "rgba(255,255,255,0.18)", (x, y, a, s) => ctx.ellipse(x - s * 0.7, y - s * 0.5, s * 0.9, s * 0.5, a, 0, Math.PI * 2));
+    fillEllipses(5, "rgba(92, 72, 46, 0.22)", (x, y, a, s) => ctx.ellipse(x, y, 9 * s, 5.5 * s, a, 0, Math.PI * 2));
+    const petals = ["#e8dd8f", "#d8a2c8", "#eef2f4"];
+    for (let k = 0; k < 3; k++) {
+      fillEllipses(7 + k, petals[k], (x, y, a, s) => {
         for (let i = 0; i < 4; i++) {
           const ang = a + (i * Math.PI) / 2;
-          ctx.beginPath();
-          ctx.arc(d.x + Math.cos(ang) * 1.8 * d.s, d.y + Math.sin(ang) * 1.8 * d.s, 1.3 * d.s, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.arc(x + Math.cos(ang) * 1.8 * s, y + Math.sin(ang) * 1.8 * s, 1.3 * s, 0, Math.PI * 2);
         }
-        ctx.fillStyle = "#c9a227";
-        ctx.beginPath();
-        ctx.arc(d.x, d.y, 1 * d.s, 0, Math.PI * 2);
-        ctx.fill();
+      });
+    }
+    fillEllipses(10, "#c9a227", (x, y, _a, s) => ctx.arc(x, y, 1 * s, 0, Math.PI * 2));
+    // the few soil grains stay individual squares (3px, sub-pixel cheap)
+    const grain = this.decoBuckets[6];
+    if (grain.length > 0) {
+      ctx.fillStyle = "rgba(70, 54, 34, 0.3)";
+      for (let i = 0; i < grain.length; i += 4) {
+        const x = grain[i];
+        const y = grain[i + 1];
+        const s = grain[i + 3];
+        for (let k = 0; k < 3; k++) ctx.fillRect(x + (k - 1) * 3.5 * s, y + (k % 2 ? 2 : -2) * s, 1.4, 1.4);
       }
     }
   }
@@ -6691,73 +6940,137 @@ export class GameCanvas {
     }
   }
 
+  /**
+   * §PERF: forest flora.
+   *
+   * ~3,400 plants are in the world and up to ~900 canvas calls landed in a
+   * single frame (measured). The plants of one KIND share a colour, so each
+   * kind/tint pair is now collected into one path and filled/stroked once: the
+   * same blades, mushrooms, leaves and stones at a fraction of the calls. The
+   * swaying plants keep their individual motion (the curve is built per plant,
+   * it just shares one rasterization with its neighbours).
+   */
+  private floraBuckets: number[][] = [];
+
   private drawFlora(viewL: number, viewT: number, viewR: number, viewB: number) {
     const { ctx } = this;
     const gust = 0.5 + this.env.wind * this.windGust();
+    const BUCKETS = 16;
+    if (this.floraBuckets.length !== BUCKETS) {
+      this.floraBuckets = Array.from({ length: BUCKETS }, () => [] as number[]);
+    }
+    for (const b of this.floraBuckets) b.length = 0;
+    const lush: { kind: string; x: number; y: number; tint: number; s: number }[] = [];
     for (const f of flora) {
       if (f.x < viewL || f.x > viewR || f.y < viewT || f.y > viewB) continue;
-      const sway = Math.sin(this.time * 1.8 + f.x * 0.05) * 1.2 * gust;
       const s = (f as { s?: number }).s ?? 1;
+      const light = f.tint > 0.5 ? 1 : 0;
+      const push = (b: number) => this.floraBuckets[b].push(f.x, f.y, f.tint, s);
       switch (f.kind) {
-        case "tuft": {
-          ctx.strokeStyle = f.tint > 0.5 ? "#57964f" : "#4c8a47";
-          ctx.lineWidth = 1.4;
-          const h = 8 + f.tint * 6;
-          ctx.beginPath();
-          ctx.moveTo(f.x - 3 * s, f.y);
-          ctx.quadraticCurveTo(f.x - 4 * s + sway, f.y - h * 0.6, f.x - 5 * s + sway, f.y - h);
-          ctx.moveTo(f.x, f.y);
-          ctx.lineTo(f.x + sway * 0.5, f.y - h - 2);
-          ctx.moveTo(f.x + 3 * s, f.y);
-          ctx.quadraticCurveTo(f.x + 4 * s + sway, f.y - h * 0.6, f.x + 5 * s + sway, f.y - h * 0.8);
-          ctx.stroke();
-          break;
+        case "tuft": push(light); break; // 0..1
+        case "fern": push(2 + light); break; // 2..3
+        case "flower": push(4 + (f.tint > 0.5 ? 2 : f.tint > 0.25 ? 1 : 0)); break; // 4 stem + 5..7 heads
+        case "mushroom": push(8 + light); break; // 8 stem + 9..10 caps
+        case "leaves": push(11 + light); break; // 11..12
+        case "stones": push(13); break; // 13 base (+14 highlight, +15 moss below)
+        default: lush.push({ kind: f.kind, x: f.x, y: f.y, tint: f.tint, s }); break; // roots / log
+      }
+      if (f.kind === "stones") {
+        this.floraBuckets[14].push(f.x, f.y, f.tint, s);
+        if (f.tint > 0.55) this.floraBuckets[15].push(f.x, f.y, f.tint, s);
+      }
+    }
+    const bucketPath = (bucket: number, place: (x: number, y: number, tint: number, s: number, sway: number) => void) => {
+      const b = this.floraBuckets[bucket];
+      if (b.length === 0) return false;
+      for (let i = 0; i < b.length; i += 4) {
+        const x = b[i];
+        place(x, b[i + 1], b[i + 2], b[i + 3], Math.sin(this.time * 1.8 + x * 0.05) * 1.2 * gust);
+      }
+      return true;
+    };
+    // --- tufts (stroke) ---
+    for (const light of [0, 1]) {
+      ctx.strokeStyle = light ? "#57964f" : "#4c8a47";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      if (bucketPath(light, (x, y, tint, s, sway) => {
+        const h = 8 + tint * 6;
+        ctx.moveTo(x - 3 * s, y);
+        ctx.quadraticCurveTo(x - 4 * s + sway, y - h * 0.6, x - 5 * s + sway, y - h);
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + sway * 0.5, y - h - 2);
+        ctx.moveTo(x + 3 * s, y);
+        ctx.quadraticCurveTo(x + 4 * s + sway, y - h * 0.6, x + 5 * s + sway, y - h * 0.8);
+      })) ctx.stroke();
+    }
+    // --- ferns (stroke) ---
+    for (const light of [0, 1]) {
+      ctx.strokeStyle = light ? "#3e7a41" : "#356d38";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      if (bucketPath(2 + light, (x, y, _tint, s, sway) => {
+        for (let i = -2; i <= 2; i++) {
+          ctx.moveTo(x, y);
+          ctx.quadraticCurveTo(x + i * 4 * s + sway, y - 8 * s, x + i * 7 * s + sway, y - 13 * s);
         }
-        case "fern": {
-          ctx.strokeStyle = f.tint > 0.5 ? "#3e7a41" : "#356d38";
-          ctx.lineWidth = 1.2;
-          for (let i = -2; i <= 2; i++) {
-            ctx.beginPath();
-            ctx.moveTo(f.x, f.y);
-            ctx.quadraticCurveTo(f.x + i * 4 * s + sway, f.y - 8 * s, f.x + i * 7 * s + sway, f.y - 13 * s);
-            ctx.stroke();
-          }
-          break;
-        }
-        case "flower": {
-          ctx.strokeStyle = "#4c8a47";
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          ctx.moveTo(f.x, f.y);
-          ctx.lineTo(f.x + sway, f.y - 8);
-          ctx.stroke();
-          ctx.fillStyle = f.tint > 0.5 ? "#e5c95c" : f.tint > 0.25 ? "#d977a0" : "#c96a5a";
-          ctx.beginPath();
-          ctx.arc(f.x + sway, f.y - 10, 2.4, 0, Math.PI * 2);
-          ctx.fill();
-          break;
-        }
-        case "mushroom": {
-          // tiny mushrooms on the damp forest floor
-          ctx.fillStyle = "#e8e0d0";
-          ctx.fillRect(f.x - 1 * s, f.y - 4 * s, 2 * s, 4 * s);
-          ctx.fillStyle = f.tint > 0.5 ? "#b5654a" : "#c98a5a";
-          ctx.beginPath();
-          ctx.ellipse(f.x, f.y - 4.5 * s, 2.6 * s, 1.7 * s, 0, Math.PI, 0);
-          ctx.fill();
-          break;
-        }
-        case "leaves": {
-          // scattered fallen leaves
-          ctx.fillStyle = f.tint > 0.5 ? "rgba(160,130,60,0.55)" : "rgba(130,110,50,0.5)";
-          for (let i = 0; i < 3; i++) {
-            const lx = f.x + (i - 1) * 5 * s;
-            ctx.beginPath();
-            ctx.ellipse(lx, f.y + i * 2 - 2, 3 * s, 1.5 * s, f.tint * 3 + i, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          break;
-        }
+      })) ctx.stroke();
+    }
+    // --- flowers: stem, then the head colour it belongs to ---
+    ctx.strokeStyle = "#4c8a47";
+    ctx.lineWidth = 1.2;
+    for (let k = 0; k < 3; k++) {
+      ctx.beginPath();
+      if (!bucketPath(4 + k, (x, y, _tint, _s, sway) => {
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + sway, y - 8);
+      })) continue;
+      ctx.stroke();
+    }
+    const headStyles = ["#c96a5a", "#d977a0", "#e5c95c"];
+    for (let k = 0; k < 3; k++) {
+      ctx.fillStyle = headStyles[k];
+      ctx.beginPath();
+      if (bucketPath(4 + k, (x, y, _tint, _s, sway) => ctx.arc(x + sway, y - 10, 2.4, 0, Math.PI * 2))) ctx.fill();
+    }
+    // --- mushrooms: stem + cap ---
+    ctx.fillStyle = "#e8e0d0";
+    ctx.beginPath();
+    for (const b of [8, 9, 10]) {
+      bucketPath(b, (x, y, _tint, s) => ctx.rect(x - 1 * s, y - 4 * s, 2 * s, 4 * s));
+    }
+    ctx.fill();
+    for (const [b, style] of [[9, "#c98a5a"], [10, "#b5654a"]] as [number, string][]) {
+      ctx.fillStyle = style;
+      ctx.beginPath();
+      if (bucketPath(b, (x, y, _tint, s) => ctx.ellipse(x, y - 4.5 * s, 2.6 * s, 1.7 * s, 0, Math.PI, 0))) ctx.fill();
+    }
+    // --- fallen leaves ---
+    for (const [b, style] of [[11, "rgba(130,110,50,0.5)"], [12, "rgba(160,130,60,0.55)"]] as [number, string][]) {
+      ctx.fillStyle = style;
+      ctx.beginPath();
+      if (bucketPath(b, (x, y, tint, s) => {
+        for (let i = 0; i < 3; i++) ctx.ellipse(x + (i - 1) * 5 * s, y + i * 2 - 2, 3 * s, 1.5 * s, tint * 3 + i, 0, Math.PI * 2);
+      })) ctx.fill();
+    }
+    // --- stone clusters (base, highlight, moss) ---
+    ctx.fillStyle = "#83857f";
+    ctx.beginPath();
+    if (bucketPath(13, (x, y, _tint, s) => {
+      ctx.ellipse(x - 3 * s, y, 3.4 * s, 2.2 * s, 0, 0, Math.PI * 2);
+      ctx.ellipse(x + 3.4 * s, y + 1, 2.6 * s, 1.8 * s, 0, 0, Math.PI * 2);
+    })) ctx.fill();
+    ctx.fillStyle = "#95978d";
+    ctx.beginPath();
+    if (bucketPath(14, (x, y, _tint, s) => ctx.ellipse(x - 3.6 * s, y - 1.4 * s, 1.8 * s, 1.1 * s, 0, 0, Math.PI * 2))) ctx.fill();
+    ctx.fillStyle = "rgba(95,143,78,0.7)";
+    ctx.beginPath();
+    if (bucketPath(15, (x, y, _tint, s) => ctx.ellipse(x + 3 * s, y - 0.6, 1.8 * s, 0.9 * s, 0.3, 0, Math.PI * 2))) ctx.fill();
+    // --- roots / fallen logs: rare, drawn individually (cheap, detailed) ---
+    for (const f of lush) {
+      const sway = Math.sin(this.time * 1.8 + f.x * 0.05) * 1.2 * gust;
+      const s = f.s;
+      switch (f.kind) {
         case "roots": {
           // tree root flare
           ctx.strokeStyle = "rgba(90,70,48,0.85)";
@@ -6767,25 +7080,6 @@ export class GameCanvas {
           ctx.quadraticCurveTo(f.x - 2 * s, f.y - 3 * s, f.x, f.y);
           ctx.quadraticCurveTo(f.x + 3 * s, f.y - 2 * s, f.x + 6 * s, f.y + 2);
           ctx.stroke();
-          break;
-        }
-        case "stones": {
-          // small stone cluster with moss
-          ctx.fillStyle = "#83857f";
-          ctx.beginPath();
-          ctx.ellipse(f.x - 3 * s, f.y, 3.4 * s, 2.2 * s, 0, 0, Math.PI * 2);
-          ctx.ellipse(f.x + 3.4 * s, f.y + 1, 2.6 * s, 1.8 * s, 0, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = "#95978d";
-          ctx.beginPath();
-          ctx.ellipse(f.x - 3.6 * s, f.y - 1.4 * s, 1.8 * s, 1.1 * s, 0, 0, Math.PI * 2);
-          ctx.fill();
-          if (f.tint > 0.55) {
-            ctx.fillStyle = "rgba(95,143,78,0.7)";
-            ctx.beginPath();
-            ctx.ellipse(f.x + 3 * s, f.y - 0.6, 1.8 * s, 0.9 * s, 0.3, 0, Math.PI * 2);
-            ctx.fill();
-          }
           break;
         }
         case "log": {
@@ -7053,27 +7347,42 @@ export class GameCanvas {
     // lean, so trees bend subtly instead of rigidly sliding sideways
     ctx.translate(sway, Math.sin(this.time * 1.1 + x * 0.03 + 1.3) * 0.4 * (1 + this.env.wind * 2));
     if (species === "pine") {
-      // layered boughs, darkest at the bottom
+      // layered boughs, darkest at the bottom. §PERF: the two colours alternate
+      // by layer, so each colour is ONE path (and one rim-light stroke) — the
+      // same boughs, half the fills and a quarter of the strokes.
       const layers = 4;
+      const lw2: number[] = [];
+      const ly2: number[] = [];
       for (let i = layers; i >= 1; i--) {
-        const ly = y - trunkH * (1 - i / (layers + 1)) - r * 0.18;
-        const lw = r * (0.4 + i * 0.2);
-        const lh = r * 0.7;
-        ctx.fillStyle = i % 2 === 0 ? "#2b5734" : "#34683f";
+        ly2[i] = y - trunkH * (1 - i / (layers + 1)) - r * 0.18;
+        lw2[i] = r * (0.4 + i * 0.2);
+      }
+      const lh = r * 0.7;
+      for (const parity of [0, 1]) {
+        ctx.fillStyle = parity === 0 ? "#2b5734" : "#34683f";
         ctx.beginPath();
-        ctx.moveTo(x - lw, ly);
-        ctx.quadraticCurveTo(x - lw * 0.4, ly - lh * 0.7, x, ly - lh);
-        ctx.quadraticCurveTo(x + lw * 0.4, ly - lh * 0.7, x + lw, ly);
-        ctx.closePath();
+        for (let i = 1; i <= layers; i++) {
+          if (i % 2 !== parity) continue;
+          const ly = ly2[i];
+          const lw = lw2[i];
+          ctx.moveTo(x - lw, ly);
+          ctx.quadraticCurveTo(x - lw * 0.4, ly - lh * 0.7, x, ly - lh);
+          ctx.quadraticCurveTo(x + lw * 0.4, ly - lh * 0.7, x + lw, ly);
+          ctx.closePath();
+        }
         ctx.fill();
-        // rim light on each bough
-        ctx.strokeStyle = "rgba(140, 200, 130, 0.28)";
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
+      }
+      // rim light on each bough (one stroke for all four)
+      ctx.strokeStyle = "rgba(140, 200, 130, 0.28)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (let i = layers; i >= 1; i--) {
+        const ly = ly2[i];
+        const lw = lw2[i];
         ctx.moveTo(x - lw * 0.75, ly - lh * 0.28);
         ctx.quadraticCurveTo(x, ly - lh * 0.92, x + lw * 0.75, ly - lh * 0.28);
-        ctx.stroke();
       }
+      ctx.stroke();
     } else {
       // canopy: layered clusters, light from upper-left
       const leafA = species === "birch" ? "#6fae5c" : s > 0.5 ? "#4a8a4c" : "#417f45";
@@ -7087,12 +7396,12 @@ export class GameCanvas {
         [r * 0.28, -r * 0.26, r * 0.54],
         [0, -r * 0.06, r * 0.62],
       ];
-      for (const [dx, dy, cr] of clusters) {
-        ctx.fillStyle = leafA;
-        ctx.beginPath();
-        ctx.arc(x + dx, cy + dy, cr, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      // §PERF: the five same-coloured clusters are one path (one fill), and the
+      // texture dabs another — identical canopy, 8 fewer raster calls per tree
+      ctx.fillStyle = leafA;
+      ctx.beginPath();
+      for (const [dx, dy, cr] of clusters) ctx.arc(x + dx, cy + dy, cr, 0, Math.PI * 2);
+      ctx.fill();
       // mid tone
       ctx.fillStyle = leafB;
       ctx.beginPath();
@@ -7106,13 +7415,13 @@ export class GameCanvas {
       ctx.fill();
       // scattered leaf dabs for texture
       ctx.fillStyle = "rgba(255,255,240,0.12)";
+      ctx.beginPath();
       for (let i = 0; i < 5; i++) {
         const lx = x - r * 0.6 + hash2(i, Math.floor(x)) * r * 1.2;
         const ly = cy - r * 0.5 + hash2(i, Math.floor(y)) * r * 0.9;
-        ctx.beginPath();
         ctx.ellipse(lx, ly, 2.6, 1.4, hash2(i, 3) * 3, 0, Math.PI * 2);
-        ctx.fill();
       }
+      ctx.fill();
     }
     ctx.restore();
   }

@@ -8,7 +8,7 @@
 // the cat with a frame-rate-independent ease (no snapping, no jitter), and
 // everything outside the lens stays a calm whole-map overview.
 
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -102,7 +102,13 @@ const LOCAL_DENS = allObjects
  * The lens center eases toward the player's position each render (exponential
  * smoothing), so walking produces a glide instead of a jump.
  */
-export function WorldMapCanvas({
+/**
+ * The minimap. Memoized: the game HUD re-renders several times a second while
+ * the cat moves (and on every stats/chat/weather update), and this component
+ * rebuilds hundreds of SVG nodes from the world's 2,300 trees + 3,400 plants.
+ * Unrelated state changes now leave it completely untouched.
+ */
+export const WorldMapCanvas = memo(function WorldMapCanvas({
   px,
   py,
   facing,
@@ -152,11 +158,27 @@ export function WorldMapCanvas({
     return targetX >= x && targetX < x + w && targetY >= y && targetY < y + h;
   });
 
-  // local detail content clipped to the lens (tile coords = svg units here)
-  const localTrees = LOCAL_TREES.filter((tr) => Math.hypot(tr.x - lx, tr.y - ly) < lensR + 3);
-  const localFlora = LOCAL_FLORA.filter((f) => Math.hypot(f.x - lx, f.y - ly) < lensR + 1);
-  const localHouses = LOCAL_HOUSES.filter((h) => Math.hypot(h.x - lx, h.y - ly) < lensR + 4);
-  const localDens = LOCAL_DENS.filter((d) => Math.hypot(d.x - lx, d.y - ly) < lensR + 2);
+  // §PERF: local detail content clipped to the lens (tile coords = svg units
+  // here). Scanning 5,700 world items on EVERY render was wasted work: the lens
+  // only ever moves a fraction of a tile between frames, so the scan is cached
+  // per whole tile (with a margin, since the clip radius is baked into the
+  // filter). Walking re-scans ~5 times per second instead of ~20, and standing
+  // still scans not at all.
+  const lensTileX = Math.round(lx);
+  const lensTileY = Math.round(ly);
+  const detail = useMemo(() => {
+    const r = lensR + 4;
+    return {
+      trees: LOCAL_TREES.filter((tr) => Math.hypot(tr.x - lensTileX, tr.y - lensTileY) < r),
+      flora: LOCAL_FLORA.filter((f) => Math.hypot(f.x - lensTileX, f.y - lensTileY) < r),
+      houses: LOCAL_HOUSES.filter((h) => Math.hypot(h.x - lensTileX, h.y - lensTileY) < r),
+      dens: LOCAL_DENS.filter((d) => Math.hypot(d.x - lensTileX, d.y - lensTileY) < r),
+    };
+  }, [lensTileX, lensTileY, lensR]);
+  const localTrees = detail.trees;
+  const localFlora = detail.flora;
+  const localHouses = detail.houses;
+  const localDens = detail.dens;
 
   const lensId = `lens-${size}`;
 
@@ -306,7 +328,7 @@ export function WorldMapCanvas({
       )}
     </div>
   );
-}
+});
 
 /** Legend strip shared by minimap + full map. */
 export function MapLegend({ compact }: { compact?: boolean }) {

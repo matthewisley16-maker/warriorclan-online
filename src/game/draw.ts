@@ -141,7 +141,15 @@ export function drawCat(
   const moving = pose === "walk" || pose === "swim";
   /** the DRAWN facing: fractional while the cat pivots (see easeFacing) */
   const drawnFacing = A ? A.facing : facing;
-  const gaitLegs = A && A.legs.length > 0 && (pose === "walk" || (pose === "swim" && A.moving)) ? A.legs : null;
+  // §ANIM: the gait legs are used whenever the cat is actually TRAVELLING —
+  // including the crouch/stalk slide, which used to fall through to the static
+  // two-paw stance and ground-skate across the map while stalking. A still
+  // crouched cat keeps the original crouch stance art.
+  const sliding = (pose === "crouch" || pose === "stalk") && A?.moving === true;
+  const gaitLegs =
+    A && A.legs.length > 0 && (pose === "walk" || sliding || (pose === "swim" && A.moving))
+      ? A.legs
+      : null;
   const SWIM_BOB_HZ = 1.1;
   const fam = baseFamilyOf(pose);
   // dances: each has its own beat (bounce + body sway below)
