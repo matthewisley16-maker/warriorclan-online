@@ -83,7 +83,9 @@ export function advanceGait(state: GaitState, distPx: number, gait: Gait, dtSec 
   // stride 2.4x faster at 144Hz than at 60Hz — the same animation running at
   // different speeds on different machines.
   const settle = Math.min(1, Math.max(0, dtSec) / SETTLE_SECONDS);
-  const rate = moved > 0 ? Math.min(1, moved / 22) : settle;
+  // A moving cat engages its stride within a few frames even when it is creeping
+  // (a slow advance must not leave it sliding on half-tucked legs).
+  const rate = moved > 0 ? Math.min(1, Math.max(0.35, moved / 22)) : settle;
   const blend = Math.max(0, Math.min(1, state.blend + (target - state.blend) * rate));
   const phase = moved > 0 ? (state.phase + moved / stride) % 1 : state.phase;
   // keep the last MOVING gait recorded while the cat idles, so the settling

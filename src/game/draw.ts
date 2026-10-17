@@ -155,10 +155,13 @@ export function drawCat(
   // dances: each has its own beat (bounce + body sway below)
   const dancePhase = pose === "dance1" ? time * 4.6 : pose === "dance2" ? time * 6.2 : pose === "dance3" ? time * 7.4 : pose === "dance4" ? time * 3.6 : 0;
   const danceBounce = DANCE_ROT[pose] !== undefined ? Math.abs(Math.sin(dancePhase)) * 3.2 : 0;
-  const bob = A && moving && A.blend > 0.15
-    ? A.bob
-    : moving
-    ? Math.abs(Math.sin(time * 9 + phase)) * 1.6
+  // §ANIM: with the state machine present the body bob comes from the real
+  // stride and nowhere else — the old time-based bob kept running under legs
+  // that had settled, which read as a cat floating over frozen paws.
+  const bob = moving
+    ? A
+      ? A.bob
+      : Math.abs(Math.sin(time * 9 + phase)) * 1.6
     : pose === "play" || pose === "leap"
       ? Math.abs(Math.sin(time * 3.2 + phase)) * 3.4
       : pose === "pounce"
@@ -183,7 +186,12 @@ export function drawCat(
   ctx.translate(x, y);
   // §ANIM TURNING: the scale factor slides through 0 while the cat pivots, so
   // a direction change reads as a turn instead of an instant mirror flip.
-  ctx.scale(drawnFacing * size, size);
+  // §ANIM TURN: a pivot squashes the cat toward the side-on line. The drawn
+  // facing crosses 0 while turning, and a literal 0 width would collapse the
+  // cat to an invisible sliver — so the width never drops below 0.6 and the
+  // mirror happens at its narrowest, where it is least visible.
+  const facingWidth = (drawnFacing < 0 ? -1 : 1) * (0.6 + 0.4 * Math.min(1, Math.abs(drawnFacing)));
+  ctx.scale(facingWidth * size, size);
   ctx.translate(0, -bob + swimBob);
   if (A && A.roll) ctx.rotate(A.roll);
   if (pose === "swim") {

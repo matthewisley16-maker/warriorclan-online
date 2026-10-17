@@ -445,6 +445,49 @@ function hash2(x: number, y: number): number {
   return ((h ^ (h >> 16)) >>> 0) / 0xffffffff;
 }
 
+// §PATH: shapes that share ONE path (the perf batches) must each start their own
+// subpath. `arc()`/`ellipse()` join the current point with a straight line, so a
+// batch that just calls them back to back becomes a single closed contour — and
+// filling that paints the whole hull BETWEEN the shapes (giant translucent
+// blobs across the screen). These helpers `moveTo` the shape's own start first,
+// which makes every shape a separate subpath: batching stays, hulls disappear.
+function pathCircle(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
+  ctx.moveTo(x + r, y);
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+}
+
+function pathEllipse(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  rx: number,
+  ry: number,
+  rot = 0,
+) {
+  // the ellipse path starts at angle 0 in its own rotated frame
+  ctx.moveTo(x + rx * Math.cos(rot), y + rx * Math.sin(rot));
+  ctx.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2);
+}
+
+/** Half/partial arc as its own subpath (mushroom caps, etc.). */
+function pathArc(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  rx: number,
+  ry: number,
+  rot: number,
+  a0: number,
+  a1: number,
+) {
+  const c = Math.cos(rot);
+  const s = Math.sin(rot);
+  const lx = rx * Math.cos(a0);
+  const ly = ry * Math.sin(a0);
+  ctx.moveTo(x + lx * c - ly * s, y + lx * s + ly * c);
+  ctx.ellipse(x, y, rx, ry, rot, a0, a1);
+}
+
 // Ground-kind indexes used for weather tinting (water & paved stay wet-looking).
 const GROUND_WATER = 2;
 const GROUND_PAVED = 4;
@@ -6811,21 +6854,21 @@ export class GameCanvas {
     };
     const litterStyles = ["rgba(122, 96, 46, 0.55)", "rgba(150, 116, 58, 0.5)", "rgba(96, 118, 52, 0.45)"];
     for (let k = 0; k < 3; k++) {
-      fillEllipses(k, litterStyles[k], (x, y, a, s) => ctx.ellipse(x, y, 3.2 * s, 1.7 * s, a, 0, Math.PI * 2));
+      fillEllipses(k, litterStyles[k], (x, y, a, s) => pathEllipse(ctx, x, y, 3.2 * s, 1.7 * s, a));
     }
-    fillEllipses(3, "rgba(128, 128, 124, 0.6)", (x, y, a, s) => ctx.ellipse(x, y, 2.6 * s, 1.9 * s, a, 0, Math.PI * 2));
-    fillEllipses(4, "rgba(255,255,255,0.18)", (x, y, a, s) => ctx.ellipse(x - s * 0.7, y - s * 0.5, s * 0.9, s * 0.5, a, 0, Math.PI * 2));
-    fillEllipses(5, "rgba(92, 72, 46, 0.22)", (x, y, a, s) => ctx.ellipse(x, y, 9 * s, 5.5 * s, a, 0, Math.PI * 2));
+    fillEllipses(3, "rgba(128, 128, 124, 0.6)", (x, y, a, s) => pathEllipse(ctx, x, y, 2.6 * s, 1.9 * s, a));
+    fillEllipses(4, "rgba(255,255,255,0.18)", (x, y, a, s) => pathEllipse(ctx, x - s * 0.7, y - s * 0.5, s * 0.9, s * 0.5, a));
+    fillEllipses(5, "rgba(92, 72, 46, 0.22)", (x, y, a, s) => pathEllipse(ctx, x, y, 9 * s, 5.5 * s, a));
     const petals = ["#e8dd8f", "#d8a2c8", "#eef2f4"];
     for (let k = 0; k < 3; k++) {
       fillEllipses(7 + k, petals[k], (x, y, a, s) => {
         for (let i = 0; i < 4; i++) {
           const ang = a + (i * Math.PI) / 2;
-          ctx.arc(x + Math.cos(ang) * 1.8 * s, y + Math.sin(ang) * 1.8 * s, 1.3 * s, 0, Math.PI * 2);
+          pathCircle(ctx, x + Math.cos(ang) * 1.8 * s, y + Math.sin(ang) * 1.8 * s, 1.3 * s);
         }
       });
     }
-    fillEllipses(10, "#c9a227", (x, y, _a, s) => ctx.arc(x, y, 1 * s, 0, Math.PI * 2));
+    fillEllipses(10, "#c9a227", (x, y, _a, s) => pathCircle(ctx, x, y, 1 * s));
     // the few soil grains stay individual squares (3px, sub-pixel cheap)
     const grain = this.decoBuckets[6];
     if (grain.length > 0) {
@@ -7035,7 +7078,7 @@ export class GameCanvas {
     for (let k = 0; k < 3; k++) {
       ctx.fillStyle = headStyles[k];
       ctx.beginPath();
-      if (bucketPath(4 + k, (x, y, _tint, _s, sway) => ctx.arc(x + sway, y - 10, 2.4, 0, Math.PI * 2))) ctx.fill();
+      if (bucketPath(4 + k, (x, y, _tint, _s, sway) => pathCircle(ctx, x + sway, y - 10, 2.4))) ctx.fill();
     }
     // --- mushrooms: stem (every mushroom) + cap (by colour) ---
     ctx.fillStyle = "#e8e0d0";
@@ -7046,29 +7089,29 @@ export class GameCanvas {
     for (const [b, style] of [[8, "#c98a5a"], [9, "#b5654a"]] as [number, string][]) {
       ctx.fillStyle = style;
       ctx.beginPath();
-      if (bucketPath(b, (x, y, _tint, s) => ctx.ellipse(x, y - 4.5 * s, 2.6 * s, 1.7 * s, 0, Math.PI, 0))) ctx.fill();
+      if (bucketPath(b, (x, y, _tint, s) => pathArc(ctx, x, y - 4.5 * s, 2.6 * s, 1.7 * s, 0, Math.PI, 0))) ctx.fill();
     }
     // --- fallen leaves ---
     for (const [b, style] of [[11, "rgba(130,110,50,0.5)"], [12, "rgba(160,130,60,0.55)"]] as [number, string][]) {
       ctx.fillStyle = style;
       ctx.beginPath();
       if (bucketPath(b, (x, y, tint, s) => {
-        for (let i = 0; i < 3; i++) ctx.ellipse(x + (i - 1) * 5 * s, y + i * 2 - 2, 3 * s, 1.5 * s, tint * 3 + i, 0, Math.PI * 2);
+        for (let i = 0; i < 3; i++) pathEllipse(ctx, x + (i - 1) * 5 * s, y + i * 2 - 2, 3 * s, 1.5 * s, tint * 3 + i);
       })) ctx.fill();
     }
     // --- stone clusters (base, highlight, moss) ---
     ctx.fillStyle = "#83857f";
     ctx.beginPath();
     if (bucketPath(13, (x, y, _tint, s) => {
-      ctx.ellipse(x - 3 * s, y, 3.4 * s, 2.2 * s, 0, 0, Math.PI * 2);
-      ctx.ellipse(x + 3.4 * s, y + 1, 2.6 * s, 1.8 * s, 0, 0, Math.PI * 2);
+      pathEllipse(ctx, x - 3 * s, y, 3.4 * s, 2.2 * s);
+      pathEllipse(ctx, x + 3.4 * s, y + 1, 2.6 * s, 1.8 * s);
     })) ctx.fill();
     ctx.fillStyle = "#95978d";
     ctx.beginPath();
-    if (bucketPath(14, (x, y, _tint, s) => ctx.ellipse(x - 3.6 * s, y - 1.4 * s, 1.8 * s, 1.1 * s, 0, 0, Math.PI * 2))) ctx.fill();
+    if (bucketPath(14, (x, y, _tint, s) => pathEllipse(ctx, x - 3.6 * s, y - 1.4 * s, 1.8 * s, 1.1 * s))) ctx.fill();
     ctx.fillStyle = "rgba(95,143,78,0.7)";
     ctx.beginPath();
-    if (bucketPath(15, (x, y, _tint, s) => ctx.ellipse(x + 3 * s, y - 0.6, 1.8 * s, 0.9 * s, 0.3, 0, Math.PI * 2))) ctx.fill();
+    if (bucketPath(15, (x, y, _tint, s) => pathEllipse(ctx, x + 3 * s, y - 0.6, 1.8 * s, 0.9 * s, 0.3))) ctx.fill();
     // --- roots / fallen logs: rare, drawn individually (cheap, detailed) ---
     for (const f of lush) {
       const sway = Math.sin(this.time * 1.8 + f.x * 0.05) * 1.2 * gust;
@@ -7403,18 +7446,18 @@ export class GameCanvas {
       // texture dabs another — identical canopy, 8 fewer raster calls per tree
       ctx.fillStyle = leafA;
       ctx.beginPath();
-      for (const [dx, dy, cr] of clusters) ctx.arc(x + dx, cy + dy, cr, 0, Math.PI * 2);
+      for (const [dx, dy, cr] of clusters) pathCircle(ctx, x + dx, cy + dy, cr);
       ctx.fill();
       // mid tone
       ctx.fillStyle = leafB;
       ctx.beginPath();
-      ctx.arc(x - r * 0.16, cy - r * 0.2, r * 0.42, 0, Math.PI * 2);
-      ctx.arc(x + r * 0.26, cy - r * 0.14, r * 0.38, 0, Math.PI * 2);
+      pathCircle(ctx, x - r * 0.16, cy - r * 0.2, r * 0.42);
+      pathCircle(ctx, x + r * 0.26, cy - r * 0.14, r * 0.38);
       ctx.fill();
       // highlight
       ctx.fillStyle = leafC;
       ctx.beginPath();
-      ctx.arc(x - r * 0.1, cy - r * 0.42, r * 0.26, 0, Math.PI * 2);
+      pathCircle(ctx, x - r * 0.1, cy - r * 0.42, r * 0.26);
       ctx.fill();
       // scattered leaf dabs for texture
       ctx.fillStyle = "rgba(255,255,240,0.12)";
@@ -7422,7 +7465,7 @@ export class GameCanvas {
       for (let i = 0; i < 5; i++) {
         const lx = x - r * 0.6 + hash2(i, Math.floor(x)) * r * 1.2;
         const ly = cy - r * 0.5 + hash2(i, Math.floor(y)) * r * 0.9;
-        ctx.ellipse(lx, ly, 2.6, 1.4, hash2(i, 3) * 3, 0, Math.PI * 2);
+        pathEllipse(ctx, lx, ly, 2.6, 1.4, hash2(i, 3) * 3);
       }
       ctx.fill();
     }
@@ -7462,15 +7505,15 @@ export class GameCanvas {
     // dark under-layer
     ctx.fillStyle = s > 0.5 ? "#2f5c3a" : "#356340";
     ctx.beginPath();
-    ctx.arc(x - w * 0.26, y - h * 0.08, w * 0.36, 0, Math.PI * 2);
-    ctx.arc(x + w * 0.26, y - h * 0.08, w * 0.36, 0, Math.PI * 2);
-    ctx.arc(x, y - h * 0.3, w * 0.4, 0, Math.PI * 2);
+    pathCircle(ctx, x - w * 0.26, y - h * 0.08, w * 0.36);
+    pathCircle(ctx, x + w * 0.26, y - h * 0.08, w * 0.36);
+    pathCircle(ctx, x, y - h * 0.3, w * 0.4);
     ctx.fill();
     // mid layer
     ctx.fillStyle = s > 0.5 ? "#3d7248" : "#437a4d";
     ctx.beginPath();
-    ctx.arc(x - w * 0.16, y - h * 0.26, w * 0.3, 0, Math.PI * 2);
-    ctx.arc(x + w * 0.2, y - h * 0.22, w * 0.28, 0, Math.PI * 2);
+    pathCircle(ctx, x - w * 0.16, y - h * 0.26, w * 0.3);
+    pathCircle(ctx, x + w * 0.2, y - h * 0.22, w * 0.28);
     ctx.fill();
     // highlights (light from upper-left)
     ctx.fillStyle = "#549159";

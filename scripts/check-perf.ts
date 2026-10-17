@@ -32,10 +32,24 @@ interface OpLog {
   radialGradients: number;
   /** the fill colour in force for each full-screen fill */
   fullScreenStyles: string[];
+  /**
+   * Shapes added to a path that was NOT anchored by a `moveTo`.
+   * `arc()`/`ellipse()` link the current point to the arc's start with a
+   * straight line, so a batched path that fires shapes back to back becomes
+   * ONE contour and `fill()` paints the hull between them — the bug that put
+   * giant translucent blobs over the whole screen.
+   */
+  bridgedShapes: number;
 }
 
 function makeCtx(log?: OpLog) {
   const target: Record<string, unknown> = {};
+  // Canvas path state: a fresh path has no previous subpath, so its first
+  // shape cannot bridge anything. After a shape the current point sits on that
+  // shape, and the next arc would connect to it unless a moveTo intervenes.
+  let anchored = true;
+  const SHAPES = new Set(["arc", "ellipse"]);
+  const BREAKS = new Set(["rect", "roundRect", "lineTo", "quadraticCurveTo", "bezierCurveTo", "closePath"]);
   return new Proxy(target, {
     get(t, prop) {
       if (log && prop === "fillStyle") return (t as Record<string, unknown>).fillStyle;
@@ -59,6 +73,11 @@ function makeCtx(log?: OpLog) {
             }
           }
         }
+        if (key === "beginPath" || key === "moveTo") anchored = true;
+        else if (SHAPES.has(key)) {
+          if (!anchored && log) log.bridgedShapes++;
+          anchored = false;
+        } else if (BREAKS.has(key)) anchored = false;
         return undefined;
       };
     },
@@ -71,7 +90,7 @@ function makeCtx(log?: OpLog) {
 
 const CANVAS_W = 1600;
 const CANVAS_H = 900;
-const opLog: OpLog = { counts: {}, fullScreenFills: 0, radialGradients: 0, fullScreenStyles: [] };
+const opLog: OpLog = { counts: {}, fullScreenFills: 0, radialGradients: 0, fullScreenStyles: [], bridgedShapes: 0 };
 const ctx = makeCtx(opLog);
 const canvas = {
   getContext: () => ctx,
@@ -133,6 +152,9 @@ function check(ok: boolean, label: string, detail = "") {
   }
 }
 
+// one animator shared with the rendered-gait section below
+const anim3 = new CatAnimator();
+
 const noop = () => undefined;
 const TILE = 32;
 const g = new GameCanvas(canvas as unknown as HTMLCanvasElement, { x: 78 * TILE, y: 146 * TILE }, {
@@ -161,6 +183,7 @@ function measure(x: number, y: number) {
   opLog.fullScreenFills = 0;
   opLog.radialGradients = 0;
   opLog.fullScreenStyles = [];
+  opLog.bridgedShapes = 0;
   newCanvases = 0;
   const t0 = Date.now();
   for (let i = 0; i < 20; i++) stepFrame();
@@ -172,6 +195,7 @@ function measure(x: number, y: number) {
     fullScreenFills: opLog.fullScreenFills / frames,
     fullScreenStyles: [...opLog.fullScreenStyles],
     radialGradients: opLog.radialGradients / frames,
+    bridgedShapes: opLog.bridgedShapes / frames,
     newCanvases,
     ms: (Date.now() - t0) / frames,
   };
@@ -214,6 +238,39 @@ console.log("— full-screen passes —");
   check(!!m && a > 0.3, "the night tint is still applied", tint || "no full-screen tint found");
   check(b >= r, "the night tint is still moonlight blue", `r=${r} g=${gg} b=${b}`);
   gAny.dayTime = dayTime;
+}
+
+// ---------------------------------------------------------------------------
+// 2a) PATH INTEGRITY: a batched fill must never bridge separate shapes
+//
+// The ground-detail / flora / canopy batches share one path per style. Each
+// shape in such a path has to start its own subpath (moveTo) — otherwise the
+// fill joins them into a single contour and paints the hull in between, which
+// showed up as giant stray shapes over the whole map.
+// ---------------------------------------------------------------------------
+console.log("— batched paths —");
+{
+  const camp = measure(89 * TILE, 86 * TILE);
+  const forest = measure(70 * TILE, 70 * TILE);
+  const river = measure(150 * TILE, 100 * TILE);
+  for (const [name, m] of [
+    ["camp", camp],
+    ["forest", forest],
+    ["river", river],
+  ] as const) {
+    check(m.bridgedShapes === 0, `no shape bridges into the previous one (${name})`, `${m.bridgedShapes.toFixed(0)} joined shapes/frame`);
+  }
+  // …and indoors, where a different renderer paints the room
+  g.enterInterior("house-a");
+  for (let i = 0; i < 30; i++) stepFrame();
+  opLog.counts = {};
+  opLog.bridgedShapes = 0;
+  for (let i = 0; i < 20; i++) stepFrame();
+  const indoors = opLog.bridgedShapes / 20;
+  check(opLog.counts.fillRect !== undefined, "an interior frame renders");
+  check(indoors === 0, "no shape bridges into the previous one (interior)", `${indoors.toFixed(0)} joined shapes/frame`);
+  g.exitInterior();
+  for (let i = 0; i < 30; i++) stepFrame();
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +455,64 @@ console.log("— animation stability —");
   drawCat(proxy2, normalizeSkin({ fur: "#c9a27a" }), 0, 0, 1, "crouch", 1, 0, { anim: movingView });
   const movingPaws = rec2.filter((a) => a.length === 5 && a[2] === 4 && a[3] === 7).length;
   check(movingPaws === 4, "a crouch-WALKING cat is drawn with its four animated paws", `${movingPaws}`);
+}
+
+// ---------------------------------------------------------------------------
+// 4b) THE RENDERER: the paws that reach the canvas really walk
+//
+// The animator can be perfect and the cat still skate: this draws a WALKING cat
+// frame by frame and measures the paws the canvas actually receives.
+// ---------------------------------------------------------------------------
+console.log("— rendered gait —");
+{
+  const PAW = (a: unknown[]) => a.length === 5 && a[2] === 4 && a[3] === 7;
+  const paws: { x: number; y: number }[][] = [];
+  const scales: number[] = [];
+  let facing: 1 | -1 = 1;
+  for (let i = 0; i <= 90; i++) {
+    // walk right for 30 frames, then turn and walk left (the drawn facing has to
+    // cross zero without the cat collapsing to a sliver)
+    if (i === 30) facing = -1;
+    const rec: unknown[][] = [];
+    const proxy = new Proxy(makeCtx(), {
+      get(t, prop) {
+        if (prop === "roundRect") return (...a: unknown[]) => rec.push(a);
+        if (prop === "scale") return (sx: number) => scales.push(sx);
+        return Reflect.get(t, prop);
+      },
+    }) as unknown as CanvasRenderingContext2D;
+    const view = anim3.update(
+      "w",
+      {
+        x: facing === 1 ? i * 2.75 : 30 * 2.75 - (i - 30) * 2.75,
+        y: 0,
+        gait: "walk",
+        poseLocked: false,
+        facing,
+        nowSec: i / 60,
+        dtSec: 1 / 60,
+      },
+      1,
+    );
+    drawCat(proxy, normalizeSkin({ fur: "#c9a27a" }), 0, 0, facing, "walk", i / 60, 0, { anim: view });
+    paws.push(rec.filter(PAW).map((a) => ({ x: Number(a[0]), y: Number(a[1]) })));
+  }
+  check(paws.every((p) => p.length === 4), "every walking frame draws all four paws", `${paws.find((p) => p.length !== 4)?.length} seen`);
+  // the gait legs are drawn far-pair then near-pair in a fixed order, so index i
+  // is the same paw from frame to frame
+  let maxStep = 0;
+  let travel = 0;
+  for (let i = 1; i < paws.length; i++) {
+    for (let k = 0; k < 4; k++) {
+      const d = Math.abs(paws[i][k].x - paws[i - 1][k].x);
+      maxStep = Math.max(maxStep, d);
+      travel += d;
+    }
+  }
+  check(maxStep < 8, "no paw teleports between frames", `max ${maxStep.toFixed(2)}px/frame`);
+  check(travel / (paws.length - 1) > 1.2, "the paws are genuinely moving, not a static stance", `${(travel / (paws.length - 1)).toFixed(2)}px/frame total`);
+  const minWidth = Math.min(...scales.map(Math.abs));
+  check(minWidth >= 0.55, "the cat never collapses to an invisible sliver while turning", `min drawn width ${minWidth.toFixed(2)}`);
 }
 
 // ---------------------------------------------------------------------------

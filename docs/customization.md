@@ -268,6 +268,14 @@ Rules the animator now enforces (each one is a bug that was visible in play):
   sprint through a stride.
 - **Turns never snap.** `easeFacing` always moves *toward* the target, so
   reversing mid-turn no longer pops the sprite from a lean to full side-on.
+  The drawn facing crosses 0 while the cat pivots, and `drawCat` clamps the
+  sprite's width to 0.6 there — a literal 0 would collapse the cat to an
+  invisible sliver for a frame.
+- **Legs engage immediately.** The stride blend ramps on distance with a floor
+  (`max(0.35, moved/22)`), so a creeping cat animates its legs on the first
+  frame instead of sliding on half-tucked paws, and the body bob comes only
+  from the real stride (the old time-based bob under settled legs read as a
+  cat floating over frozen paws).
 - **Tail smoothing survives a clock reset** (forward or backward) by
   re-seeding its shape instead of interpolating across the discontinuity.
 
@@ -303,6 +311,15 @@ DPR 2 — the stub context can count calls but not time the browser rasterizer):
   same-colour clusters and rim lights, and redundant
   `save/translate/rotate/restore` around rotation-aware `ellipse` calls are
   gone. Same pixels, a fraction of the calls.
+- **A batched path must anchor EVERY shape.** `arc()` and `ellipse()` join the
+  current point to the arc's start with a straight line, so a batch that calls
+  them back to back collapses into ONE contour and `fill()` then paints the
+  hull between the shapes — giant translucent blobs spread across the whole
+  map. Multi-shape paths therefore add each shape through the `pathCircle` /
+  `pathEllipse` / `pathArc` helpers (engine.ts), which `moveTo` the shape's own
+  start first so every shape is an independent subpath. `check-perf.ts`
+  measures this on every rendered frame (camp, forest, river) and fails on a
+  single joint.
 - **The render path never simulates.** Thunderpath traffic advances in the
   update step (still only while the road is near the camera); `renderWorld`
   draws it. A renderer must not mutate the world, and a simulated step must
