@@ -133,7 +133,10 @@ export const STAGED_STEPS: Record<string, StepStaging> = {
   "s3-graypaw": S(
     { ...STORY_LOCATIONS["forest-edge"], r: 150 },
     [
-      N("graypaw", "forest-edge", -10, 14, "player", "main", "ambushing the newcomer"),
+      // ~100px off the trail, in the ferns: far enough that the ambush and his
+      // approach are visible on screen, close enough for a two-shot, and on a
+      // clear line of ground from both the trail and the player's mark.
+      N("graypaw", "forest-edge", -90, -40, "player", "main", "ambushing the newcomer"),
       N("smudge", "twoleg-street", 0, 0, "down", "background", "home"),
       N("rusty", "twoleg-garden", 46, -6, "down", "background", "home"),
     ],
@@ -431,19 +434,34 @@ export function canStartBeat(opts: {
     const d = Math.hypot(opts.player.x - gate.x, opts.player.y - gate.y);
     if (d > gate.r + (opts.sceneMargin ?? 260)) return false;
   }
-  if (escortForStep(opts.stepId) && opts.escortStatus && opts.escortStatus !== "arrived") return false;
-  return opts.actorIds.every((id) => opts.actorArrived(id));
+  const escort = escortForStep(opts.stepId);
+  if (escort && opts.escortStatus && opts.escortStatus !== "arrived") return false;
+  // The escort's own status is the gate for that cat: while it leads, it has
+  // no story anchor (so "arrived" would read false forever). Once it has
+  // arrived, the escort clause above has already accepted it.
+  const skip = escort?.npcId;
+  return opts.actorIds.every((id) => id === skip || opts.actorArrived(id));
 }
 
 /** Which npc ids a beat will direct (its acting + camera targets, §22). */
-export function beatActorIds(
-  beat: { lines: { act?: { npcId?: string } | null; cam?: unknown }[] },
-): string[] {
+export function beatActorIds(beat: {
+  lines: {
+    act?: { npcId?: string } | null;
+    cam?: unknown;
+    /** §CINEMATIC: acting directions — an actor must be on its mark too */
+    cues?: { who?: string }[] | null;
+  }[];
+}): string[] {
   const ids: string[] = [];
   for (const line of beat.lines) {
     if (line.act?.npcId && !ids.includes(line.act.npcId)) ids.push(line.act.npcId);
     const cam = line.cam as { npcId?: string } | null | undefined;
     if (cam && typeof cam.npcId === "string" && !ids.includes(cam.npcId)) ids.push(cam.npcId);
+    for (const cue of line.cues ?? []) {
+      const id = cue.who;
+      // "player" is not staged by the story script — it is always present
+      if (id && id !== "player" && !ids.includes(id)) ids.push(id);
+    }
   }
   return ids;
 }

@@ -71,6 +71,7 @@ import {
   type CatSkin,
   type PreySprite,
 } from "./draw";
+import { planCineFrame, type CineShot, type CinePoint } from "./cinematic";
 
 export interface NearbyTarget {
   kind: "object" | "npc" | "prey" | "remote";
@@ -319,6 +320,18 @@ export type CineStep =
   | { kind: "followPlayer"; durMs: number; ease?: "inout" | "out" }
   | { kind: "zoom"; zoom: number; durMs: number; ease?: "inout" | "out" }
   | { kind: "wait"; durMs: number; ease?: "inout" | "out" };
+
+/** §CINE: fastest cinematic pan, in screen px per second (readability). */
+const CINE_PAN_PX_PER_S = 1100;
+
+/** §CINE: the live composition the cutscene camera is easing toward. */
+interface CineFocusTarget {
+  shot: CineShot;
+  actors: string[];
+  points: CinePoint[];
+  /** seconds — time constant of the exponential glide */
+  tau: number;
+}
 
 export interface GameCallbacks {
   onAreaChange: (name: string, id: string) => void;
@@ -1705,7 +1718,21 @@ interface NPCState {
   alertFxUntil: number;
   // §3/§4: temporary story-scene direction (set/cleared by the story layer;
   // the cat's normal AI resumes when the beat ends — never broken)
-  storyBeat?: { pose?: CatPose; head?: "nod" | "shake" | "look" | "sniff"; tail?: boolean; lookAt?: "player" | "none"; until?: number };
+  storyBeat?: {
+    pose?: CatPose;
+    head?: "nod" | "shake" | "look" | "sniff";
+    tail?: boolean;
+    lookAt?: "player" | "none";
+    until?: number;
+    /** ears prick / startle reaction (body-level acting) */
+    alert?: boolean;
+    /** turn on the spot toward a live target */
+    face?: { x: number; y: number };
+    /** walk a few real steps to a point (collision-checked, on foot) */
+    stepTo?: { x: number; y: number };
+  };
+  /** §CINE: a short scripted walk during a cutscene (cleared on arrival) */
+  cineMove?: { x: number; y: number; speed: number };
   headFxUntil: number;
   headKind: "nod" | "shake" | "look" | "sniff" | null;
   role: "leader" | "deputy" | "medicine" | "queen" | "elder" | "apprentice" | "warrior" | "kit" | "kittypet" | "other" | undefined;
@@ -2197,6 +2224,12 @@ export class GameCanvas {
   private cineFromZoom: number | undefined;
   /** §SCENE: held two-cat framing (midpoint + zoom that keeps both in view) */
   private frameHold: { x: number; y: number; zoom: number } | null = null;
+  /**
+   * §CINE: the live shot the camera is composing. Subjects are re-resolved
+   * every frame (so a shot follows a cat that walks during the scene) and the
+   * camera eases toward the framing instead of cutting to it.
+   */
+  private cineFocus: CineFocusTarget | null = null;
   /** §SCENE: the active story escort (an NPC physically leading the player) */
   private storyEscort: StoryEscort | null = null;
   private cineZoom = 1;
@@ -2393,6 +2426,7 @@ export class GameCanvas {
 
   /** ���6: a single cinematic camera step (durations in ms). */
   playCinematic(steps: CineStep[]) {
+    this.cineFocus = null;
     this.cineQueue = steps.slice();
     this.cineIdx = -1;
     this.cineT = 0;
@@ -2400,12 +2434,102 @@ export class GameCanvas {
     if (this.cineActive) this.nextCineStep();
   }
 
-  /** End the cutscene: camera glide resumes following the player. */
+  /**
+   * §CINE: compose a real shot — close-up, medium, two-shot or establishing
+   * wide — around live actors. The camera glides to the composition (no cut),
+   * keeps re-framing while they move, and leaves the world coordinates alone.
+   * `durMs` controls how long the move takes; shorter for a reaction cut-in.
+   */
+  focusCamera(opts: {
+    shot: CineShot;
+    /** "player" or an NPC id — re-resolved every frame */
+    actors?: string[];
+    /** fallback world points when an actor is not in the world */
+    points?: CinePoint[];
+    durMs?: number;
+  }) {
+    const tau = Math.max(0.12, Math.min(0.9, (opts.durMs ?? 900) / 1000 / 2.5));
+    this.cineFocus = {
+      shot: opts.shot,
+      actors: (opts.actors ?? []).slice(),
+      points: (opts.points ?? []).slice(),
+      tau,
+    };
+    this.cineQueue.length = 0;
+    this.cineIdx = -1;
+    this.cineT = 0;
+    this.cineActive = true;
+  }
+
+  /** The camera scale WITHOUT cinematic zoom (settings × viewport factor). */
+  private baseCameraScale(): number {
+    const rect = this.canvas.getBoundingClientRect();
+    return this.userScale * (rect.width < 700 ? 0.85 : rect.width < 1100 ? 1.0 : 1.2);
+  }
+
+  /** Live world positions of the shot's subjects (player + spawned NPCs). */
+  private cineFocusPoints(f: CineFocusTarget): CinePoint[] {
+    const pts: CinePoint[] = [];
+    for (const id of f.actors) {
+      if (id === "player") pts.push({ x: this.px, y: this.py });
+      else {
+        const n = this.npcStates.find((s) => s.def.id === id);
+        if (n && !n.gone) pts.push({ x: n.x, y: n.y });
+      }
+    }
+    // explicit points are the fallback, never a second copy of a live cat
+    for (const p of f.points) pts.push(p);
+    return pts;
+  }
+
+  /** §CINE: ease the camera toward the current composition each frame. */
+  private tickCineFocus(dt: number) {
+    const f = this.cineFocus;
+    if (!f) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const frame = planCineFrame({
+      points: this.cineFocusPoints(f),
+      shot: f.shot,
+      view: {
+        width: Math.max(1, rect.width),
+        height: Math.max(1, rect.height),
+        baseScale: this.baseCameraScale(),
+        worldW: WORLD_W,
+        worldH: WORLD_H,
+      },
+    });
+    const k = 1 - Math.exp(-Math.max(0.001, dt) / f.tau);
+    let dx = (frame.x - this.camX) * k;
+    let dy = (frame.y - this.camY) * k;
+    // Cap the pan in SCREEN space: an exponential ease across a long distance
+    // at close-up zoom would whip the frame hundreds of pixels per frame. The
+    // move stays readable (and cinematic) without becoming a cut.
+    const maxWorldStep = (CINE_PAN_PX_PER_S * Math.max(0.001, dt)) / Math.max(0.2, this.scale);
+    const stepLen = Math.hypot(dx, dy);
+    if (stepLen > maxWorldStep) {
+      dx = (dx / stepLen) * maxWorldStep;
+      dy = (dy / stepLen) * maxWorldStep;
+    }
+    this.camX += dx;
+    this.camY += dy;
+    const before = this.cineZoom;
+    this.cineZoom += (frame.zoom - this.cineZoom) * k;
+    if (Math.abs(this.cineZoom - before) > 0.0004) this.resize();
+  }
+
+  /** Read-only cinematic camera state (tests + debug; never drives gameplay). */
+  cinematicCamera(): { x: number; y: number; zoom: number; scale: number } {
+    return { x: this.camX, y: this.camY, zoom: this.cineZoom, scale: this.scale };
+  }
+
+  /** End the cutscene: the gameplay camera glides back to the player. */
   clearCinematic() {
     this.cineActive = false;
     this.cineQueue.length = 0;
-    this.cineZoom = 1;
-    this.resize();
+    this.cineFocus = null;
+    // NOTE: cineZoom is NOT snapped here — the normal follow branch eases it
+    // back to 1 over a few frames, so the return to gameplay is a smooth pull
+    // back instead of a visible pop.
   }
 
   isCinematic(): boolean {
@@ -2431,24 +2555,54 @@ export class GameCanvas {
    */
   setNpcStoryBeat(
     npcId: string,
-    beat: { pose?: CatPose; head?: "nod" | "shake" | "look" | "sniff"; tail?: boolean; lookAt?: "player" | "none"; durMs?: number },
+    beat: {
+      pose?: CatPose;
+      head?: "nod" | "shake" | "look" | "sniff";
+      tail?: boolean;
+      lookAt?: "player" | "none";
+      durMs?: number;
+      /** body-level reaction (ears prick) */
+      alert?: boolean;
+      /** turn to face a live world point (the speaker, the newcomer, …) */
+      face?: { x: number; y: number };
+      /** walk to a point during the scene (real steps, no teleport) */
+      stepTo?: { x: number; y: number };
+      /** mouth moves while this line is being spoken */
+      talking?: boolean;
+    },
   ) {
     const n = this.npcStates.find((s) => s.def.id === npcId);
     if (!n || n.gone) return;
+    const dur = Math.max(0.6, (beat.durMs ?? 2800) / 1000);
     n.storyBeat = {
       pose: beat.pose ?? n.storyBeat?.pose,
       head: beat.head ?? n.storyBeat?.head,
       tail: beat.tail ?? n.storyBeat?.tail,
       lookAt: beat.lookAt ?? n.storyBeat?.lookAt,
-      until: beat.durMs ? this.time + beat.durMs / 1000 : undefined,
+      until: beat.durMs ? this.time + dur : undefined,
+      alert: beat.alert,
+      // transient: a new line must never inherit the previous line's turn/step
+      face: beat.face,
+      stepTo: beat.stepTo,
     };
     if (n.storyBeat?.pose && n.storyBeat.pose !== "walk") {
       n.pose = n.storyBeat.pose;
       n.waitUntil = Math.max(n.waitUntil, n.storyBeat.until ?? this.time + 2);
     }
-    if (n.storyBeat?.tail) n.tailFxUntil = this.time + 2.2;
+    if (n.storyBeat?.tail) n.tailFxUntil = this.time + dur;
+    if (beat.alert) n.alertFxUntil = this.time + Math.min(2.4, dur);
+    if (beat.talking) n.talkFxUntil = this.time + dur;
+    if (beat.face) {
+      const dx = beat.face.x - n.x;
+      if (Math.abs(dx) > 4) n.facing = dx >= 0 ? 1 : -1;
+      n.storyBeat.face = beat.face;
+    }
+    if (beat.stepTo) {
+      n.cineMove = { x: beat.stepTo.x, y: beat.stepTo.y, speed: 94 };
+      n.storyBeat.stepTo = beat.stepTo;
+    }
     if (n.storyBeat?.head) {
-      n.headFxUntil = this.time + 2.2;
+      n.headFxUntil = this.time + dur;
       n.headKind = n.storyBeat.head;
     }
     if (n.storyBeat?.lookAt === "player") {
@@ -2459,11 +2613,44 @@ export class GameCanvas {
     }
   }
 
+  /**
+   * §CINE: direct the PLAYER's cat for a cutscene line (turn, sit, react).
+   * Movement input is held while a beat is playing, so this never fights the
+   * controls — and it is cleared by the story layer when the scene ends.
+   */
+  setPlayerStoryAct(act: {
+    face?: { x: number; y: number };
+    pose?: CatPose;
+    head?: "nod" | "shake" | "look" | "sniff";
+    tail?: boolean;
+    alert?: boolean;
+    talking?: boolean;
+    durMs?: number;
+  }) {
+    const dur = Math.max(0.6, (act.durMs ?? 2800) / 1000);
+    if (act.face) {
+      const dx = act.face.x - this.px;
+      if (Math.abs(dx) > 4) this.pxFacing = dx >= 0 ? 1 : -1;
+    }
+    if (act.pose) {
+      this.pPose = act.pose;
+      this.poseUntil = this.time + dur;
+    }
+    if (act.head) {
+      this.pHeadKind = act.head;
+      this.pHeadUntil = this.time + dur;
+    }
+    if (act.tail) this.pTailUntil = this.time + dur;
+    if (act.alert) this.pAlertUntil = this.time + Math.min(2.4, dur);
+    if (act.talking) this.playerTalkUntil = this.time + dur;
+  }
+
   /** Clear a story beat and let the NPC resume its normal life. */
   clearNpcStoryBeat(npcId: string) {
     const n = this.npcStates.find((s) => s.def.id === npcId);
     if (!n || !n.storyBeat) return;
     n.storyBeat = undefined;
+    n.cineMove = undefined;
     if (n.convoActive) {
       n.convoActive = false;
       n.ai = n.prevAi;
@@ -2496,6 +2683,7 @@ export class GameCanvas {
     n.denId = null;
     n.houseInterior = undefined;
     n.houseGoal = undefined;
+    n.cineMove = undefined; // a fresh mark cancels any leftover cutscene step
     const arriveR = opts.arriveR ?? 26;
     const arrived = opts.arrived ?? Math.hypot(opts.x - n.x, opts.y - n.y) <= arriveR;
     n.storyAnchor = {
@@ -2619,6 +2807,40 @@ export class GameCanvas {
   }
 
   /** §4/§10-§13: drive one anchored cat — travel → arrive → face → hold. */
+  /**
+   * §CINE: one scripted step during a cutscene — real walking, on foot, along
+   * the cat's own ground (never a teleport, never a whole-sprite slide).
+   *
+   * Handled in the NPC loop (before the escort / anchor / schedule branches) so
+   * it works for ANY directed cat — including the guide that led the player to
+   * the scene, who is otherwise owned by the escort system.
+   */
+  private stepCineMove(n: NPCState, dt: number): boolean {
+    const c = n.cineMove;
+    if (!c) return false;
+    const dx = c.x - n.x;
+    const dy = c.y - n.y;
+    const d = Math.hypot(dx, dy);
+    if (d <= 6) {
+      n.cineMove = undefined;
+      // settle back into the pose the line asked for (usually a sit)
+      n.pose = n.storyBeat?.pose && n.storyBeat.pose !== "walk" ? n.storyBeat.pose : "sit";
+      if (n.storyBeat?.face) {
+        const fdx = n.storyBeat.face.x - n.x;
+        if (Math.abs(fdx) > 4) n.facing = fdx >= 0 ? 1 : -1;
+      }
+      return false;
+    }
+    const step = Math.min(d, Math.max(30, c.speed) * dt);
+    const nx = n.x + (dx / d) * step;
+    const ny = n.y + (dy / d) * step;
+    if (!isSolidPoint(nx, n.y)) n.x = nx;
+    if (!isSolidPoint(n.x, ny)) n.y = ny;
+    if (Math.abs(dx) > 2) n.facing = dx >= 0 ? 1 : -1;
+    n.pose = "walk";
+    return true;
+  }
+
   private stepNpcStoryAnchor(n: NPCState, dt: number) {
     const a = n.storyAnchor!;
     if (n.convoActive) return; // conversation direction wins while it lasts
@@ -2706,8 +2928,20 @@ export class GameCanvas {
     // HOLD the mark: pinned position, small living reactions (§15)
     n.ai = "idle";
     const beatPoseActive = n.storyBeat?.until !== undefined && this.time < n.storyBeat.until;
-    if (!beatPoseActive && n.pose === "walk") n.pose = a.pose && a.pose !== "walk" ? a.pose : "sit";
-    if (a.face === "player") {
+    if (!beatPoseActive) {
+      // a line's pose (crouch, pounce, …) ends with the line: the cat settles
+      // back to its mark's pose instead of holding a stale acting pose
+      const settle = a.pose && a.pose !== "walk" ? a.pose : "sit";
+      if (n.pose === "walk" || n.storyBeat) n.pose = settle;
+    }
+    // §CINE: a line's turn direction wins while it is active (a cat can be
+    // directed to face another cat, not only the player), then the mark's own
+    // facing rules resume.
+    const beatFace = beatPoseActive ? n.storyBeat?.face : undefined;
+    if (beatFace) {
+      const bdx = beatFace.x - n.x;
+      if (Math.abs(bdx) > 4) n.facing = bdx >= 0 ? 1 : -1;
+    } else if (a.face === "player") {
       const pdx = this.px - n.x;
       if (Math.abs(pdx) > 6) n.facing = pdx >= 0 ? 1 : -1;
     }
@@ -4147,6 +4381,10 @@ export class GameCanvas {
   /** §SCENE: drive one escorting cat for a frame. */
   private stepEscort(n: NPCState, dt: number) {
     const e = this.storyEscort!;
+    // §CINE: once the guide has arrived, a LIVE story line owns its acting
+    // (pose, facing, head, tail) instead of the escort holding a frozen sit.
+    const beatLive = n.storyBeat?.until !== undefined && this.time < n.storyBeat.until;
+    if (e.done && beatLive) return;
     const dPlayer = Math.hypot(n.x - this.px, n.y - this.py);
     const wp = e.route[Math.min(e.leg, e.route.length - 1)];
     const dWp = Math.hypot(wp.x - n.x, wp.y - n.y);
@@ -4786,7 +5024,8 @@ export class GameCanvas {
     // camera
     const camLerp = 1 - Math.pow(0.0001, dt);
     if (this.cineActive) {
-      this.tickCinematic(dt);
+      if (this.cineFocus) this.tickCineFocus(dt);
+      else this.tickCinematic(dt);
     } else if (this.frameHold) {
       // §SCENE: a scripted two-cat frame. The camera eases to a point between
       // the two cats and zooms only enough to keep BOTH in view — smooth
@@ -4832,6 +5071,9 @@ export class GameCanvas {
         continue;
       }
       n.remoteBusyWith = null;
+      // §CINE: while a story line is directing this cat, the line owns its
+      // acting — random idle grooming / shakes must not overwrite a pose.
+      const cineActing = n.storyBeat?.until !== undefined && this.time < n.storyBeat.until;
       // --- weather on the coat: rain soaks, clear dries, shake-off follows ---
       if (!this.interiorId) {
         if (this.weather === "rain" || this.weather === "heavy-rain" || this.weather === "storm") {
@@ -4839,7 +5081,7 @@ export class GameCanvas {
         }
       }
       if (
-        !this.paused && !n.convoActive && n.ai !== "in_den" &&
+        !this.paused && !n.convoActive && !cineActing && n.ai !== "in_den" &&
         n.pose !== "walk" && n.pose !== "crouch" && n.pose !== "sleep" && n.pose !== "swim" &&
         performance.now() < n.wetnessUntil && this.time > n.waitUntil &&
         performance.now() - (n.lastNpcShakeAt ?? 0) > 12000 && Math.random() < dt * 0.25
@@ -4868,7 +5110,7 @@ export class GameCanvas {
       // it grooms, sniffs, stretches, yawns, scratches, watches — instead of
       // sitting frozen until its next decision tick
       if (
-        !this.paused && !n.convoActive && n.ai === "idle" &&
+        !this.paused && !n.convoActive && !cineActing && n.ai === "idle" &&
         this.time > n.waitUntil && this.time >= n.idleActUntil &&
         n.pose !== "sleep"
       ) {
@@ -5016,6 +5258,9 @@ export class GameCanvas {
       // behind, resumes when they catch up) — it replaces the cat's schedule
       // entirely while it runs, and is driven on foot by the same collision +
       // sidestep machinery as every other moving cat.
+      // §CINE: a scripted step runs before every other movement owner, so a
+      // cutscene can move the guide too.
+      if (this.stepCineMove(n, dt)) continue;
       if (this.storyEscort && this.storyEscort.npcId === n.def.id && !n.convoActive) {
         this.stepEscort(n, dt);
         continue;
@@ -5907,15 +6152,17 @@ export class GameCanvas {
         this.lastNpcMewAt = performance.now();
         this.engineSfx("mew", { volume: 0.5, throttleMs: 400 });
       }
-      ctx.font = "600 11px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      const tw = ctx.measureText(n.def.name).width;
-      ctx.beginPath();
-      ctx.roundRect(nxp - tw / 2 - 6, nyp - 40, tw + 12, 17, 8);
-      ctx.fill();
-      ctx.fillStyle = "#f4f1e8";
-      ctx.fillText(n.def.name, nxp, nyp - 28);
+      if (!this.cineActive) {
+        ctx.font = "600 11px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        const tw = ctx.measureText(n.def.name).width;
+        ctx.beginPath();
+        ctx.roundRect(nxp - tw / 2 - 6, nyp - 40, tw + 12, 17, 8);
+        ctx.fill();
+        ctx.fillStyle = "#f4f1e8";
+        ctx.fillText(n.def.name, nxp, nyp - 28);
+      }
     }
     // §MULTIPLAYER INTERIORS: other online players who are in THIS room render
     // at their own room-local coordinates — the same sprite, the same
@@ -6207,12 +6454,18 @@ export class GameCanvas {
             yawn: n.yawnFxUntil > this.time,
             tailFlick: n.tailFxUntil > this.time,
             alert: n.alertFxUntil > this.time,
+            // §CINE: scripted head acting (nod / shake / look / sniff) is real
+            // rendered motion — it was stored on the beat but never handed to
+            // the renderer, so story cats only ever moved their tails.
+            head: n.headFxUntil > this.time && n.headKind ? n.headKind : undefined,
             // §4: gives this cat its OWN smoothed tail (a conversation forces
             // the sit pose, which used to snap the tail ~33px in one frame)
             tailId: `npc:${n.def.id}`,
           });
           const d = Math.hypot(n.x - this.px, n.y - this.py);
-          if (d < 130) {
+          // §CINE: no floating name plates over a close-up — the shared
+          // dialogue box already names the speaker.
+          if (d < 130 && !this.cineActive) {
             ctx.font = "600 11px system-ui, sans-serif";
             ctx.textAlign = "center";
             ctx.fillStyle = "rgba(24, 30, 22, 0.55)";

@@ -237,6 +237,87 @@ reachability of every scene, live engine walks without teleports, the escort
 arriving inside camp, planted-paw physics, and the ground-cache/minimap perf
 guards).
 
+## Story Mode cutscenes are directed scenes
+
+Story Mode is not a caption sequence over a static camera. Each beat in
+`src/game/storyCinematics.ts` is a small scene with two extra layers of data on
+every line:
+
+- **`shot` / `focus`** — `wide` (establish the place), `medium`, `two` (both
+  cats interacting) or `close` (the speaker or a reaction). `focus` names the
+  cats in frame (`"player"` or npc ids). `lineCameraShot()` is the ONE rule
+  that turns a line into a shot, with the speaker as the sensible default.
+- **`cues`** — real acting for that line: `face` (turn to the speaker, live
+  target), `step` (walk toward someone and stop a polite gap short),
+  `pose` (sit / crouch / pounce / …), `head` (nod / shake / look / sniff),
+  `tail`, `alert` (ears prick) and `talking` (mouth moves). `actingForLine()`
+  adds the conversational defaults: the speaker talks, listeners turn toward
+them.
+
+`src/pages/StoryCutscenePlayer.tsx` applies both layers exactly ONCE per line
+(guarded by a line key), so pressing E fast, or a React re-render, can never
+replay a camera move or a step/turn. Choices hold a two-shot; the player's own
+answer is acted (turn + mouth) and the reply gets its own shot.
+
+### Camera framing (`src/game/cinematic.ts`)
+
+`planCineFrame()` composes a shot around the live subjects: it picks the zoom
+from the shot type, keeps the group inside the readable area (below the
+letterbox, above the dialogue box, inside the side margins), converts ground
+points to body centres, and clamps to the world. `focusCamera()` re-resolves
+the actors every frame and eases the camera toward that composition
+(`tau` from the requested `durMs`), so a shot follows a cat that walks during
+the scene and changes are glides, never cuts. World coordinates are never
+touched: the camera moves, the map does not.
+
+`clearCinematic()` no longer snaps the zoom back to 1; the normal follow branch
+eases it, so the return to gameplay is a pull-back rather than a pop.
+
+### Engine contract
+
+- `setNpcStoryBeat(id, { pose, head, tail, alert, face, stepTo, talking })`
+  directs an NPC; `stepTo` walks the cat inside the staging loop
+  (`cineMove`), collision-checked, and is cleared on arrival. `head` is now
+  actually passed to `drawCat` — before this, story head acting was stored but
+  never rendered.
+- `setPlayerStoryAct({ face, pose, head, tail, alert, talking })` directs the
+  player's cat while movement input is held.
+- `setNpcStoryAnchor` clears any leftover cutscene step; releasing a beat
+  (`clearNpcStoryBeat`) clears it too, so normal AI resumes from where the cat
+  stands. `stepCineMove` runs in the NPC loop before the escort/anchor branches,
+  so a cutscene can direct the guide that led the player in.
+- `beatActorIds` counts cue actors, so a scene still waits for every cat it
+  will direct to be on its mark — except the escort, whose arrival is gated by
+  `escortStatus` instead (it has no anchor while it leads).
+- The player's own cat walks the kittypet side of the story (the retelling's
+  Rusty); canon NPCs such as Rusty, Graypaw and Bluestar live in the world
+  beside them.
+
+### Book fidelity
+
+The beats follow *Warriors: Into the Wild* in order: the pine-trail encounter
+with Graypaw (he is hunting, boasts, and invites the kittypet to meet
+Bluestar), the gorse-tunnel walk into camp, the camp in mourning for Redtail,
+Bluestar's "fire alone can save our Clan", the test, the naming (Rusty becomes
+Firepaw), hunting and training, the river border, Oakheart, Yellowfang at
+Snakerocks, Tallstar on the moor, the Gathering, the Moonstone, the battle at
+Sunningrocks and Ravenpaw's secret about Tigerclaw. Dialogue is original and
+short; no long passages are copied.
+
+Suites:
+
+- `bun scripts/check-cine-framing.ts` — shot composition at three viewports,
+  live engine close-up/two-shot/tracking/return, real step walking, head
+  acting reaching the renderer, authored-scene shot variety, and a line-by-line
+  playthrough of the encounter and the camp arrival measuring every frame.
+- `bun scripts/check-story-shots.ts` — the real player component with a
+  recording engine: one shot per line, no replay on fast advance, cue delivery,
+  choices, one box, control and camera restored.
+- `bun scripts/check-story-playthrough.ts` — the real player AND the real game
+  engine together: the camp arrival and the forest encounter played end to end
+  (wide → close → two-shot, Graypaw physically advancing, one box, input dead
+  during the scene and working afterwards, camera back to gameplay framing).
+
 ## Leg rendering (the gait contract)
 
 `gaitLegs` produces a true four-leg cycle whose stance paws are **planted in

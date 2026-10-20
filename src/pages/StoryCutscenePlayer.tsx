@@ -1,20 +1,31 @@
-// WarriorCatsRPG — Story Mode cutscene player (§2/§3/§4/§5/§13-§23/§27/§35).
+// WarriorCatsRPG — Story Mode cutscene director (§2/§3/§4/§5/§13-§23/§27/§35).
 //
-// Plays a StoryBeat over the living 2D world: the engine's cinematic camera
-// pans/zooms to each speaking character, the NPC acts (head/tail/pose/look-at
-// through the REAL animation system), the written line appears in a cinematic
-// caption, and a SHORT per-character cat vocalization accompanies it (never
-// human speech, never per-letter — Undertale-style but with meows).
+// Plays a StoryBeat over the living 2D world:
+//   • the CAMERA composes a real shot per line (wide / medium / two / close)
+//     around the live cats and glides between shots — close-ups for emotion,
+//     two-shots for interaction, wide shots to establish the place;
+//   • the CATS ACT the scene: they turn to the speaker, step closer, sit,
+//     crouch, pounce, prick their ears, nod, shake their heads, flick their
+//     tails and move their mouths — all through the engine's one animation
+//     system, never by sliding a sprite;
+//   • the written line appears in the ONE shared dialogue box, with a SHORT
+//     per-character cat vocalization (never human speech).
 //
-// §27: while a line is on screen the audio mix ducks (music -55%, ambience
-// -50%) so text stays readable; everything restores smoothly afterwards.
 // §6/§2: control returns to the player the moment the beat (or their chosen
 // response) finishes — beats are punctuation, not imprisonment.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { GameCanvas } from "@/game/engine";
-import { beatCameraSteps, type StoryBeat, type CineLine, type CineChoice } from "@/game/storyCinematics";
+import {
+  actingForLine,
+  lineCameraShot,
+  resolveCue,
+  type StoryBeat,
+  type CineLine,
+  type CineChoice,
+} from "@/game/storyCinematics";
+import type { CineShot } from "@/game/cinematic";
 import type { VocalEmotion } from "@/game/vocal";
 import { pickVocal, emotionForLine } from "@/game/vocal";
 import { audio } from "@/game/audio";
@@ -35,16 +46,19 @@ type Phase =
   | { kind: "choices" }
   | { kind: "chosen"; line: CineLine; then: CineLine | null };
 
+/** How long the camera takes to reach a shot (a cut would be a snap). */
+function shotGlideMs(shot: CineShot): number {
+  return shot === "close" ? 720 : shot === "medium" ? 820 : 980;
+}
+
 export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [caption, setCaption] = useState<CineLine | null>(null);
   const timers = useRef<number[]>([]);
   const ducked = useRef(false);
   const actedNpcs = useRef<Set<string>>(new Set());
-
-  const later = useCallback((ms: number, fn: () => void) => {
-    timers.current.push(window.setTimeout(fn, ms));
-  }, []);
+  /** the line whose camera + acting already ran (no duplicated sequences) */
+  const lastDirected = useRef<string>("");
 
   const clearTimers = useCallback(() => {
     for (const t of timers.current) window.clearTimeout(t);
@@ -58,28 +72,6 @@ export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
     audio().setDucked(on);
   }, []);
 
-  /** §4: direct an NPC through the REAL animation system for a line. */
-  const actLine = useCallback(
-    (line: CineLine) => {
-      const a = line.act;
-      if (!a || !game) return;
-      game.setNpcStoryBeat(a.npcId, {
-        pose: a.pose,
-        head: a.head,
-        tail: a.tail,
-        lookAt: a.lookAt,
-        durMs: (line.holdMs ?? 2800) + 600,
-      });
-      actedNpcs.current.add(a.npcId);
-    },
-    [game],
-  );
-
-  const releaseActed = useCallback(() => {
-    for (const id of actedNpcs.current) game?.clearNpcStoryBeat(id);
-    actedNpcs.current.clear();
-  }, [game]);
-
   /** §13/§16: ONE short vocalization per line, from the speaker's profile. */
   const voiceLine = useCallback((line: CineLine) => {
     const emotion: VocalEmotion = line.emotion ?? emotionForLine(line.text);
@@ -87,24 +79,92 @@ export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
     audio().playCharacterVocal(v);
   }, []);
 
+  const releaseActed = useCallback(() => {
+    for (const id of actedNpcs.current) game?.clearNpcStoryBeat(id);
+    actedNpcs.current.clear();
+  }, [game]);
+
+  /**
+   * §CINEMATIC: direct one line — frame the shot around its subjects, then
+   * perform the acting cues through the REAL animation system.
+   */
+  const directLine = useCallback(
+    (line: CineLine) => {
+      if (!game || !beat) return;
+      const posOf = (id: string): { x: number; y: number } | null => {
+        if (id === "player") {
+          const s = game.engineState();
+          return { x: s.x, y: s.y };
+        }
+        return game.getNpcWorldPos(id);
+      };
+
+      // --- the shot -------------------------------------------------------
+      const plan = lineCameraShot(line, beat);
+      game.focusCamera?.({
+        shot: plan.shot,
+        actors: plan.actors,
+        // a beat with no authored cast still frames the step's real scene
+        points: plan.actors.length === 0 && frameAt ? [frameAt] : undefined,
+        durMs: shotGlideMs(plan.shot),
+      });
+
+      // --- the acting -----------------------------------------------------
+      const dur = line.holdMs ?? 2800;
+      for (const cue of actingForLine(line, beat)) {
+        const r = resolveCue(cue, posOf, dur);
+        if (r.who === "player") {
+          game.setPlayerStoryAct?.({
+            face: r.face,
+            pose: r.pose,
+            head: r.head,
+            tail: r.tail,
+            alert: r.alert,
+            talking: r.talking,
+            durMs: r.durMs,
+          });
+        } else {
+          game.setNpcStoryBeat(r.who, {
+            pose: r.pose,
+            head: r.head,
+            tail: r.tail,
+            alert: r.alert,
+            talking: r.talking,
+            face: r.face,
+            stepTo: r.stepTo,
+            durMs: r.durMs,
+          });
+          actedNpcs.current.add(r.who);
+        }
+      }
+
+      // legacy single-actor direction used by composed NPC chats
+      const a = line.act;
+      if (a) {
+        game.setNpcStoryBeat(a.npcId, {
+          pose: a.pose,
+          head: a.head,
+          tail: a.tail,
+          lookAt: a.lookAt,
+          durMs: dur + 600,
+        });
+        actedNpcs.current.add(a.npcId);
+      }
+    },
+    [beat, frameAt, game],
+  );
+
   // Run the beat whenever a new one arrives.
   useEffect(() => {
     if (!beat || !game) return;
     clearTimers();
     actedNpcs.current.clear();
+    lastDirected.current = "";
     duck(true);
     audio().setCinematic(true);
 
-    // camera choreography: pan/zoom per line, then hand back smoothly (§3)
-    const s = game.engineState();
-    const steps = beatCameraSteps(
-      beat,
-      (id) => game.getNpcWorldPos(id),
-      { x: s.x, y: s.y },
-      frameAt ?? null,
-    );
-    game.playCinematic(steps);
-
+    // The opening shot is the first line's shot (a wide establishing frame),
+    // so the scene never starts with a snap to the player's gameplay camera.
     game.setPlayerControlEnabled(false);
     setPhase({ kind: "lines", idx: 0 });
     setCaption(beat.lines[0] ?? null);
@@ -114,6 +174,9 @@ export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
       duck(false);
       audio().setCinematic(false);
       releaseActed();
+      // §6: interrupting a beat for any reason must still hand the game back.
+      game.setPlayerControlEnabled(true);
+      game.clearCinematic();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [beat?.id]);
@@ -129,8 +192,14 @@ export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
       return;
     }
     setCaption(line);
-    voiceLine(line);
-    actLine(line);
+    // react remounts / re-renders must never replay the same camera move or
+    // the same step/turn twice (that read as duplicated animation)
+    const key = `${beat.id}:${phase.idx}`;
+    if (lastDirected.current !== key) {
+      lastDirected.current = key;
+      voiceLine(line);
+      directLine(line);
+    }
     const hold = line.holdMs ?? 2800;
     const t = window.setTimeout(() => setPhase({ kind: "lines", idx: phase.idx + 1 }), hold);
     timers.current.push(t);
@@ -139,6 +208,15 @@ export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, beat?.id]);
+
+  // While the player is choosing, hold a two-shot so both faces stay readable
+  // behind the answer buttons.
+  useEffect(() => {
+    if (phase.kind !== "choices" || !beat || !game) return;
+    const actors = beat.pair?.length ? [...beat.pair] : ["player"];
+    game.focusCamera?.({ shot: actors.length > 1 ? "two" : "medium", actors, durMs: 900 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase.kind, beat?.id]);
 
   const finish = useCallback(() => {
     clearTimers();
@@ -157,21 +235,30 @@ export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
   // NPC replies; afterwards control returns (§21).
   const choose = useCallback(
     (c: CineChoice) => {
-      const playerEcho: CineLine = { speaker: "You", speakerId: "player", text: c.playerLine, holdMs: 2400 };
+      const playerEcho: CineLine = {
+        speaker: "You",
+        speakerId: "player",
+        text: c.playerLine,
+        holdMs: 2400,
+        shot: "close",
+        focus: ["player"],
+        cues: [{ who: "player", talking: true, tail: true, durMs: 2400 }],
+      };
       setPhase({ kind: "chosen", line: playerEcho, then: c.reply });
       setCaption(playerEcho);
       voiceLine(playerEcho);
+      directLine(playerEcho);
       const hold = playerEcho.holdMs ?? 2400;
       timers.current.push(
         window.setTimeout(() => {
           setCaption(c.reply);
           voiceLine(c.reply);
-          actLine(c.reply);
+          directLine(c.reply);
           timers.current.push(window.setTimeout(finish, c.reply.holdMs ?? 3000));
         }, hold),
       );
     },
-    [actLine, finish, voiceLine],
+    [directLine, finish, voiceLine],
   );
 
   // Skim protection: clicking the box (or pressing E) advances a long line
@@ -198,6 +285,15 @@ export function StoryCutscenePlayer({ beat, game, onDone, frameAt }: Props) {
   }, [advance, beat]);
 
   useEffect(() => () => audio().setDucked(false), []);
+
+  // §6: leaving Story Mode mid-beat must never strand the camera or the input.
+  useEffect(
+    () => () => {
+      game?.clearCinematic();
+      game?.setPlayerControlEnabled(true);
+    },
+    [game],
+  );
 
   if (!beat) return null;
 

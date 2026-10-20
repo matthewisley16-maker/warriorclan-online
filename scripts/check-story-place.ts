@@ -621,7 +621,10 @@ console.log("— wiring —");
   check(game.includes("frameAt={cineFrame}"), "the cutscene camera is given the real scene location");
   check(!game.includes("waitForStoryArrival(beatActorIds"), "a bounded wait can no longer start a scene in the wrong place");
   const player = readFileSync(new URL("../src/pages/StoryCutscenePlayer.tsx", import.meta.url), "utf8");
-  check(player.includes("frameAt ?? null"), "the player forwards the scene framing to the camera");
+  check(
+    player.includes("points: plan.actors.length === 0 && frameAt ? [frameAt] : undefined"),
+    "the player forwards the scene framing to the camera when a line names no cast",
+  );
   const cinematics = readFileSync(new URL("../src/game/storyCinematics.ts", import.meta.url), "utf8");
   check(cinematics.includes("beat.openOn ?? sceneAt ?? playerPos"), "the camera opens on the scene when the beat names no framing");
 }
